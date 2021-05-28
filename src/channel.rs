@@ -1,6 +1,5 @@
 use anyhow::Result;
 use ton_api::ton;
-use ton_types::UInt256;
 
 use crate::node_id::*;
 use crate::utils::*;

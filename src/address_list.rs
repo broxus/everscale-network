@@ -98,6 +98,10 @@ impl AdnlAddressUdp {
         let ip = u32::from_be_bytes(addr.ip().octets());
         Self((ip as u64) << 16 | addr.port() as u64)
     }
+
+    pub fn port(&self) -> u16 {
+        self.0 as u16
+    }
 }
 
 impl From<SocketAddrV4> for AdnlAddressUdp {
