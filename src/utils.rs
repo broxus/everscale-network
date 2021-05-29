@@ -3,18 +3,19 @@ use std::convert::TryInto;
 use anyhow::Result;
 use sha2::Digest;
 use std::ops::{Index, IndexMut, Range, RangeFrom};
-use ton_api::{BoxedSerialize, IntoBoxed, Serializer};
+use ton_api::ton::TLObject;
+use ton_api::{BoxedSerialize, Deserializer, IntoBoxed, Serializer};
 
 pub struct PacketView<'a> {
     bytes: &'a mut [u8],
 }
 
 impl<'a> PacketView<'a> {
-    pub const fn get(&self) -> &[u8] {
+    pub const fn as_slice(&self) -> &[u8] {
         self.bytes
     }
 
-    pub fn get_mut(&mut self) -> &mut [u8] {
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
         self.bytes
     }
 
@@ -99,6 +100,7 @@ pub fn compute_shared_secret(private_key: &[u8; 32], public_key: &[u8; 32]) -> R
 #[error("Bad public key data")]
 struct BadPublicKeyData;
 
+/// Calculates hash of TL object
 pub fn hash_boxed<T: BoxedSerialize>(object: &T) -> Result<[u8; 32]> {
     let buf = sha2::Sha256::digest(&serialize(object)?);
     Ok(buf.as_slice().try_into().unwrap())
@@ -108,6 +110,14 @@ pub fn serialize<T: BoxedSerialize>(object: &T) -> Result<Vec<u8>> {
     let mut ret = Vec::new();
     Serializer::new(&mut ret).write_boxed(object).convert()?;
     Ok(ret)
+}
+
+/// Deserializes TL object from bytes
+pub fn deserialize(bytes: &[u8]) -> Result<TLObject> {
+    let mut reader = bytes;
+    Deserializer::new(&mut reader)
+        .read_boxed::<TLObject>()
+        .convert()
 }
 
 pub trait NoFailure {

@@ -1,8 +1,11 @@
 use anyhow::Result;
+use sha2::Digest;
 use ton_api::ton;
 
 use crate::node_id::*;
 use crate::utils::*;
+use aes::cipher::StreamCipher;
+use std::convert::TryInto;
 
 pub struct AdnlChannel {
     channel_out: ChannelSide,
@@ -36,17 +39,53 @@ impl AdnlChannel {
         })
     }
 
-    pub fn channel_in_id(&self) -> &ChannelId {
+    pub fn channel_in_id(&self) -> &AdnlChannelId {
         &self.channel_in.id
     }
 
-    pub fn channel_out_id(&self) -> &ChannelId {
+    pub fn channel_out_id(&self) -> &AdnlChannelId {
         &self.channel_out.id
+    }
+
+    pub fn local_id(&self) -> &AdnlNodeIdShort {
+        &self.local_id
+    }
+
+    pub fn peer_id(&self) -> &AdnlNodeIdShort {
+        &self.peer_id
+    }
+
+    pub fn decrypt(&self, buffer: &mut PacketView) -> Result<()> {
+        if buffer.len() < 64 {
+            return Err(AdnlChannelError::ChannelMessageIsTooShort(buffer.len()).into());
+        }
+
+        process_channel_data(buffer.as_mut_slice(), &self.channel_in.secret);
+
+        if sha2::Sha256::digest(&buffer[64..]).as_slice() != &buffer[32..64] {
+            return Err(AdnlChannelError::InvalidChannelMessageChecksum.into());
+        }
+
+        buffer.remove_prefix(64);
+        Ok(())
+    }
+
+    pub fn encrypt(&self, buffer: &mut Vec<u8>) -> Result<()> {
+        let checksum: [u8; 32] = sha2::Sha256::digest(buffer.as_slice()).try_into().unwrap();
+
+        let len = buffer.len();
+        buffer.resize(len + 64, 0);
+        buffer.copy_within(..len, 64);
+        buffer[..32].copy_from_slice(&self.channel_out.id);
+        buffer[32..64].copy_from_slice(&checksum);
+
+        process_channel_data(buffer, &self.channel_out.secret);
+        Ok(())
     }
 }
 
 struct ChannelSide {
-    id: ChannelId,
+    id: AdnlChannelId,
     secret: [u8; 32],
 }
 
@@ -59,10 +98,23 @@ impl ChannelSide {
     }
 }
 
-type ChannelId = [u8; 32];
+pub type AdnlChannelId = [u8; 32];
 
-fn compute_channel_id(secret: [u8; 32]) -> Result<ChannelId> {
+fn compute_channel_id(secret: [u8; 32]) -> Result<AdnlChannelId> {
     hash(ton::pub_::publickey::Aes {
         key: ton::int256(secret),
     })
+}
+
+fn process_channel_data(buffer: &mut [u8], secret: &[u8; 32]) {
+    build_packet_cipher(secret, buffer[32..64].try_into().unwrap())
+        .apply_keystream(&mut buffer[64..])
+}
+
+#[derive(thiserror::Error, Debug)]
+enum AdnlChannelError {
+    #[error("Channel message is too short: {}", .0)]
+    ChannelMessageIsTooShort(usize),
+    #[error("Invalid channel message checksum")]
+    InvalidChannelMessageChecksum,
 }
