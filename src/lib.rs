@@ -3,12 +3,15 @@ mod channel;
 mod config;
 mod node_id;
 mod peer;
+mod queries_cache;
 mod received_mask;
+mod transfer;
 pub mod utils;
 
 use std::convert::TryInto;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
+use std::time::Duration;
 
 use aes::cipher::StreamCipher;
 use anyhow::Result;
@@ -23,7 +26,9 @@ pub use crate::channel::*;
 pub use crate::config::*;
 pub use crate::node_id::*;
 pub use crate::peer::*;
+use crate::queries_cache::*;
 pub use crate::received_mask::*;
+use crate::transfer::*;
 use crate::utils::*;
 
 const ADNL_MTU: usize = 1024;
@@ -55,6 +60,12 @@ pub struct AdnlNode {
     /// Channels that were created on this node but waiting for confirmation
     channels_to_confirm: DashMap<AdnlNodeIdShort, Arc<AdnlChannel>>,
 
+    /// Pending transfers of large messages that were split
+    transfers: DashMap<TransferId, Arc<Transfer>>,
+
+    /// Pending queries
+    queries: QueriesCache,
+
     /// Outgoing packets queue
     sender_queue_tx: SenderQueueTx,
     /// Receiver end of the outgoing packets queue (NOTE: used only for initialization)
@@ -74,6 +85,8 @@ impl AdnlNode {
             channels_by_id: Default::default(),
             channels_by_peers: Default::default(),
             channels_to_confirm: Default::default(),
+            transfers: Default::default(),
+            queries: Default::default(),
             sender_queue_tx,
             sender_queue_rx: Mutex::new(Some(sender_queue_rx)),
             start_time: now(),
@@ -186,6 +199,7 @@ impl AdnlNode {
         });
     }
 
+    /// Decrypts and processes received data
     async fn handle_received_data(
         &self,
         mut data: PacketView<'_>,
@@ -216,12 +230,133 @@ impl AdnlNode {
             .map_err(AdnlNodeError::UnknownPacket)?;
 
         // Validate packet
-        let other_key = self.check_packet(&packet, &local_id, peer_id)?;
+        let peer_id = self.check_packet(&packet, &local_id, peer_id)?;
 
-        // todo
+        // Process message(s)
+        if let Some(message) = packet.message() {
+            self.process_message(&local_id, &peer_id, message, subscribers)
+                .await?;
+        } else if let Some(messages) = packet.messages() {
+            for message in messages.iter() {
+                self.process_message(&local_id, &peer_id, message, subscribers)
+                    .await?;
+            }
+        }
+
+        // Done
         Ok(())
     }
 
+    async fn process_message(
+        &self,
+        local_id: &AdnlNodeIdShort,
+        peer_id: &AdnlNodeIdShort,
+        message: &ton::adnl::Message,
+        subscribers: &[Arc<dyn Subscriber>],
+    ) -> Result<()> {
+        use dashmap::mapref::entry::Entry;
+
+        const TRANSFER_TIMEOUT: u64 = 3; // Seconds
+
+        // Handle split message case
+        let alt_message = if let ton::adnl::Message::Adnl_Message_Part(part) = message {
+            let transfer_id = part.hash.0;
+            let transfer = match self.transfers.entry(transfer_id) {
+                // Create new transfer state if it was a new incoming transfer
+                Entry::Vacant(entry) => {
+                    let entry = entry.insert(Arc::new(Transfer::new(part.total_size as usize)));
+                    let transfer = entry.value().clone();
+
+                    tokio::spawn({
+                        let transfers = self.transfers.clone();
+                        let transfer = transfer.clone();
+
+                        async move {
+                            loop {
+                                tokio::time::sleep(Duration::from_secs(TRANSFER_TIMEOUT)).await;
+                                if !transfer.timings().is_expired(TRANSFER_TIMEOUT) {
+                                    continue;
+                                }
+
+                                if transfers.remove(&transfer_id).is_some() {
+                                    log::debug!(
+                                        "ADNL transfer {} timed out",
+                                        hex::encode(&transfer_id)
+                                    );
+                                }
+                                break;
+                            }
+                        }
+                    });
+
+                    transfer
+                }
+                // Update existing transfer state
+                Entry::Occupied(entry) => entry.get().clone(),
+            };
+
+            // Refresh transfer timings on each incoming message
+            transfer.timings().refresh();
+
+            // Update transfer
+            match transfer.add_part(part.offset as usize, part.data.to_vec(), &transfer_id) {
+                Ok(Some(message)) => {
+                    self.transfers.remove(&transfer_id);
+                    Some(message)
+                }
+                Err(error) => {
+                    self.transfers.remove(&transfer_id);
+                    return Err(error);
+                }
+                _ => return Ok(()),
+            }
+        } else {
+            None
+        };
+
+        let response: Option<ton::adnl::Message> = match alt_message.as_ref().unwrap_or(message) {
+            ton::adnl::Message::Adnl_Message_Answer(answer) => {
+                self.process_message_answer(answer).await?;
+                None
+            }
+            ton::adnl::Message::Adnl_Message_ConfirmChannel(confirm) => {
+                // todo
+                None
+            }
+            ton::adnl::Message::Adnl_Message_CreateChannel(create) => {
+                // todo
+                None
+            }
+            ton::adnl::Message::Adnl_Message_Custom(custom) => {
+                // todo
+                None
+            }
+            ton::adnl::Message::Adnl_Message_Query(query) => {
+                // todo
+                None
+            }
+            _ => return Err(AdnlNodeError::UnknownMessage.into()),
+        };
+
+        // TODO
+        Ok(())
+    }
+
+    async fn process_message_answer(
+        &self,
+        answer: &ton::adnl::message::message::Answer,
+    ) -> Result<()> {
+        let queries = &self.queries;
+        let query_id = answer.query_id.0;
+
+        if queries.update_query(query_id, Some(&answer.answer)).await? {
+            Ok(())
+        } else {
+            Err(AdnlNodeError::UnknownQueryAnswer.into())
+        }
+    }
+
+    /// Validates incoming packet. Attempts to extract peer id
     fn check_packet(
         &self,
         packet: &ton::adnl::PacketContents,
@@ -354,6 +489,15 @@ impl AdnlNode {
         Ok(true)
     }
 
+    pub fn delete_peer(
+        &self,
+        local_id: &AdnlNodeIdShort,
+        peer_id: &AdnlNodeIdShort,
+    ) -> Result<bool> {
+        let peers = self.get_peers(local_id)?;
+        Ok(peers.remove(peer_id).is_some())
+    }
+
     fn get_peers(&self, local_id: &AdnlNodeIdShort) -> Result<Arc<AdnlPeers>> {
         if let Some(peers) = self.peers.get(local_id) {
             Ok(peers.value().clone())
@@ -440,6 +584,10 @@ enum AdnlNodeError {
     UnknownPacket(ton::TLObject),
     #[error("Local id peers not found")]
     PeersNotFound,
+    #[error("Unknown message")]
+    UnknownMessage,
+    #[error("Received answer to unknown query")]
+    UnknownQueryAnswer,
 }
 
 #[derive(thiserror::Error, Debug)]
