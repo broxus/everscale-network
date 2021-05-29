@@ -120,6 +120,13 @@ pub fn deserialize(bytes: &[u8]) -> Result<TLObject> {
         .convert()
 }
 
+pub fn now() -> i32 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i32
+}
+
 pub trait NoFailure {
     type Output;
 

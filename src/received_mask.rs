@@ -17,13 +17,17 @@ impl AdnlReceivedMask {
         *state = Default::default();
     }
 
+    pub fn seqno(&self) -> i64 {
+        self.state.read().seqno as i64
+    }
+
     pub fn is_packet_delivered(&self, seqno: i64) -> bool {
         if seqno <= 0 {
             return false;
         }
 
         let state = self.state.read();
-        match seqno as u64 {
+        match seqno {
             seqno if seqno + 64 <= state.seqno => true,
             seqno if seqno > state.seqno => false,
             seqno => (state.mask & (1u64 << (state.seqno - seqno))) > 0,
@@ -35,7 +39,6 @@ impl AdnlReceivedMask {
             return Err(AdnlReceivedMaskError::InvalidSeqno);
         }
 
-        let seqno = seqno as u64;
         let mut state = self.state.write();
 
         match seqno {
@@ -69,7 +72,7 @@ impl AdnlReceivedMask {
 
 #[derive(Debug, Default)]
 struct AdnlReceivedMaskState {
-    seqno: u64,
+    seqno: i64,
     mask: u64,
 }
 

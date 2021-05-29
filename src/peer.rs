@@ -1,4 +1,5 @@
 use std::convert::TryInto;
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -9,118 +10,79 @@ use ton_api::ton;
 use ton_api::ton::adnl::message::message as adnlmessage;
 use ton_api::ton::adnl::packetcontents::PacketContents;
 
+use crate::address_list::*;
 use crate::node_id::*;
 use crate::received_mask::*;
-use crate::{ADNL_MTU, HUGE_PACKET_SIZE};
+
+pub type AdnlPeers = DashMap<AdnlNodeIdShort, AdnlPeer>;
 
 pub struct AdnlPeer {
-    peer_id_short: AdnlNodeIdShort,
-    peer_id: RwLock<AdnlNodeIdFull>,
-    peer_pairs: DashMap<AdnlNodeIdShort, Arc<AdnlPeerPair>>,
+    id: AdnlNodeIdFull,
+    ip_address: AtomicU64,
+    receiver_state: AdnlPeerState,
+    sender_state: AdnlPeerState,
 }
 
 impl AdnlPeer {
-    fn receive_packet(
-        &self,
-        dst: AdnlNodeIdShort,
-        dst_mode: u32,
-        packet: PacketContents,
-    ) -> Result<()> {
-        use dashmap::mapref::entry::Entry;
-
-        if let Some(from) = packet.from {
-            self.update_id(from.try_into()?)?;
+    pub fn new(reinit_date: i32, ip_address: AdnlAddressUdp, id: AdnlNodeIdFull) -> Self {
+        Self {
+            id,
+            ip_address: AtomicU64::new(ip_address.into()),
+            receiver_state: AdnlPeerState::for_receive_with_reinit_date(reinit_date),
+            sender_state: AdnlPeerState::for_send(),
         }
-
-        match self.peer_pairs.entry(dst) {
-            Entry::Vacant(entry) => {}
-            _ => {}
-        }
-
-        todo!()
     }
 
-    fn send_query(
-        &self,
-        src: AdnlNodeIdShort,
-        src_mode: u32,
-        timeout: Duration,
-        data: Vec<u8>,
-        flags: u32,
-    ) {
-        todo!()
+    pub fn id(&self) -> &AdnlNodeIdFull {
+        &self.id
     }
 
-    fn update_id(&self, id: AdnlNodeIdFull) -> Result<()> {
-        {
-            let mut peer_id = self.peer_id.write();
+    pub fn ip_address(&self) -> AdnlAddressUdp {
+        self.ip_address.load(Ordering::Acquire).into()
+    }
 
-            if !peer_id.is_empty() {
-                return Ok(());
-            }
+    pub fn set_ip_address(&self, ip_address: AdnlAddressUdp) {
+        self.ip_address.store(ip_address.into(), Ordering::Release);
+    }
 
-            if id.compute_short_id()? != self.peer_id_short {
-                return Err(PeerError::InvalidNewPeerId.into());
-            }
+    pub fn receiver_state(&self) -> &AdnlPeerState {
+        &self.receiver_state
+    }
 
-            *peer_id = id;
-        }
-
-        for pair in self.peer_pairs.iter() {
-            pair.value().update_peer_id(id);
-        }
-
-        Ok(())
+    pub fn sender_state(&self) -> &AdnlPeerState {
+        &self.sender_state
     }
 }
 
-pub struct AdnlPeerPair {
-    in_seqno_mask: AdnlReceivedMask,
+pub struct AdnlPeerState {
+    mask: AdnlReceivedMask,
+    reinit_date: AtomicI32,
 }
 
-impl AdnlPeerPair {
-    const PACKET_HEADER_MAX_SIZE: usize = 272;
-    const CHANNEL_PACKET_HEADER_MAX_SIZE: usize = 128;
-    const ADDR_LIST_MAX_SIZE: usize = 128;
-
-    const MTU: usize = ADNL_MTU + 128;
-    const HUGE_PACKET_MAX_SIZE: usize = HUGE_PACKET_SIZE + 128;
-
-    fn update_peer_id(&self, id: AdnlNodeIdFull) {
-        todo!()
+impl AdnlPeerState {
+    fn for_receive_with_reinit_date(reinit_date: i32) -> Self {
+        Self {
+            mask: Default::default(),
+            reinit_date: AtomicI32::new(reinit_date),
+        }
     }
 
-    fn process_message_create_channel(&self, message: adnlmessage::CreateChannel) {
-        todo!()
+    fn for_send() -> Self {
+        Self {
+            mask: Default::default(),
+            reinit_date: Default::default(),
+        }
     }
 
-    fn process_message_confirm_channel(&self, message: adnlmessage::ConfirmChannel) {
-        todo!()
+    pub fn mask(&self) -> &AdnlReceivedMask {
+        &self.mask
     }
 
-    fn process_message_custom(&self, message: adnlmessage::Custom) {
-        todo!()
+    pub fn reinit_date(&self) -> i32 {
+        self.reinit_date.load(Ordering::Acquire)
     }
 
-    fn process_message_nop(&self, message: adnlmessage::Reinit) {
-        todo!()
+    pub fn set_reinit_date(&self, reinit_date: i32) {
+        self.reinit_date.store(reinit_date, Ordering::Release)
     }
-
-    fn process_message_query(&self, message: adnlmessage::Query) {
-        todo!()
-    }
-
-    fn process_message_answer(&self, message: adnlmessage::Answer) {
-        todo!()
-    }
-
-    fn process_message_part(&self, message: adnlmessage::Part) {
-        todo!()
-    }
-}
-
-#[derive(thiserror::Error, Debug)]
-enum PeerError {
-    #[error("Invalid new peer id")]
-    InvalidNewPeerId,
 }

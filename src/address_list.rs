@@ -2,9 +2,12 @@ use std::hash::Hash;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::atomic::{AtomicI32, Ordering};
 
+use anyhow::Result;
 use dashmap::DashSet;
 use ton_api::ton::adnl::Address;
 use ton_api::{ton, IntoBoxed};
+
+use crate::utils::*;
 
 pub trait AdnlAddress: Sized {
     fn is_public(&self) -> bool;
@@ -99,8 +102,18 @@ impl AdnlAddressUdp {
         Self((ip as u64) << 16 | addr.port() as u64)
     }
 
+    pub fn from_ip_and_port(ip: u32, port: u16) -> Self {
+        Self((ip as u64) << 16 | port as u64)
+    }
+
     pub fn port(&self) -> u16 {
         self.0 as u16
+    }
+}
+
+impl From<u64> for AdnlAddressUdp {
+    fn from(encoded: u64) -> Self {
+        Self(encoded)
     }
 }
 
@@ -114,6 +127,12 @@ impl From<AdnlAddressUdp> for SocketAddrV4 {
     fn from(address: AdnlAddressUdp) -> Self {
         let addr = Ipv4Addr::from(((address.0 >> 16) as u32).to_be_bytes());
         SocketAddrV4::new(addr, address.0 as u16)
+    }
+}
+
+impl From<AdnlAddressUdp> for u64 {
+    fn from(address: AdnlAddressUdp) -> Self {
+        address.0
     }
 }
 
@@ -133,4 +152,52 @@ impl AdnlAddress for AdnlAddressUdp {
         }
         .into_boxed()
     }
+}
+
+impl std::fmt::Display for AdnlAddressUdp {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_fmt(format_args!(
+            "{}.{}.{}.{}:{}",
+            (self.0 >> 40) as u16,
+            (self.0 >> 32) as u16,
+            (self.0 >> 24) as u16,
+            (self.0 >> 16) as u16,
+            self.0 as u16
+        ))
+    }
+}
+
+pub fn parse_address_list(list: &ton::adnl::addresslist::AddressList) -> Result<AdnlAddressUdp> {
+    if list.addrs.is_empty() {
+        return Err(AdnlAddressListError::ListIsEmpty.into());
+    }
+
+    let version = now();
+    if (list.version > version) || (list.reinit_date > version) {
+        return Err(AdnlAddressListError::TooNewVersion.into());
+    }
+
+    if list.expire_at != 0 && list.expire_at < version {
+        return Err(AdnlAddressListError::Expired.into());
+    }
+
+    match &list.addrs[0] {
+        Address::Adnl_Address_Udp(address) => Ok(AdnlAddressUdp::from_ip_and_port(
+            address.ip as u32,
+            address.port as u16,
+        )),
+        _ => Err(AdnlAddressListError::UnsupportedAddress.into()),
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+enum AdnlAddressListError {
+    #[error("Address list is empty")]
+    ListIsEmpty,
+    #[error("Address list version is too new")]
+    TooNewVersion,
+    #[error("Address list is expired")]
+    Expired,
+    #[error("Unsupported address")]
+    UnsupportedAddress,
 }

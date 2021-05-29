@@ -22,6 +22,7 @@ pub use crate::address_list::*;
 pub use crate::channel::*;
 pub use crate::config::*;
 pub use crate::node_id::*;
+pub use crate::peer::*;
 pub use crate::received_mask::*;
 use crate::utils::*;
 
@@ -44,6 +45,9 @@ pub struct AdnlNode {
     /// Ip address and keys for signing
     config: AdnlNodeConfig,
 
+    /// Known peers for each local node id
+    peers: DashMap<AdnlNodeIdShort, Arc<AdnlPeers>>,
+
     /// Channels table used to fast search on incoming packets
     channels_by_id: DashMap<AdnlChannelId, Arc<AdnlChannel>>,
     /// Channels table used to fast search when sending messages
@@ -55,6 +59,9 @@ pub struct AdnlNode {
     sender_queue_tx: SenderQueueTx,
     /// Receiver end of the outgoing packets queue (NOTE: used only for initialization)
     sender_queue_rx: Mutex<Option<SenderQueueRx>>,
+
+    /// Basic reinit date for all local peer states
+    start_time: i32,
 }
 
 impl AdnlNode {
@@ -63,11 +70,13 @@ impl AdnlNode {
 
         Self {
             config,
+            peers: Default::default(),
             channels_by_id: Default::default(),
             channels_by_peers: Default::default(),
             channels_to_confirm: Default::default(),
             sender_queue_tx,
             sender_queue_rx: Mutex::new(Some(sender_queue_rx)),
+            start_time: now(),
         }
     }
 
@@ -182,6 +191,7 @@ impl AdnlNode {
         mut data: PacketView<'_>,
         subscribers: &[Arc<dyn Subscriber>],
     ) -> Result<()> {
+        // Decrypt packet and extract peers
         let (local_id, peer_id) =
             if let Some(local_id) = parse_handshake(self.config.keys(), &mut data, None)? {
                 (local_id, None)
@@ -200,12 +210,156 @@ impl AdnlNode {
                 return Ok(());
             };
 
+        // Parse packet
         let packet = deserialize(data.as_slice())?
             .downcast::<ton::adnl::PacketContents>()
             .map_err(AdnlNodeError::UnknownPacket)?;
 
+        // Validate packet
+        let other_key = self.check_packet(&packet, &local_id, peer_id)?;
+
         // todo
         Ok(())
+    }
+
+    fn check_packet(
+        &self,
+        packet: &ton::adnl::PacketContents,
+        local_id: &AdnlNodeIdShort,
+        peer_id: Option<AdnlNodeIdShort>,
+    ) -> Result<AdnlNodeIdShort> {
+        use std::cmp::Ordering;
+
+        const CLOCK_TOLERANCE: i32 = 60;
+
+        let explicit_peer_id = peer_id.is_some();
+
+        // Extract peer id
+        let peer_id = if let Some(peer_id) = peer_id {
+            if packet.from().is_some() || packet.from_short().is_some() {
+                return Err(AdnlPacketError::ExplicitSourceForChannel.into());
+            }
+            peer_id
+        } else if let Some(public_key) = packet.from() {
+            let full_id: AdnlNodeIdFull = public_key.try_into()?;
+            let peer_id = full_id.compute_short_id()?;
+
+            if matches!(packet.from_short(), Some(id) if peer_id != id.id.0) {
+                return Err(AdnlPacketError::InvalidPeerId.into());
+            }
+
+            if let Some(list) = packet.address() {
+                let ip_address = parse_address_list(list)?;
+                self.add_peer(local_id, &peer_id, ip_address, full_id)?;
+            }
+
+            peer_id
+        } else if let Some(peer_id) = packet.from_short() {
+            AdnlNodeIdShort::new(peer_id.id.0)
+        } else {
+            return Err(AdnlPacketError::NoKeyDataInPacket.into());
+        };
+
+        // Check timings
+        let dst_reinit_date = packet.dst_reinit_date();
+        let reinit_date = packet.reinit_date();
+        if dst_reinit_date.is_some() != reinit_date.is_some() {
+            return Err(AdnlPacketError::ReinitDatesMismatch.into());
+        }
+
+        let peers = self.get_peers(&local_id)?;
+        let peer = if explicit_peer_id {
+            if let Some(channel) = self.channels_by_peers.get(&peer_id) {
+                peers.get(channel.peer_id())
+            } else {
+                return Err(AdnlPacketError::UnknownChannel.into());
+            }
+        } else {
+            peers.get(&peer_id)
+        }
+        .ok_or(AdnlPacketError::UnknownPeer)?;
+
+        if let (Some(&dst_reinit_date), Some(&reinit_date)) = (dst_reinit_date, reinit_date) {
+            if dst_reinit_date != 0 {
+                match dst_reinit_date.cmp(&peer.receiver_state().reinit_date()) {
+                    Ordering::Equal => {}
+                    Ordering::Greater => return Err(AdnlPacketError::DstReinitDateTooNew.into()),
+                    Ordering::Less => return Err(AdnlPacketError::DstReinitDateTooOld.into()),
+                }
+            }
+
+            let sender_reinit_date = peer.sender_state().reinit_date();
+            match reinit_date.cmp(&sender_reinit_date) {
+                Ordering::Equal => {}
+                Ordering::Greater => {
+                    if reinit_date > now() + CLOCK_TOLERANCE {
+                        return Err(AdnlPacketError::SrcReinitDateTooNew.into());
+                    } else {
+                        peer.sender_state().set_reinit_date(reinit_date);
+                        if sender_reinit_date != 0 {
+                            peer.sender_state().mask().reset();
+                            peer.receiver_state().mask().reset();
+                        }
+                    }
+                }
+                Ordering::Less => return Err(AdnlPacketError::SrcReinitDateTooOld.into()),
+            }
+        }
+
+        if let Some(&seqno) = packet.seqno() {
+            peer.receiver_state().mask().deliver_packet(seqno)?;
+        }
+
+        if let Some(&confirm_seqno) = packet.confirm_seqno() {
+            let sender_seqno = peer.sender_state().mask().seqno();
+            if confirm_seqno > sender_seqno {
+                return Err(AdnlPacketError::ConfirmationSeqnoTooNew.into());
+            }
+        }
+
+        Ok(peer_id)
+    }
+
+    pub fn add_peer(
+        &self,
+        local_id: &AdnlNodeIdShort,
+        peer_id: &AdnlNodeIdShort,
+        peer_ip_address: AdnlAddressUdp,
+        peer_full_id: AdnlNodeIdFull,
+    ) -> Result<bool> {
+        use dashmap::mapref::entry::Entry;
+
+        if peer_id == local_id {
+            return Ok(false);
+        }
+
+        match self.get_peers(local_id)?.entry(*peer_id) {
+            Entry::Occupied(entry) => entry.get().set_ip_address(peer_ip_address),
+            Entry::Vacant(entry) => {
+                entry.insert(AdnlPeer::new(
+                    self.start_time,
+                    peer_ip_address,
+                    peer_full_id,
+                ));
+
+                log::debug!(
+                    "Added ADNL peer {}. PEER ID {} -> LOCAL ID {}",
+                    peer_ip_address,
+                    peer_id,
+                    local_id
+                );
+            }
+        };
+
+        Ok(true)
+    }
+
+    fn get_peers(&self, local_id: &AdnlNodeIdShort) -> Result<Arc<AdnlPeers>> {
+        if let Some(peers) = self.peers.get(local_id) {
+            Ok(peers.value().clone())
+        } else {
+            Err(AdnlNodeError::PeersNotFound.into())
+        }
     }
 }
 
@@ -284,4 +438,32 @@ enum AdnlNodeError {
     BadHandshakePacketChecksum,
     #[error("Unknown ADNL packet format: {:?}", .0)]
     UnknownPacket(ton::TLObject),
+    #[error("Local id peers not found")]
+    PeersNotFound,
+}
+
+#[derive(thiserror::Error, Debug)]
+enum AdnlPacketError {
+    #[error("Explicit source address inside channel packet")]
+    ExplicitSourceForChannel,
+    #[error("Mismatch between peer id and packet key")]
+    InvalidPeerId,
+    #[error("No key data in packet")]
+    NoKeyDataInPacket,
+    #[error("Destination and source reinit dates mismatch")]
+    ReinitDatesMismatch,
+    #[error("Unknown channel id")]
+    UnknownChannel,
+    #[error("Unknown peer")]
+    UnknownPeer,
+    #[error("Destination reinit date is too new")]
+    DstReinitDateTooNew,
+    #[error("Destination reinit date is too old")]
+    DstReinitDateTooOld,
+    #[error("Source reinit date is too new")]
+    SrcReinitDateTooNew,
+    #[error("Source reinit date is too old")]
+    SrcReinitDateTooOld,
+    #[error("Confirmation seqno is too new")]
+    ConfirmationSeqnoTooNew,
 }

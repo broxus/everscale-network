@@ -1,4 +1,4 @@
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 
 use anyhow::Result;
 use ton_api::ton;
@@ -53,10 +53,10 @@ impl From<ed25519_dalek::PublicKey> for AdnlNodeIdFull {
     }
 }
 
-impl TryFrom<ton::PublicKey> for AdnlNodeIdFull {
+impl TryFrom<&ton::PublicKey> for AdnlNodeIdFull {
     type Error = anyhow::Error;
 
-    fn try_from(public_key: ton::PublicKey) -> Result<Self> {
+    fn try_from(public_key: &ton::PublicKey) -> Result<Self> {
         match public_key {
             ton::PublicKey::Pub_Ed25519(public_key) => Ok(Self::new(
                 ed25519_dalek::PublicKey::from_bytes(&public_key.key.0)?,
@@ -102,6 +102,12 @@ impl std::fmt::Display for AdnlNodeIdShort {
 
 impl PartialEq<[u8]> for AdnlNodeIdShort {
     fn eq(&self, other: &[u8]) -> bool {
+        self.0.eq(other)
+    }
+}
+
+impl PartialEq<[u8; 32]> for AdnlNodeIdShort {
+    fn eq(&self, other: &[u8; 32]) -> bool {
         self.0.eq(other)
     }
 }
