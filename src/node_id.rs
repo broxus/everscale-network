@@ -6,50 +6,38 @@ use ton_api::ton;
 use crate::utils::*;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub struct AdnlNodeIdFull(Option<ed25519_dalek::PublicKey>);
+pub struct AdnlNodeIdFull([u8; 32]);
 
 impl AdnlNodeIdFull {
-    pub fn empty() -> Self {
-        Self(None)
+    pub fn new(public_key: [u8; 32]) -> Self {
+        Self(public_key)
     }
 
-    pub fn new(public_key: ed25519_dalek::PublicKey) -> Self {
-        Self(Some(public_key))
+    pub fn public_key(&self) -> &[u8; 32] {
+        &self.0
     }
 
-    pub fn public_key(&self) -> Option<&ed25519_dalek::PublicKey> {
-        self.0.as_ref()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_none()
-    }
-
-    pub fn as_tl(&self) -> Result<ton::pub_::publickey::Ed25519> {
-        Ok(ton::pub_::publickey::Ed25519 {
-            key: ton::int256(self.0.ok_or(AdnlNodeIdError::PublicKeyIsEmpty)?.to_bytes()),
-        })
+    pub fn as_tl(&self) -> ton::pub_::publickey::Ed25519 {
+        ton::pub_::publickey::Ed25519 {
+            key: ton::int256(self.0),
+        }
     }
 
     pub fn compute_short_id(&self) -> Result<AdnlNodeIdShort> {
-        let hash = hash(self.as_tl()?)?;
+        let hash = hash(self.as_tl())?;
         Ok(AdnlNodeIdShort::new(hash))
     }
 }
 
 impl std::fmt::Display for AdnlNodeIdFull {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str(&hex::encode(
-            self.0
-                .unwrap_or_else(ed25519_dalek::PublicKey::default)
-                .to_bytes(),
-        ))
+        f.write_str(&hex::encode(&self.0))
     }
 }
 
 impl From<ed25519_dalek::PublicKey> for AdnlNodeIdFull {
     fn from(key: ed25519_dalek::PublicKey) -> Self {
-        Self::new(key)
+        Self::new(key.to_bytes())
     }
 }
 
@@ -58,9 +46,7 @@ impl TryFrom<&ton::PublicKey> for AdnlNodeIdFull {
 
     fn try_from(public_key: &ton::PublicKey) -> Result<Self> {
         match public_key {
-            ton::PublicKey::Pub_Ed25519(public_key) => Ok(Self::new(
-                ed25519_dalek::PublicKey::from_bytes(&public_key.key.0)?,
-            )),
+            ton::PublicKey::Pub_Ed25519(public_key) => Ok(Self::new(public_key.key.0)),
             _ => Err(AdnlNodeIdError::UnsupportedPublicKey.into()),
         }
     }
@@ -119,7 +105,7 @@ pub trait ComputeNodeIds {
 impl ComputeNodeIds for ed25519_dalek::SecretKey {
     fn compute_node_ids(&self) -> Result<(AdnlNodeIdFull, AdnlNodeIdShort)> {
         let public_key = ed25519_dalek::PublicKey::from(self);
-        let full_id = AdnlNodeIdFull::new(public_key);
+        let full_id = AdnlNodeIdFull::new(public_key.to_bytes());
         let short_id = full_id.compute_short_id()?;
         Ok((full_id, short_id))
     }
@@ -127,7 +113,7 @@ impl ComputeNodeIds for ed25519_dalek::SecretKey {
 
 impl ComputeNodeIds for ed25519_dalek::PublicKey {
     fn compute_node_ids(&self) -> Result<(AdnlNodeIdFull, AdnlNodeIdShort)> {
-        let full_id = AdnlNodeIdFull::new(*self);
+        let full_id = AdnlNodeIdFull::new(self.to_bytes());
         let short_id = full_id.compute_short_id()?;
         Ok((full_id, short_id))
     }

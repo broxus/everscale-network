@@ -5,6 +5,8 @@ use dashmap::DashMap;
 use tokio::sync::Barrier;
 use ton_api::ton;
 
+use crate::query::*;
+
 #[derive(Default)]
 pub struct QueriesCache {
     queries: DashMap<QueryId, QueryState>,
@@ -87,20 +89,6 @@ enum QueryState {
     /// Query was timed out
     Timeout,
 }
-
-/// Query id wrapper used for printing
-pub struct ShortQueryId<'a>(&'a QueryId);
-
-impl std::fmt::Display for ShortQueryId<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_fmt(format_args!(
-            "{:02x}{:02x}{:02x}{:02x}",
-            self.0[0], self.0[1], self.0[2], self.0[3]
-        ))
-    }
-}
-
-pub type QueryId = [u8; 32];
 
 #[derive(thiserror::Error, Debug)]
 enum QueriesCacheError {

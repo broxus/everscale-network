@@ -16,12 +16,12 @@ pub struct AdnlChannel {
 
 impl AdnlChannel {
     pub fn new(
-        private_key: &ed25519_dalek::SecretKey,
         local_id: AdnlNodeIdShort,
         peer_id: AdnlNodeIdShort,
+        local_private_key: &ed25519_dalek::SecretKey,
+        peer_public_key: &[u8; 32],
     ) -> Result<Self> {
-        let public_key = ed25519_dalek::PublicKey::from(private_key);
-        let shared_secret = compute_shared_secret(private_key.as_bytes(), public_key.as_bytes())?;
+        let shared_secret = compute_shared_secret(local_private_key.as_bytes(), peer_public_key)?;
         let mut reversed_secret = shared_secret;
         reversed_secret.reverse();
 

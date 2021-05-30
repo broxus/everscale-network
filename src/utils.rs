@@ -120,6 +120,25 @@ pub fn deserialize(bytes: &[u8]) -> Result<TLObject> {
         .convert()
 }
 
+/// Deserializes a bundle of TL objects from bytes
+pub fn deserialize_bundle(mut bytes: &[u8]) -> Result<Vec<TLObject>> {
+    let mut deserializer = Deserializer::new(&mut bytes);
+    let mut result = Vec::new();
+    loop {
+        match deserializer.read_boxed::<TLObject>() {
+            Ok(object) => result.push(object),
+            Err(error) => {
+                if result.is_empty() {
+                    return Err(error).convert();
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
 pub fn now() -> i32 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
