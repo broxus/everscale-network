@@ -1,6 +1,7 @@
 mod address_list;
 mod channel;
 mod config;
+mod handshake;
 mod node_id;
 mod peer;
 mod queries_cache;
@@ -19,6 +20,7 @@ use aes::cipher::StreamCipher;
 use anyhow::Result;
 use dashmap::DashMap;
 use parking_lot::Mutex;
+use sha2::Digest;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use ton_api::{ton, IntoBoxed};
@@ -26,6 +28,7 @@ use ton_api::{ton, IntoBoxed};
 pub use crate::address_list::*;
 pub use crate::channel::*;
 pub use crate::config::*;
+use crate::handshake::*;
 pub use crate::node_id::*;
 pub use crate::peer::*;
 use crate::queries_cache::*;
@@ -196,7 +199,7 @@ impl AdnlNode {
     ) -> Result<()> {
         // Decrypt packet and extract peers
         let (local_id, peer_id) =
-            if let Some(local_id) = parse_handshake(self.config.keys(), &mut data, None)? {
+            if let Some(local_id) = parse_handshake_packet(self.config.keys(), &mut data, None)? {
                 (local_id, None)
             } else if let Some(channel) = self.channels_by_id.get(&data[0..32]) {
                 let channel = channel.value();
@@ -303,6 +306,7 @@ impl AdnlNode {
             None
         };
 
+        // Process message
         let response: Option<ton::adnl::Message> = match alt_message.as_ref().unwrap_or(message) {
             ton::adnl::Message::Adnl_Message_Answer(answer) => {
                 self.process_message_answer(answer).await?;
@@ -331,7 +335,12 @@ impl AdnlNode {
             _ => return Err(AdnlNodeError::UnknownMessage.into()),
         };
 
-        // TODO
+        // Send answer if needed
+        if let Some(message) = response {
+            self.send_message(local_id, peer_id, message)?;
+        }
+
+        // Done
         Ok(())
     }
 
@@ -515,6 +524,98 @@ impl AdnlNode {
         Ok(peer_id)
     }
 
+    fn send_message(
+        &self,
+        local_id: &AdnlNodeIdShort,
+        peer_id: &AdnlNodeIdShort,
+        message: ton::adnl::Message,
+    ) -> Result<()> {
+        const MAX_ADNL_MESSAGE_SIZE: usize = 1024;
+
+        let peers = self.get_peers(local_id)?;
+        let peer = match peers.get(peer_id) {
+            Some(peer) => peer,
+            None => return Err(AdnlNodeError::UnknownPeer.into()),
+        };
+        let peer = peer.value();
+
+        let local_key = self.config.key_by_id(local_id)?;
+        let channel = self.channels_by_peers.get(peer_id);
+        let create_channel_message =
+            if channel.is_none() && !self.channels_to_confirm.contains_key(peer_id) {
+                log::debug!("Create channel {} -> {}", local_id, peer_id);
+                Some(
+                    ton::adnl::message::message::CreateChannel {
+                        key: ton::int256(*peer.id().public_key()),
+                        date: now(),
+                    }
+                    .into_boxed(),
+                )
+            } else {
+                None
+            };
+
+        let mut size = create_channel_message
+            .is_some()
+            .then(|| 40)
+            .unwrap_or_default();
+
+        size += match &message {
+            ton::adnl::Message::Adnl_Message_Answer(msg) => msg.answer.len() + 44,
+            ton::adnl::Message::Adnl_Message_ConfirmChannel(_) => 72,
+            ton::adnl::Message::Adnl_Message_Custom(msg) => msg.data.len() + 12,
+            ton::adnl::Message::Adnl_Message_Query(msg) => msg.query.len() + 44,
+            _ => return Err(AdnlNodeError::UnexpectedMessageToSend.into()),
+        };
+
+        let channel = channel.as_ref().map(|channel| channel.value());
+
+        if size <= MAX_ADNL_MESSAGE_SIZE {
+            if let Some(create_channel_message) = create_channel_message {
+                self.send_packet(
+                    local_id,
+                    peer_id,
+                    MessageToSend::Multiple(vec![create_channel_message, message]),
+                )
+            } else {
+                self.send_packet(local_id, peer_id, MessageToSend::Single(message))
+            }
+        } else {
+            if let Some(message) = create_channel_message {
+                self.send_packet(local_id, peer_id, MessageToSend::Single(message))?;
+            }
+
+            let data = serialize(&message)?;
+            let hash: [u8; 32] = sha2::Sha256::digest(&data).as_slice().try_into().unwrap();
+
+            let mut offset = 0;
+            while offset < data.len() {
+                let next_offset = std::cmp::min(data.len(), offset + MAX_ADNL_MESSAGE_SIZE);
+                let message = ton::adnl::message::message::Part {
+                    hash: ton::int256(hash),
+                    total_size: data.len() as i32,
+                    offset: offset as i32,
+                    data: ton::bytes(data[offset..next_offset].to_vec()),
+                }
+                .into_boxed();
+
+                self.send_packet(local_id, peer_id, MessageToSend::Single(message))?;
+                offset = next_offset;
+            }
+
+            Ok(())
+        }
+    }
+
+    fn send_packet(
+        &self,
+        local_id: &AdnlNodeIdShort,
+        peer_id: &AdnlNodeIdShort,
+        message: MessageToSend,
+    ) -> Result<()> {
+        todo!()
+    }
+
     pub fn add_peer(
         &self,
         local_id: &AdnlNodeIdShort,
@@ -596,7 +697,7 @@ impl AdnlNode {
         let channel = AdnlChannel::new(
             *local_id,
             *peer_id,
-            local_key.private_key(),
+            local_key.private_key_part(),
             peer_public_key,
         )?;
         log::debug!("Channel {}: {} -> {}", context, local_id, peer_id);
@@ -605,66 +706,14 @@ impl AdnlNode {
     }
 }
 
-/// Attempts to decode the buffer as an ADNL handshake packet. On a successful nonempty result,
-/// this buffer remains as decrypted packet data.
-///
-/// Expected packet structure:
-///  - 0..=31 - short local node id
-///  - 32..=63 - sender pubkey
-///  - 64..=95 - checksum
-///  - 96..... - encrypted data
-///
-/// **NOTE: even on failure can modify buffer**
-fn parse_handshake(
-    keys: &DashMap<AdnlNodeIdShort, Arc<StoredAdnlNodeKey>>,
-    buffer: &mut PacketView<'_>,
-    data_length: Option<usize>,
-) -> Result<Option<AdnlNodeIdShort>> {
-    use sha2::digest::Digest;
-
-    if buffer.len() < 96 + data_length.unwrap_or_default() {
-        return Err(AdnlNodeError::BadHandshakePacketLength.into());
-    }
-
-    let data_range = match data_length {
-        Some(data_length) => 96..(96 + data_length),
-        None => 96..buffer.len(),
-    };
-
-    // Since there are relatively few keys, linear search is optimal
-    for key in keys.iter() {
-        // Find suitable local node key
-        if key.key() == &buffer[0..32] {
-            // Decrypt data
-            let mut shared_secret = compute_shared_secret(
-                key.value().private_key().as_bytes(),
-                buffer[32..64].try_into().unwrap(),
-            )?;
-
-            build_packet_cipher(&shared_secret, &buffer[64..96].try_into().unwrap())
-                .apply_keystream(&mut buffer[data_range]);
-
-            // Check checksum
-            if !sha2::Sha256::digest(&buffer[96..])
-                .as_slice()
-                .eq(&buffer[64..96])
-            {
-                return Err(AdnlNodeError::BadHandshakePacketChecksum.into());
-            }
-
-            // Leave only data in buffer
-            buffer.remove_prefix(96);
-            return Ok(Some(*key.key()));
-        }
-    }
-
-    // No local keys found
-    Ok(None)
-}
-
 struct PacketToSend {
     destination: AdnlAddressUdp,
     data: Vec<u8>,
+}
+
+enum MessageToSend {
+    Single(ton::adnl::Message),
+    Multiple(Vec<ton::adnl::Message>),
 }
 
 type SenderQueueTx = mpsc::UnboundedSender<PacketToSend>;
@@ -674,10 +723,6 @@ type SenderQueueRx = mpsc::UnboundedReceiver<PacketToSend>;
 enum AdnlNodeError {
     #[error("ADNL node is already running")]
     AlreadyRunning,
-    #[error("Bad handshake packet length")]
-    BadHandshakePacketLength,
-    #[error("Bad handshake packet checksum")]
-    BadHandshakePacketChecksum,
     #[error("Unknown ADNL packet format: {:?}", .0)]
     UnknownPacket(ton::TLObject),
     #[error("Local id peers not found")]
@@ -686,6 +731,8 @@ enum AdnlNodeError {
     UnknownMessage,
     #[error("Received answer to unknown query")]
     UnknownQueryAnswer,
+    #[error("Unknown peer")]
+    UnknownPeer,
     #[error("Channel with unknown peer")]
     UnknownPeerInChannel,
     #[error("Channel key mismatch")]
@@ -694,6 +741,8 @@ enum AdnlNodeError {
     NoSubscribersFroCustomMessage,
     #[error("No subscribers for query")]
     NoSubscribersForQuery,
+    #[error("Unexpected message to send")]
+    UnexpectedMessageToSend,
 }
 
 #[derive(thiserror::Error, Debug)]

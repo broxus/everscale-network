@@ -5,6 +5,7 @@ use dashmap::DashMap;
 
 use crate::address_list::AdnlAddressUdp;
 use crate::node_id::*;
+use std::convert::TryInto;
 
 pub struct AdnlNodeConfig {
     ip_address: AdnlAddressUdp,
@@ -64,9 +65,13 @@ impl AdnlNodeConfig {
                 entry.insert(short_id);
                 match self.keys.entry(short_id) {
                     Entry::Vacant(entry) => {
+                        let private_key = ed25519_dalek::ExpandedSecretKey::from(&key);
+                        let private_key_part = private_key.to_bytes()[0..32].try_into().unwrap();
+
                         entry.insert(Arc::new(StoredAdnlNodeKey {
                             full_id,
-                            private_key: key,
+                            private_key,
+                            private_key_part,
                         }));
                         Ok(short_id)
                     }
@@ -96,7 +101,8 @@ impl AdnlNodeConfig {
 
 pub struct StoredAdnlNodeKey {
     full_id: AdnlNodeIdFull,
-    private_key: ed25519_dalek::SecretKey,
+    private_key: ed25519_dalek::ExpandedSecretKey,
+    private_key_part: [u8; 32],
 }
 
 impl StoredAdnlNodeKey {
@@ -104,8 +110,12 @@ impl StoredAdnlNodeKey {
         &self.full_id
     }
 
-    pub fn private_key(&self) -> &ed25519_dalek::SecretKey {
+    pub fn private_key(&self) -> &ed25519_dalek::ExpandedSecretKey {
         &self.private_key
+    }
+
+    pub fn private_key_part(&self) -> &[u8; 32] {
+        &self.private_key_part
     }
 }
 

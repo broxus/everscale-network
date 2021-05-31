@@ -1,8 +1,9 @@
 use std::convert::TryInto;
+use std::mem::MaybeUninit;
+use std::ops::{Index, IndexMut, Range, RangeFrom};
 
 use anyhow::Result;
 use sha2::Digest;
-use std::ops::{Index, IndexMut, Range, RangeFrom};
 use ton_api::ton::TLObject;
 use ton_api::{BoxedSerialize, Deserializer, IntoBoxed, Serializer};
 
@@ -31,7 +32,8 @@ impl<'a> PacketView<'a> {
         let len = self.bytes.len();
         let ptr = self.bytes.as_mut_ptr();
         // SAFETY: `bytes` is already a reference bounded by a lifetime
-        self.bytes = unsafe { std::slice::from_raw_parts_mut(ptr.add(len), len - prefix_len) };
+        self.bytes =
+            unsafe { std::slice::from_raw_parts_mut(ptr.add(prefix_len), len - prefix_len) };
     }
 }
 
@@ -77,9 +79,9 @@ pub fn build_packet_cipher(shared_secret: &[u8; 32], checksum: &[u8; 32]) -> aes
     use aes::cipher::NewCipher;
 
     let mut aes_key_bytes: [u8; 32] = *shared_secret;
-    aes_key_bytes.copy_from_slice(&checksum[16..32]);
+    aes_key_bytes[16..32].copy_from_slice(&checksum[16..32]);
     let mut aes_ctr_bytes: [u8; 16] = checksum[0..16].try_into().unwrap();
-    aes_ctr_bytes.copy_from_slice(&shared_secret[20..32]);
+    aes_ctr_bytes[4..16].copy_from_slice(&shared_secret[20..32]);
 
     aes::Aes256Ctr::new(
         generic_array::GenericArray::from_slice(&aes_key_bytes),
@@ -87,13 +89,16 @@ pub fn build_packet_cipher(shared_secret: &[u8; 32], checksum: &[u8; 32]) -> aes
     )
 }
 
-pub fn compute_shared_secret(private_key: &[u8; 32], public_key: &[u8; 32]) -> Result<[u8; 32]> {
+pub fn compute_shared_secret(
+    private_key_part: &[u8; 32],
+    public_key: &[u8; 32],
+) -> Result<[u8; 32]> {
     let point = curve25519_dalek::edwards::CompressedEdwardsY(*public_key)
         .decompress()
         .ok_or(BadPublicKeyData)?
         .to_montgomery()
         .to_bytes();
-    Ok(x25519_dalek::x25519(*private_key, point))
+    Ok(x25519_dalek::x25519(*private_key_part, point))
 }
 
 #[derive(thiserror::Error, Debug)]
