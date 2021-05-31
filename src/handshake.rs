@@ -80,7 +80,7 @@ pub fn parse_handshake_packet(
             )?;
 
             build_packet_cipher(&shared_secret, &buffer[64..96].try_into().unwrap())
-                .apply_keystream(&mut buffer[data_range.clone()]);
+                .apply_keystream(&mut buffer[data_range]);
 
             // Check checksum
             if !sha2::Sha256::digest(&buffer[96..])

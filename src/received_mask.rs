@@ -21,6 +21,12 @@ impl AdnlReceivedMask {
         self.state.read().seqno as i64
     }
 
+    pub fn bump_seqno(&self) -> i64 {
+        let mut state = self.state.write();
+        state.seqno += 1;
+        state.seqno
+    }
+
     pub fn is_packet_delivered(&self, seqno: i64) -> bool {
         if seqno <= 0 {
             return false;

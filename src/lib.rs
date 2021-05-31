@@ -37,6 +37,7 @@ pub use crate::received_mask::*;
 pub use crate::subscriber::*;
 use crate::transfer::*;
 use crate::utils::*;
+use rand::Rng;
 
 pub struct AdnlNode {
     /// Ip address and keys for signing
@@ -568,21 +569,23 @@ impl AdnlNode {
             _ => return Err(AdnlNodeError::UnexpectedMessageToSend.into()),
         };
 
-        let channel = channel.as_ref().map(|channel| channel.value());
+        let signer = match channel.as_ref() {
+            Some(channel) => MessageSigner::Channel(channel.value()),
+            None => MessageSigner::Random(local_key.id()),
+        };
 
         if size <= MAX_ADNL_MESSAGE_SIZE {
-            if let Some(create_channel_message) = create_channel_message {
-                self.send_packet(
-                    local_id,
-                    peer_id,
-                    MessageToSend::Multiple(vec![create_channel_message, message]),
-                )
-            } else {
-                self.send_packet(local_id, peer_id, MessageToSend::Single(message))
-            }
+            let message = match create_channel_message {
+                Some(create_channel_message) => {
+                    MessageToSend::Multiple(vec![create_channel_message, message])
+                }
+                None => MessageToSend::Single(message),
+            };
+
+            self.send_packet(local_id, peer_id, peer, signer, message)
         } else {
-            if let Some(message) = create_channel_message {
-                self.send_packet(local_id, peer_id, MessageToSend::Single(message))?;
+            if let Some(message) = create_channel_message.map(MessageToSend::Single) {
+                self.send_packet(local_id, peer_id, peer, signer, message)?;
             }
 
             let data = serialize(&message)?;
@@ -591,15 +594,18 @@ impl AdnlNode {
             let mut offset = 0;
             while offset < data.len() {
                 let next_offset = std::cmp::min(data.len(), offset + MAX_ADNL_MESSAGE_SIZE);
-                let message = ton::adnl::message::message::Part {
-                    hash: ton::int256(hash),
-                    total_size: data.len() as i32,
-                    offset: offset as i32,
-                    data: ton::bytes(data[offset..next_offset].to_vec()),
-                }
-                .into_boxed();
 
-                self.send_packet(local_id, peer_id, MessageToSend::Single(message))?;
+                let message = MessageToSend::Single(
+                    ton::adnl::message::message::Part {
+                        hash: ton::int256(hash),
+                        total_size: data.len() as i32,
+                        offset: offset as i32,
+                        data: ton::bytes(data[offset..next_offset].to_vec()),
+                    }
+                    .into_boxed(),
+                );
+
+                self.send_packet(local_id, peer_id, peer, signer, message)?;
                 offset = next_offset;
             }
 
@@ -611,9 +617,73 @@ impl AdnlNode {
         &self,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
+        peer: &AdnlPeer,
+        signer: MessageSigner,
         message: MessageToSend,
     ) -> Result<()> {
-        todo!()
+        const ADDRESS_LIST_TIMEOUT: i32 = 10000; // Seconds
+
+        let (message, messages) = match message {
+            MessageToSend::Single(message) => (Some(message), None),
+            MessageToSend::Multiple(messages) => (None, Some(messages.into())),
+        };
+
+        let now = now();
+
+        let mut data = serialize(
+            &ton::adnl::packetcontents::PacketContents {
+                rand1: ton::bytes(gen_packet_offset()),
+                from: match signer {
+                    MessageSigner::Channel(_) => None,
+                    MessageSigner::Random(local_id_full) => {
+                        Some(local_id_full.as_tl().into_boxed())
+                    }
+                },
+                from_short: match signer {
+                    MessageSigner::Channel(_) => None,
+                    MessageSigner::Random(_) => Some(local_id.as_tl()),
+                },
+                message,
+                messages,
+                address: Some(ton::adnl::addresslist::AddressList {
+                    addrs: vec![self.config.ip_address().as_tl()].into(),
+                    version: now,
+                    reinit_date: self.start_time,
+                    priority: 0,
+                    expire_at: now + ADDRESS_LIST_TIMEOUT,
+                }),
+                priority_address: None,
+                seqno: Some(peer.sender_state().mask().bump_seqno()),
+                confirm_seqno: Some(peer.receiver_state().mask().seqno()),
+                recv_addr_list_version: None,
+                recv_priority_addr_list_version: None,
+                reinit_date: match signer {
+                    MessageSigner::Channel(_) => None,
+                    MessageSigner::Random(_) => Some(peer.receiver_state().reinit_date()),
+                },
+                dst_reinit_date: match signer {
+                    MessageSigner::Channel(_) => None,
+                    MessageSigner::Random(_) => Some(peer.sender_state().reinit_date()),
+                },
+                signature: None,
+                rand2: ton::bytes(gen_packet_offset()),
+            }
+            .into_boxed(),
+        )?;
+
+        match signer {
+            MessageSigner::Channel(channel) => channel.encrypt(&mut data)?,
+            MessageSigner::Random(_) => build_handshake_packet(peer_id, peer.id(), &mut data)?,
+        }
+
+        self.sender_queue_tx
+            .send(PacketToSend {
+                destination: peer.ip_address(),
+                data,
+            })
+            .map_err(|_| AdnlNodeError::FailedToSendPacket)?;
+
+        Ok(())
     }
 
     pub fn add_peer(
@@ -711,6 +781,12 @@ struct PacketToSend {
     data: Vec<u8>,
 }
 
+#[derive(Copy, Clone)]
+enum MessageSigner<'a> {
+    Channel(&'a Arc<AdnlChannel>),
+    Random(&'a AdnlNodeIdFull),
+}
+
 enum MessageToSend {
     Single(ton::adnl::Message),
     Multiple(Vec<ton::adnl::Message>),
@@ -738,11 +814,13 @@ enum AdnlNodeError {
     #[error("Channel key mismatch")]
     ChannelKeyMismatch,
     #[error("No subscribers for custom message")]
-    NoSubscribersFroCustomMessage,
+    NoSubscribersForCustomMessage,
     #[error("No subscribers for query")]
     NoSubscribersForQuery,
     #[error("Unexpected message to send")]
     UnexpectedMessageToSend,
+    #[error("Failed to send ADNL packet")]
+    FailedToSendPacket,
 }
 
 #[derive(thiserror::Error, Debug)]

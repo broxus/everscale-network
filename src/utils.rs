@@ -75,6 +75,16 @@ pub fn hash<T: IntoBoxed>(object: T) -> Result<[u8; 32]> {
     hash_boxed(&object.into_boxed())
 }
 
+pub fn gen_packet_offset() -> Vec<u8> {
+    use rand::Rng;
+
+    const RAND_SIZE: usize = 16; // TODO: randomly choose between 7 and 15
+
+    let mut result = vec![0; RAND_SIZE];
+    rand::thread_rng().fill(result.as_mut_slice());
+    result
+}
+
 pub fn build_packet_cipher(shared_secret: &[u8; 32], checksum: &[u8; 32]) -> aes::Aes256Ctr {
     use aes::cipher::NewCipher;
 
