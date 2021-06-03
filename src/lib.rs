@@ -235,6 +235,8 @@ impl AdnlNode {
                 if let Some((key, removed)) = self.channels_to_confirm.remove(channel.peer_id()) {
                     self.channels_by_peers.insert(key, removed);
                 }
+
+                channel.reset_drop_timeout();
                 (*channel.local_id(), Some(*channel.peer_id()))
             } else {
                 log::trace!(
@@ -827,12 +829,12 @@ impl AdnlNode {
 
                 log::info!("Trying to drop query {}", ShortQueryId(&query_id));
 
-                match queries.update_query(query_id, None) {
+                match queries.update_query(query_id, None).await {
                     Ok(true) => log::info!("Dropped query {}", ShortQueryId(&query_id)),
                     Err(e) => {
                         log::info!("Failed to drop query {} ({})", ShortQueryId(&query_id), e)
                     }
-                    _ => {}
+                    _ => { /* do nothing */ }
                 }
             }
         });
@@ -841,16 +843,19 @@ impl AdnlNode {
         log::info!("Finished query {}", ShortQueryId(&query_id));
 
         match query {
-            Ok(Some(answer)) => return Ok(Some(deserialize(&answer)?)),
+            Ok(Some(answer)) => Ok(Some(deserialize(&answer)?)),
             Ok(None) => {
                 if let Some(channel) = channel {
-                    let now = now() as u32;
-                    let was= channel.value()
+                    let now = now();
+                    let was = channel.update_drop_timeout(now);
+                    if (was > 0) && (was < now) {
+                        self.reset_peer(local_id, peer_id)?;
+                    }
                 }
+                Ok(None)
             }
+            Err(e) => Err(e),
         }
-
-        Ok(None)
     }
 
     fn get_peers(&self, local_id: &AdnlNodeIdShort) -> Result<Arc<AdnlPeers>> {
@@ -861,23 +866,22 @@ impl AdnlNode {
         }
     }
 
-    fn reset_peers(&self, local_id: &AdnlNodeIdShort, peer_id: &AdnlNodeIdShort) -> Result<()> {
+    fn reset_peer(&self, local_id: &AdnlNodeIdShort, peer_id: &AdnlNodeIdShort) -> Result<()> {
         let peers = self.get_peers(local_id)?;
         let peer = peers.get(peer_id).ok_or(AdnlNodeError::UnknownPeer)?;
-        let peer = peer.value();
 
         log::warn!("Resetting peer pair {} -> {}", local_id, peer_id);
 
-        self.channels_to_confirm.remove(peer_id)
+        self.channels_to_confirm
+            .remove(peer_id)
             .or_else(|| self.channels_by_peers.remove(peer_id))
             .and_then(|(_, removed)| {
+                let new_peer = peer.clone_with_reinit();
 
-                peers.insert(*peer_id, AdnlPeer::new(AdnlPeer {
-                    id: (),
-                    ip_address: Default::default(),
-                    receiver_state: (),
-                    sender_state: ()
-                }));
+                // Make sure that there are no references to `peers` table
+                std::mem::drop(peer);
+
+                peers.insert(*peer_id, new_peer);
 
                 self.channels_by_id.remove(removed.channel_in_id())
             });

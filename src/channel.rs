@@ -1,17 +1,22 @@
+use std::convert::TryInto;
+use std::sync::atomic::{AtomicI32, Ordering};
+
+use aes::cipher::StreamCipher;
 use anyhow::Result;
 use sha2::Digest;
 use ton_api::ton;
 
 use crate::node_id::*;
 use crate::utils::*;
-use aes::cipher::StreamCipher;
-use std::convert::TryInto;
+
+const CHANNEL_RESET_TIMEOUT: i32 = 30; // Seconds
 
 pub struct AdnlChannel {
     channel_out: ChannelSide,
     channel_in: ChannelSide,
     local_id: AdnlNodeIdShort,
     peer_id: AdnlNodeIdShort,
+    drop: AtomicI32,
 }
 
 impl AdnlChannel {
@@ -36,6 +41,7 @@ impl AdnlChannel {
             channel_in: ChannelSide::from_secret(out_secret)?,
             local_id,
             peer_id,
+            drop: Default::default(),
         })
     }
 
@@ -53,6 +59,21 @@ impl AdnlChannel {
 
     pub fn peer_id(&self) -> &AdnlNodeIdShort {
         &self.peer_id
+    }
+
+    pub fn update_drop_timeout(&self, now: i32) -> i32 {
+        self.drop
+            .compare_exchange(
+                0,
+                now + CHANNEL_RESET_TIMEOUT,
+                Ordering::Acquire,
+                Ordering::Relaxed,
+            )
+            .unwrap_or_else(|was| was)
+    }
+
+    pub fn reset_drop_timeout(&self) {
+        self.drop.store(0, Ordering::Release);
     }
 
     pub fn decrypt(&self, buffer: &mut PacketView) -> Result<()> {

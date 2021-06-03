@@ -125,7 +125,7 @@ where
 }
 
 /// Query id wrapper used for printing
-pub struct ShortQueryId<'a>(&'a QueryId);
+pub struct ShortQueryId<'a>(pub &'a QueryId);
 
 impl std::fmt::Display for ShortQueryId<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
