@@ -109,10 +109,6 @@ impl Transfer {
             }
         }
     }
-
-    pub fn get_part(&self, offset: usize) -> Option<TransferPartRef> {
-        self.parts.get(&offset).map(TransferPartRef)
-    }
 }
 
 pub struct TransferPartRef<'a>(Ref<'a, usize, Vec<u8>>);

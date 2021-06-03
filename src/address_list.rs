@@ -27,8 +27,6 @@ impl<T> AdnlAddressList<T>
 where
     T: AdnlAddress + Hash + Eq,
 {
-    const MAX_SERIALIZED_SIZE: usize = 128;
-
     pub fn version(&self) -> i32 {
         self.version.load(Ordering::Acquire)
     }

@@ -1,11 +1,37 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use ton_api::{ton, IntoBoxed};
+use ton_api::{ton, IntoBoxed, Serializer};
 
 use crate::node_id::*;
 use crate::subscriber::*;
 use crate::utils::*;
+
+pub fn build_query(
+    prefix: Option<&[u8]>,
+    query: &ton::TLObject,
+) -> Result<(QueryId, ton::adnl::Message)> {
+    use rand::Rng;
+
+    let query_id: QueryId = rand::thread_rng().gen();
+    let query = match prefix {
+        Some(prefix) => {
+            let mut prefix = prefix.to_vec();
+            Serializer::new(&mut prefix).write_boxed(query).convert()?;
+            prefix
+        }
+        None => serialize(query)?,
+    };
+
+    Ok((
+        query_id,
+        ton::adnl::message::message::Query {
+            query_id: ton::int256(query_id),
+            query: ton::bytes(query),
+        }
+        .into_boxed(),
+    ))
+}
 
 pub async fn process_message_custom(
     local_id: &AdnlNodeIdShort,

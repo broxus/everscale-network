@@ -37,8 +37,7 @@ pub fn build_handshake_packet(
         .try_into()
         .unwrap();
 
-    let mut shared_secret =
-        compute_shared_secret(&temp_private_key_part, peer_id_full.public_key())?;
+    let shared_secret = compute_shared_secret(&temp_private_key_part, peer_id_full.public_key())?;
     build_packet_cipher(&shared_secret, checksum).apply_keystream(&mut buffer[96..]);
 
     // Done
@@ -74,7 +73,7 @@ pub fn parse_handshake_packet(
         // Find suitable local node key
         if key.key() == &buffer[0..32] {
             // Decrypt data
-            let mut shared_secret = compute_shared_secret(
+            let shared_secret = compute_shared_secret(
                 key.value().private_key_part(),
                 buffer[32..64].try_into().unwrap(),
             )?;

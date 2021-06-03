@@ -1,14 +1,6 @@
-use std::convert::TryInto;
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
 
-use anyhow::Result;
 use dashmap::DashMap;
-use parking_lot::RwLock;
-use ton_api::ton;
-use ton_api::ton::adnl::message::message as adnlmessage;
-use ton_api::ton::adnl::packetcontents::PacketContents;
 
 use crate::address_list::*;
 use crate::node_id::*;

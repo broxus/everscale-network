@@ -121,8 +121,6 @@ impl ComputeNodeIds for ed25519_dalek::PublicKey {
 
 #[derive(thiserror::Error, Debug)]
 enum AdnlNodeIdError {
-    #[error("Public key is empty")]
-    PublicKeyIsEmpty,
     #[error("Unsupported public key")]
     UnsupportedPublicKey,
 }

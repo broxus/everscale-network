@@ -1,31 +1,47 @@
+mod ping_subscriber;
+
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use anyhow::Result;
 use ton_api::ton::TLObject;
 use ton_api::{BoxedSerialize, IntoBoxed};
 
+pub use self::ping_subscriber::AdnlPingSubscriber;
 use crate::node_id::*;
 
 #[async_trait::async_trait]
 pub trait Subscriber: Send + Sync {
+    async fn poll(&self, _start: &Arc<Instant>) {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+
     async fn try_consume_custom(
         &self,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
-        data: &[u8],
-    ) -> Result<bool>;
+        _local_id: &AdnlNodeIdShort,
+        _peer_id: &AdnlNodeIdShort,
+        _data: &[u8],
+    ) -> Result<bool> {
+        Ok(false)
+    }
 
     async fn try_consume_query(
         &self,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
+        _local_id: &AdnlNodeIdShort,
+        _peer_id: &AdnlNodeIdShort,
         query: TLObject,
-    ) -> Result<QueryConsumingResult>;
+    ) -> Result<QueryConsumingResult> {
+        Ok(QueryConsumingResult::Rejected(query))
+    }
 
     async fn try_consume_query_bundle(
         &self,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
+        _local_id: &AdnlNodeIdShort,
+        _peer_id: &AdnlNodeIdShort,
         queries: Vec<TLObject>,
-    ) -> Result<QueryBundleConsumingResult>;
+    ) -> Result<QueryBundleConsumingResult> {
+        Ok(QueryBundleConsumingResult::Rejected(queries))
+    }
 }
 
 pub enum QueryConsumingResult {

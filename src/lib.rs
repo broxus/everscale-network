@@ -1,22 +1,8 @@
-mod address_list;
-mod channel;
-mod config;
-mod handshake;
-mod node_id;
-mod peer;
-mod queries_cache;
-mod query;
-mod received_mask;
-mod subscriber;
-mod transfer;
-pub mod utils;
-
 use std::convert::TryInto;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use aes::cipher::StreamCipher;
 use anyhow::Result;
 use dashmap::DashMap;
 use parking_lot::Mutex;
@@ -37,7 +23,19 @@ pub use crate::received_mask::*;
 pub use crate::subscriber::*;
 use crate::transfer::*;
 use crate::utils::*;
-use rand::Rng;
+
+mod address_list;
+mod channel;
+mod config;
+mod handshake;
+mod node_id;
+mod peer;
+mod queries_cache;
+mod query;
+mod received_mask;
+mod subscriber;
+mod transfer;
+pub mod utils;
 
 pub struct AdnlNode {
     /// Ip address and keys for signing
@@ -57,7 +55,7 @@ pub struct AdnlNode {
     transfers: DashMap<TransferId, Arc<Transfer>>,
 
     /// Pending queries
-    queries: QueriesCache,
+    queries: Arc<QueriesCache>,
 
     /// Outgoing packets queue
     sender_queue_tx: SenderQueueTx,
@@ -69,6 +67,9 @@ pub struct AdnlNode {
 }
 
 impl AdnlNode {
+    pub const MIN_QUERY_TIMEOUT: u64 = 500; // Milliseconds
+    pub const MAX_QUERY_TIMEOUT: u64 = 5000; // Milliseconds
+
     pub fn new(config: AdnlNodeConfig) -> Self {
         let (sender_queue_tx, sender_queue_rx) = mpsc::unbounded_channel();
 
@@ -98,14 +99,40 @@ impl AdnlNode {
             UdpSocket::bind((Ipv4Addr::UNSPECIFIED, self.config.ip_address().port())).await?,
         );
 
+        subscribers.push(Arc::new(AdnlPingSubscriber));
         let subscribers = Arc::new(subscribers);
 
         // Start background logic
+        self.start_subscribers_polling(&subscribers);
         self.start_sender(socket.clone(), sender_queue_rx);
-        self.start_receiver(socket, subscribers.clone());
+        self.start_receiver(socket, subscribers);
 
         // Done
         Ok(())
+    }
+
+    /// Starts a process that polls subscribers
+    fn start_subscribers_polling(self: &Arc<Self>, subscribers: &[Arc<dyn Subscriber>]) {
+        let start = Arc::new(Instant::now());
+
+        for subscriber in subscribers {
+            let node = Arc::downgrade(self);
+            let subscriber = subscriber.clone();
+            let start = start.clone();
+
+            tokio::spawn(async move {
+                loop {
+                    // Check if node is still alive
+                    let _node = match node.upgrade() {
+                        Some(node) => node,
+                        None => return,
+                    };
+
+                    // Poll
+                    subscriber.poll(&start).await;
+                }
+            });
+        }
     }
 
     /// Starts a process that forwards packets from the sender queue to the UDP socket
@@ -322,7 +349,9 @@ impl AdnlNode {
                 Some(reply.into_boxed())
             }
             ton::adnl::Message::Adnl_Message_Custom(custom) => {
-                if !process_message_custom(local_id, peer_id, subscribers, custom).await? {}
+                if !process_message_custom(local_id, peer_id, subscribers, custom).await? {
+                    return Err(AdnlNodeError::NoSubscribersForCustomMessage.into());
+                }
                 None
             }
             ton::adnl::Message::Adnl_Message_Query(query) => {
@@ -686,6 +715,34 @@ impl AdnlNode {
         Ok(())
     }
 
+    pub fn ip_address(&self) -> AdnlAddressUdp {
+        self.config.ip_address()
+    }
+
+    pub fn add_key(&self, key: ed25519_dalek::SecretKey, tag: usize) -> Result<AdnlNodeIdShort> {
+        use dashmap::mapref::entry::Entry;
+
+        let result = self.config.add_key(key, tag)?;
+        if let Entry::Vacant(entry) = self.peers.entry(result) {
+            entry.insert(Arc::new(Default::default()));
+        };
+
+        Ok(result)
+    }
+
+    pub fn delete_key(&self, key: &AdnlNodeIdShort, tag: usize) -> Result<bool> {
+        self.peers.remove(key);
+        self.config.delete_key(key, tag)
+    }
+
+    pub fn key_by_id(&self, id: &AdnlNodeIdShort) -> Result<Arc<StoredAdnlNodeKey>> {
+        self.config.key_by_id(id)
+    }
+
+    pub fn key_by_tag(&self, tag: usize) -> Result<Arc<StoredAdnlNodeKey>> {
+        self.config.key_by_tag(tag)
+    }
+
     pub fn add_peer(
         &self,
         local_id: &AdnlNodeIdShort,
@@ -729,12 +786,103 @@ impl AdnlNode {
         Ok(peers.remove(peer_id).is_some())
     }
 
+    pub async fn query(
+        &self,
+        local_id: &AdnlNodeIdShort,
+        peer_id: &AdnlNodeIdShort,
+        query: &ton::TLObject,
+        timeout: Option<u64>,
+    ) -> Result<Option<ton::TLObject>> {
+        self.query_with_prefix(local_id, peer_id, None, query, timeout)
+            .await
+    }
+
+    pub async fn query_with_prefix(
+        &self,
+        local_id: &AdnlNodeIdShort,
+        peer_id: &AdnlNodeIdShort,
+        prefix: Option<&[u8]>,
+        query: &ton::TLObject,
+        timeout: Option<u64>,
+    ) -> Result<Option<ton::TLObject>> {
+        let (query_id, message) = build_query(prefix, query)?;
+        let pending_query = self.queries.add_query(query_id);
+        log::debug!("Sent query {}", ShortQueryId(&query_id));
+
+        self.send_message(local_id, peer_id, message)?;
+        let channel = self.channels_by_peers.get(peer_id);
+
+        tokio::spawn({
+            let queries = self.queries.clone();
+
+            async move {
+                let timeout = timeout.unwrap_or(Self::MAX_QUERY_TIMEOUT);
+                log::info!(
+                    "Scheduling drop for query {} in {}ms",
+                    ShortQueryId(&query_id),
+                    timeout
+                );
+
+                tokio::time::sleep(Duration::from_millis(timeout)).await;
+
+                log::info!("Trying to drop query {}", ShortQueryId(&query_id));
+
+                match queries.update_query(query_id, None) {
+                    Ok(true) => log::info!("Dropped query {}", ShortQueryId(&query_id)),
+                    Err(e) => {
+                        log::info!("Failed to drop query {} ({})", ShortQueryId(&query_id), e)
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        let query = pending_query.wait().await;
+        log::info!("Finished query {}", ShortQueryId(&query_id));
+
+        match query {
+            Ok(Some(answer)) => return Ok(Some(deserialize(&answer)?)),
+            Ok(None) => {
+                if let Some(channel) = channel {
+                    let now = now() as u32;
+                    let was= channel.value()
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
     fn get_peers(&self, local_id: &AdnlNodeIdShort) -> Result<Arc<AdnlPeers>> {
         if let Some(peers) = self.peers.get(local_id) {
             Ok(peers.value().clone())
         } else {
             Err(AdnlNodeError::PeersNotFound.into())
         }
+    }
+
+    fn reset_peers(&self, local_id: &AdnlNodeIdShort, peer_id: &AdnlNodeIdShort) -> Result<()> {
+        let peers = self.get_peers(local_id)?;
+        let peer = peers.get(peer_id).ok_or(AdnlNodeError::UnknownPeer)?;
+        let peer = peer.value();
+
+        log::warn!("Resetting peer pair {} -> {}", local_id, peer_id);
+
+        self.channels_to_confirm.remove(peer_id)
+            .or_else(|| self.channels_by_peers.remove(peer_id))
+            .and_then(|(_, removed)| {
+
+                peers.insert(*peer_id, AdnlPeer::new(AdnlPeer {
+                    id: (),
+                    ip_address: Default::default(),
+                    receiver_state: (),
+                    sender_state: ()
+                }));
+
+                self.channels_by_id.remove(removed.channel_in_id())
+            });
+
+        Ok(())
     }
 
     fn create_channel(
