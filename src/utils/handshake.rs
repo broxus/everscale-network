@@ -6,9 +6,9 @@ use anyhow::Result;
 use dashmap::DashMap;
 use sha2::Digest;
 
-use crate::config::*;
-use crate::node_id::*;
-use crate::utils::*;
+use super::node_id::*;
+use super::packet_view::*;
+use super::{build_packet_cipher, compute_shared_secret};
 
 pub fn build_handshake_packet(
     peer_id: &AdnlNodeIdShort,
@@ -105,37 +105,4 @@ enum HandshakeError {
     BadHandshakePacketLength,
     #[error("Bad handshake packet checksum")]
     BadHandshakePacketChecksum,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_handshake() -> Result<()> {
-        let first_peer_config = AdnlNodeConfig::from_ip_address_and_keys(0.into(), Vec::new())?;
-
-        let first_peer_key = ed25519_dalek::SecretKey::generate(&mut rand::thread_rng());
-        let first_peer_id = first_peer_config.add_key(first_peer_key, 1)?;
-        let first_peer = first_peer_config.key_by_tag(1).unwrap();
-
-        let text = "Hello world";
-
-        let mut packet = text.as_bytes().to_vec();
-        println!("Packet decoded: {}", hex::encode(&packet));
-
-        build_handshake_packet(&first_peer_id, first_peer.id(), &mut packet)?;
-        println!("Packet encoded: {}", hex::encode(&packet));
-
-        println!("Packet decoded: {}", hex::encode(packet.as_slice()));
-
-        let mut buffer = packet.as_mut_slice().into();
-        parse_handshake_packet(first_peer_config.keys(), &mut buffer, None)?;
-
-        println!("Packet decoded: {}", hex::encode(buffer.as_slice()));
-
-        assert_eq!(buffer.as_slice(), text.as_bytes());
-
-        Ok(())
-    }
 }

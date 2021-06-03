@@ -3,9 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use dashmap::DashMap;
 
-use crate::address_list::AdnlAddressUdp;
-use crate::node_id::*;
-use std::convert::TryInto;
+use crate::utils::*;
 
 pub struct AdnlNodeConfig {
     ip_address: AdnlAddressUdp,
@@ -65,14 +63,9 @@ impl AdnlNodeConfig {
                 entry.insert(short_id);
                 match self.keys.entry(short_id) {
                     Entry::Vacant(entry) => {
-                        let private_key = ed25519_dalek::ExpandedSecretKey::from(&key);
-                        let private_key_part = private_key.to_bytes()[0..32].try_into().unwrap();
-
-                        entry.insert(Arc::new(StoredAdnlNodeKey {
-                            full_id,
-                            private_key,
-                            private_key_part,
-                        }));
+                        entry.insert(Arc::new(StoredAdnlNodeKey::from_id_and_private_key(
+                            full_id, &key,
+                        )));
                         Ok(short_id)
                     }
                     Entry::Occupied(_) => Err(AdnlNodeConfigError::DuplicatedKey(short_id).into()),
@@ -99,26 +92,6 @@ impl AdnlNodeConfig {
     }
 }
 
-pub struct StoredAdnlNodeKey {
-    full_id: AdnlNodeIdFull,
-    private_key: ed25519_dalek::ExpandedSecretKey,
-    private_key_part: [u8; 32],
-}
-
-impl StoredAdnlNodeKey {
-    pub fn id(&self) -> &AdnlNodeIdFull {
-        &self.full_id
-    }
-
-    pub fn private_key(&self) -> &ed25519_dalek::ExpandedSecretKey {
-        &self.private_key
-    }
-
-    pub fn private_key_part(&self) -> &[u8; 32] {
-        &self.private_key_part
-    }
-}
-
 #[derive(thiserror::Error, Debug)]
 enum AdnlNodeConfigError {
     #[error("Duplicated key tag {} in node config", .0)]
@@ -131,4 +104,37 @@ enum AdnlNodeConfigError {
     KeyTagNotFound(usize),
     #[error("Unexpected key")]
     UnexpectedKey,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_handshake() -> Result<()> {
+        let first_peer_config = AdnlNodeConfig::from_ip_address_and_keys(0.into(), Vec::new())?;
+
+        let first_peer_key = ed25519_dalek::SecretKey::generate(&mut rand::thread_rng());
+        let first_peer_id = first_peer_config.add_key(first_peer_key, 1)?;
+        let first_peer = first_peer_config.key_by_tag(1).unwrap();
+
+        let text = "Hello world";
+
+        let mut packet = text.as_bytes().to_vec();
+        println!("Packet decoded: {}", hex::encode(&packet));
+
+        build_handshake_packet(&first_peer_id, first_peer.id(), &mut packet)?;
+        println!("Packet encoded: {}", hex::encode(&packet));
+
+        println!("Packet decoded: {}", hex::encode(packet.as_slice()));
+
+        let mut buffer = packet.as_mut_slice().into();
+        parse_handshake_packet(first_peer_config.keys(), &mut buffer, None)?;
+
+        println!("Packet decoded: {}", hex::encode(buffer.as_slice()));
+
+        assert_eq!(buffer.as_slice(), text.as_bytes());
+
+        Ok(())
+    }
 }

@@ -6,7 +6,6 @@ use anyhow::Result;
 use sha2::Digest;
 use ton_api::ton;
 
-use crate::node_id::*;
 use crate::utils::*;
 
 const CHANNEL_RESET_TIMEOUT: i32 = 30; // Seconds
@@ -49,6 +48,7 @@ impl AdnlChannel {
         &self.channel_in.id
     }
 
+    #[allow(dead_code)]
     pub fn channel_out_id(&self) -> &AdnlChannelId {
         &self.channel_out.id
     }

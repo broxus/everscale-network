@@ -2,9 +2,8 @@ use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 
 use dashmap::DashMap;
 
-use crate::address_list::*;
-use crate::node_id::*;
-use crate::received_mask::*;
+use super::received_mask::*;
+use crate::utils::*;
 
 pub type AdnlPeers = DashMap<AdnlNodeIdShort, AdnlPeer>;
 

@@ -1,9 +1,9 @@
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 
 use anyhow::Result;
 use ton_api::ton;
 
-use crate::utils::*;
+use super::hash;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct AdnlNodeIdFull([u8; 32]);
@@ -123,4 +123,38 @@ impl ComputeNodeIds for ed25519_dalek::PublicKey {
 enum AdnlNodeIdError {
     #[error("Unsupported public key")]
     UnsupportedPublicKey,
+}
+
+pub struct StoredAdnlNodeKey {
+    full_id: AdnlNodeIdFull,
+    private_key: ed25519_dalek::ExpandedSecretKey,
+    private_key_part: [u8; 32],
+}
+
+impl StoredAdnlNodeKey {
+    pub fn from_id_and_private_key(
+        full_id: AdnlNodeIdFull,
+        private_key: &ed25519_dalek::SecretKey,
+    ) -> Self {
+        let private_key = ed25519_dalek::ExpandedSecretKey::from(private_key);
+        let private_key_part = private_key.to_bytes()[0..32].try_into().unwrap();
+
+        Self {
+            full_id,
+            private_key,
+            private_key_part,
+        }
+    }
+
+    pub fn id(&self) -> &AdnlNodeIdFull {
+        &self.full_id
+    }
+
+    pub fn private_key(&self) -> &ed25519_dalek::ExpandedSecretKey {
+        &self.private_key
+    }
+
+    pub fn private_key_part(&self) -> &[u8; 32] {
+        &self.private_key_part
+    }
 }

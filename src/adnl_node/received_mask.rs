@@ -6,12 +6,6 @@ pub struct AdnlReceivedMask {
 }
 
 impl AdnlReceivedMask {
-    pub fn new() -> Self {
-        Self {
-            state: Default::default(),
-        }
-    }
-
     pub fn reset(&self) {
         let mut state = self.state.write();
         *state = Default::default();
@@ -27,6 +21,7 @@ impl AdnlReceivedMask {
         state.seqno
     }
 
+    #[allow(dead_code)]
     pub fn is_packet_delivered(&self, seqno: i64) -> bool {
         if seqno <= 0 {
             return false;

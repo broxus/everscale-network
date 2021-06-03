@@ -8,7 +8,7 @@ use ton_api::ton::TLObject;
 use ton_api::{BoxedSerialize, IntoBoxed};
 
 pub use self::ping_subscriber::AdnlPingSubscriber;
-use crate::node_id::*;
+use crate::utils::*;
 
 #[async_trait::async_trait]
 pub trait Subscriber: Send + Sync {

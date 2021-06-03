@@ -1,74 +1,23 @@
 use std::convert::TryInto;
-use std::ops::{Index, IndexMut, Range, RangeFrom};
 
 use anyhow::Result;
 use sha2::Digest;
 use ton_api::ton::TLObject;
 use ton_api::{BoxedSerialize, Deserializer, IntoBoxed, Serializer};
 
-pub struct PacketView<'a> {
-    bytes: &'a mut [u8],
-}
+pub use self::address_list::*;
+pub use self::handshake::*;
+pub use self::node_id::*;
+pub use self::packet_view::*;
+pub use self::queries_cache::*;
+pub use self::query::*;
 
-impl<'a> PacketView<'a> {
-    pub const fn as_slice(&self) -> &[u8] {
-        self.bytes
-    }
-
-    pub fn as_mut_slice(&mut self) -> &mut [u8] {
-        self.bytes
-    }
-
-    pub fn len(&self) -> usize {
-        self.bytes.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.bytes.is_empty()
-    }
-
-    pub fn remove_prefix(&mut self, prefix_len: usize) {
-        let len = self.bytes.len();
-        let ptr = self.bytes.as_mut_ptr();
-        // SAFETY: `bytes` is already a reference bounded by a lifetime
-        self.bytes =
-            unsafe { std::slice::from_raw_parts_mut(ptr.add(prefix_len), len - prefix_len) };
-    }
-}
-
-impl Index<Range<usize>> for PacketView<'_> {
-    type Output = [u8];
-
-    fn index(&self, index: Range<usize>) -> &Self::Output {
-        self.bytes.index(index)
-    }
-}
-
-impl IndexMut<Range<usize>> for PacketView<'_> {
-    fn index_mut(&mut self, index: Range<usize>) -> &mut Self::Output {
-        self.bytes.index_mut(index)
-    }
-}
-
-impl Index<RangeFrom<usize>> for PacketView<'_> {
-    type Output = [u8];
-
-    fn index(&self, index: RangeFrom<usize>) -> &Self::Output {
-        self.bytes.index(index)
-    }
-}
-
-impl IndexMut<RangeFrom<usize>> for PacketView<'_> {
-    fn index_mut(&mut self, index: RangeFrom<usize>) -> &mut Self::Output {
-        self.bytes.index_mut(index)
-    }
-}
-
-impl<'a> From<&'a mut [u8]> for PacketView<'a> {
-    fn from(bytes: &'a mut [u8]) -> Self {
-        Self { bytes }
-    }
-}
+mod address_list;
+mod handshake;
+mod node_id;
+mod packet_view;
+mod queries_cache;
+mod query;
 
 pub fn hash<T: IntoBoxed>(object: T) -> Result<[u8; 32]> {
     hash_boxed(&object.into_boxed())

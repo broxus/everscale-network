@@ -1,8 +1,8 @@
 use anyhow::Result;
 use ton_api::ton;
 
-use crate::node_id::*;
-use crate::subscriber::*;
+use super::{QueryConsumingResult, Subscriber};
+use crate::utils::*;
 
 pub struct AdnlPingSubscriber;
 

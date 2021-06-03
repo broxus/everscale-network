@@ -5,7 +5,7 @@ use dashmap::DashMap;
 use tokio::sync::Barrier;
 use ton_api::ton;
 
-use crate::query::*;
+use super::query::*;
 
 #[derive(Default)]
 pub struct QueriesCache {

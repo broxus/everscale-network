@@ -7,7 +7,7 @@ use dashmap::DashSet;
 use ton_api::ton::adnl::Address;
 use ton_api::{ton, IntoBoxed};
 
-use crate::utils::*;
+use super::now;
 
 pub trait AdnlAddress: Sized {
     fn is_public(&self) -> bool;
