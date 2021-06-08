@@ -27,4 +27,8 @@ impl RaptorQDecoder {
     pub fn params(&self) -> &ton::fec::type_::RaptorQ {
         &self.params
     }
+
+    pub fn seqno(&self) -> u32 {
+        self.seqno
+    }
 }

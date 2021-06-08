@@ -75,6 +75,21 @@ pub fn serialize<T: BoxedSerialize>(object: &T) -> Result<Vec<u8>> {
     Ok(ret)
 }
 
+pub fn serialize_append<T>(buffer: &mut Vec<u8>, object: &T) -> Result<()>
+where
+    T: BoxedSerialize,
+{
+    Serializer::new(buffer).write_boxed(object).convert()
+}
+
+pub fn serialize_inplace<T>(buffer: &mut Vec<u8>, object: &T) -> Result<()>
+where
+    T: BoxedSerialize,
+{
+    buffer.truncate(0);
+    serialize_append(buffer, object)
+}
+
 /// Deserializes TL object from bytes
 pub fn deserialize(bytes: &[u8]) -> Result<TLObject> {
     let mut reader = bytes;

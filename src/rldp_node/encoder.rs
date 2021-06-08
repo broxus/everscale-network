@@ -52,7 +52,7 @@ impl RaptorQEncoder {
     }
 }
 
-const MAX_TRANSMISSION_UNIT: usize = 768;
+pub const MAX_TRANSMISSION_UNIT: usize = 768;
 
 #[derive(thiserror::Error, Debug)]
 enum EncoderError {
