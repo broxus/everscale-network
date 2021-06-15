@@ -38,14 +38,9 @@ impl RldpNode {
         max_answer_size: Option<i64>,
         roundtrip: Option<u64>,
     ) -> Result<(Option<Vec<u8>>, u64)> {
-        use dashmap::mapref::entry::Entry;
-
         let (query_id, query) = make_query(data, max_answer_size)?;
 
-        let peer = match self.peers.entry(*peer_id) {
-            Entry::Occupied(entry) => entry.get().clone(),
-            Entry::Vacant(entry) => entry.insert(Default::default()).value().clone(),
-        };
+        let peer = self.peers.entry(*peer_id).or_default().value().clone();
 
         peer.begin_query().await;
 
