@@ -75,6 +75,11 @@ pub fn serialize<T: BoxedSerialize>(object: &T) -> Result<Vec<u8>> {
     Ok(ret)
 }
 
+pub fn serialize_boxed<T: IntoBoxed>(object: T) -> Result<Vec<u8>> {
+    let object = object.into_boxed();
+    serialize(&object)
+}
+
 pub fn serialize_append<T>(buffer: &mut Vec<u8>, object: &T) -> Result<()>
 where
     T: BoxedSerialize,

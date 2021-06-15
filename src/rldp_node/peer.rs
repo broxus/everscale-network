@@ -12,10 +12,6 @@ pub struct RldpPeer {
 }
 
 impl RldpPeer {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub async fn begin_query(&self) {
         if self.queries.fetch_add(1, Ordering::Acquire) < MAX_QUERIES {
             return;
