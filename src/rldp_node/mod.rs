@@ -137,6 +137,61 @@ impl RldpNode {
         }
     }
 
+    fn answer_transfer(
+        &self,
+        local_id: &AdnlNodeIdShort,
+        peer_id: &AdnlNodeIdShort,
+        transfer_id: TransferId,
+    ) -> Result<Option<MessagePartTx>> {
+        use dashmap::mapref::entry::Entry;
+
+        let (parts_tx, parts_rx) = match self.transfers.entry(transfer_id) {
+            Entry::Vacant(entry) => {
+                let (parts_tx, parts_rx) = mpsc::unbounded_channel();
+                entry.insert(RldpTransfer::Incoming(parts_tx.clone()));
+                (parts_tx, parts_rx)
+            }
+            Entry::Occupied(_) => return Ok(None),
+        };
+
+        let mut incoming_context = IncomingContext {
+            adnl: self.adnl.clone(),
+            local_id: *local_id,
+            peer_id: *peer_id,
+            parts_rx,
+            transfer: IncomingTransfer::new(transfer_id),
+            transfer_id,
+        };
+
+        tokio::spawn({
+            let subscribers = self.subscribers.clone();
+            let transfers = self.transfers.clone();
+            async move {
+                receive_loop(&mut incoming_context, None).await;
+                transfers.insert(incoming_context.transfer_id, RldpTransfer::Done);
+                let outgoing_transfer_id =
+                    answer_loop(subscribers, transfers.clone(), &mut incoming_context)
+                        .await
+                        .unwrap_or_default();
+                tokio::time::sleep(Duration::from_millis(MAX_TIMEOUT * 2)).await;
+                if let Some(outgoing_transfer_id) = outgoing_transfer_id {
+                    transfers.remove(&outgoing_transfer_id);
+                }
+                transfers.remove(&incoming_context.transfer_id);
+            }
+        });
+
+        tokio::spawn({
+            let transfers = self.transfers.clone();
+            async move {
+                tokio::time::sleep(Duration::from_millis(MAX_TIMEOUT)).await;
+                transfers.insert(transfer_id, RldpTransfer::Done);
+            }
+        });
+
+        Ok(Some(parts_tx))
+    }
+
     async fn query_transfer_loop(
         &self,
         outgoing_context: OutgoingContext<'_>,
@@ -193,13 +248,87 @@ impl RldpNode {
 
 #[async_trait::async_trait]
 impl Subscriber for RldpNode {
-    // TODO
+    async fn try_consume_custom(
+        &self,
+        local_id: &AdnlNodeIdShort,
+        peer_id: &AdnlNodeIdShort,
+        data: &[u8],
+    ) -> Result<bool> {
+        let message = match deserialize(data) {
+            Ok(message) => match message.downcast::<ton::rldp::MessagePart>() {
+                Ok(message) => message,
+                _ => return Ok(false),
+            },
+            _ => return Ok(false),
+        };
+
+        match message {
+            ton::rldp::MessagePart::Rldp_MessagePart(message_part) => loop {
+                match self.transfers.get(&message_part.transfer_id.0) {
+                    Some(item) => match item.value() {
+                        RldpTransfer::Incoming(parts_tx) => {
+                            parts_tx.send(message_part);
+                            break;
+                        }
+                        _ => {
+                            let reply = ton::rldp::messagepart::Confirm {
+                                transfer_id: message_part.transfer_id,
+                                part: message_part.part,
+                                seqno: message_part.seqno,
+                            }
+                            .into_boxed();
+                            let reply = serialize(&reply)?;
+                            self.adnl.send_custom_message(local_id, peer_id, &reply)?;
+
+                            let reply = ton::rldp::messagepart::Complete {
+                                transfer_id: message_part.transfer_id,
+                                part: message_part.part,
+                            }
+                            .into_boxed();
+                            let reply = serialize(&reply)?;
+                            self.adnl.send_custom_message(local_id, peer_id, &reply)?;
+                            break;
+                        }
+                    },
+                    None => {
+                        match self.answer_transfer(local_id, peer_id, message_part.transfer_id.0)? {
+                            Some(parts_tx) => {
+                                parts_tx.send(message_part);
+                                break;
+                            }
+                            None => continue,
+                        }
+                    }
+                }
+            },
+            ton::rldp::MessagePart::Rldp_Confirm(confirm) => {
+                if let Some(transfer) = self.transfers.get(&confirm.transfer_id.0) {
+                    if let RldpTransfer::Outgoing(state) = transfer.value() {
+                        if state.part() == confirm.part as u32 {
+                            state.set_seqno_in(confirm.seqno as u32);
+                        }
+                    }
+                }
+            }
+            ton::rldp::MessagePart::Rldp_Complete(complete) => {
+                if let Some(transfer) = self.transfers.get(&complete.transfer_id.0) {
+                    if let RldpTransfer::Outgoing(state) = transfer.value() {
+                        state.set_part(complete.part as u32 + 1);
+                    }
+                }
+            }
+        };
+
+        Ok(true)
+    }
 }
 
 pub type TransferId = [u8; 32];
 
+type MessagePartTx = mpsc::UnboundedSender<Box<ton::rldp::messagepart::MessagePart>>;
+
 enum RldpTransfer {
-    Incoming(mpsc::UnboundedSender<Box<ton::rldp::messagepart::MessagePart>>),
+    Incoming(MessagePartTx),
     Outgoing(Arc<OutgoingTransferState>),
     Done,
 }
@@ -219,6 +348,59 @@ struct IncomingContext {
     parts_rx: mpsc::UnboundedReceiver<Box<ton::rldp::messagepart::MessagePart>>,
     transfer: IncomingTransfer,
     transfer_id: TransferId,
+}
+
+async fn answer_loop(
+    subscribers: Arc<Vec<Arc<dyn Subscriber>>>,
+    transfers: Arc<DashMap<TransferId, RldpTransfer>>,
+    incoming_context: &mut IncomingContext,
+) -> Result<Option<TransferId>> {
+    let query =
+        match deserialize(incoming_context.transfer.data())?.downcast::<ton::rldp::Message>() {
+            Ok(ton::rldp::Message::Rldp_Query(query)) => query,
+            _ => return Err(RldpNodeError::UnexpectedMessage.into()),
+        };
+
+    let answer = match process_message_rldp_query(
+        &incoming_context.local_id,
+        &incoming_context.peer_id,
+        &subscribers,
+        &query,
+    )
+    .await?
+    {
+        QueryProcessingResult::Processed(Some(answer)) => answer,
+        QueryProcessingResult::Processed(None) => return Ok(None),
+        QueryProcessingResult::Rejected => return Err(RldpNodeError::NoSubscribers.into()),
+    };
+
+    if answer.data.len() > query.max_answer_size as usize {
+        return Err(RldpNodeError::AnswerSizeExceeded.into());
+    }
+    let answer = serialize(&answer.into_boxed())?;
+
+    let mut outgoing_transfer_id = incoming_context.transfer_id;
+    for symbol in &mut outgoing_transfer_id {
+        *symbol ^= 0xFF;
+    }
+
+    let outgoing_transfer = OutgoingTransfer::new(&answer, Some(outgoing_transfer_id));
+    transfers.insert(
+        outgoing_transfer_id,
+        RldpTransfer::Outgoing(outgoing_transfer.state().clone()),
+    );
+
+    let outgoing_context = OutgoingContext {
+        adnl: incoming_context.adnl.clone(),
+        local_id: incoming_context.local_id,
+        peer_id: incoming_context.peer_id,
+        transfer: outgoing_transfer,
+        transfer_id: outgoing_transfer_id,
+    };
+
+    send_loop(outgoing_context, None).await?;
+
+    Ok(Some(outgoing_transfer_id))
 }
 
 async fn receive_loop(
@@ -336,4 +518,10 @@ enum RldpNodeError {
     UnexpectedAnswer,
     #[error("Unknown query id")]
     QueryIdMismatch,
+    #[error("Unexpected message")]
+    UnexpectedMessage,
+    #[error("No subscribers for query")]
+    NoSubscribers,
+    #[error("Answer size exceeded")]
+    AnswerSizeExceeded,
 }

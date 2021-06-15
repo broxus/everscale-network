@@ -69,6 +69,24 @@ pub async fn process_message_adnl_query(
     }
 }
 
+pub async fn process_message_rldp_query(
+    local_id: &AdnlNodeIdShort,
+    peer_id: &AdnlNodeIdShort,
+    subscribers: &[Arc<dyn Subscriber>],
+    query: &ton::rldp::message::Query,
+) -> Result<QueryProcessingResult<ton::rldp::message::Answer>> {
+    match process_query(local_id, peer_id, subscribers, query.data.as_ref()).await? {
+        QueryProcessingResult::Processed(answer) => {
+            convert_answer(answer, |answer| ton::rldp::message::Answer {
+                query_id: query.query_id,
+                data: ton::bytes(answer),
+            })
+            .map(QueryProcessingResult::Processed)
+        }
+        _ => Ok(QueryProcessingResult::Rejected),
+    }
+}
+
 async fn process_query(
     local_id: &AdnlNodeIdShort,
     peer_id: &AdnlNodeIdShort,
