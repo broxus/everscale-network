@@ -92,7 +92,7 @@ impl TransfersCache {
             Ok((true, mut roundtrip)) => {
                 let mut start = Instant::now();
                 let mut updates = incoming_transfer_state.updates();
-                let mut timeout = calc_timeout(Some(roundtrip));
+                let mut timeout = compute_timeout(Some(roundtrip));
 
                 loop {
                     // Wait until `updates` will be the same for one interval
@@ -357,7 +357,7 @@ async fn send_loop(
     const MAX_TRANSFER_WAVE: u32 = 10;
 
     // Prepare timeout
-    let mut timeout = calc_timeout(roundtrip);
+    let mut timeout = compute_timeout(roundtrip);
     let mut roundtrip = roundtrip.unwrap_or_default();
 
     // For each outgoing message part
@@ -468,10 +468,10 @@ fn update_roundtrip(roundtrip: &mut u64, time: &Instant) -> u64 {
     } else {
         *roundtrip + (time.elapsed().as_millis() as u64) / 2
     };
-    calc_timeout(Some(*roundtrip))
+    compute_timeout(Some(*roundtrip))
 }
 
-fn calc_timeout(roundtrip: Option<u64>) -> u64 {
+fn compute_timeout(roundtrip: Option<u64>) -> u64 {
     std::cmp::max(roundtrip.unwrap_or(MAX_TIMEOUT), MIN_TIMEOUT)
 }
 

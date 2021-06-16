@@ -8,6 +8,7 @@ use ton_api::{BoxedSerialize, Deserializer, IntoBoxed, Serializer};
 pub use self::address_list::*;
 pub use self::handshake::*;
 pub use self::node_id::*;
+pub use self::overlay::*;
 pub use self::packet_view::*;
 pub use self::queries_cache::*;
 pub use self::query::*;
@@ -15,13 +16,10 @@ pub use self::query::*;
 mod address_list;
 mod handshake;
 mod node_id;
+mod overlay;
 mod packet_view;
 mod queries_cache;
 mod query;
-
-pub fn hash<T: IntoBoxed>(object: T) -> Result<[u8; 32]> {
-    hash_boxed(&object.into_boxed())
-}
 
 pub fn gen_packet_offset() -> Vec<u8> {
     use rand::Rng;
@@ -62,6 +60,10 @@ pub fn compute_shared_secret(
 #[derive(thiserror::Error, Debug)]
 #[error("Bad public key data")]
 struct BadPublicKeyData;
+
+pub fn hash<T: IntoBoxed>(object: T) -> Result<[u8; 32]> {
+    hash_boxed(&object.into_boxed())
+}
 
 /// Calculates hash of TL object
 pub fn hash_boxed<T: BoxedSerialize>(object: &T) -> Result<[u8; 32]> {

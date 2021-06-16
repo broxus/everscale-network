@@ -44,6 +44,16 @@ pub trait Subscriber: Send + Sync {
     }
 }
 
+#[async_trait::async_trait]
+pub trait OverlaySubscriber: Send + Sync {
+    async fn try_consume_query(
+        &self,
+        local_id: &AdnlNodeIdShort,
+        peer_id: &AdnlNodeIdShort,
+        query: TLObject,
+    ) -> Result<QueryConsumingResult>;
+}
+
 pub enum QueryConsumingResult {
     Consumed(Option<QueryAnswer>),
     Rejected(TLObject),
