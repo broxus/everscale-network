@@ -1,11 +1,11 @@
 use parking_lot::RwLock;
 
 #[derive(Debug, Default)]
-pub struct AdnlReceivedMask {
-    state: RwLock<AdnlReceivedMaskState>,
+pub struct ReceivedMask {
+    state: RwLock<ReceivedMaskState>,
 }
 
-impl AdnlReceivedMask {
+impl ReceivedMask {
     pub fn reset(&self) {
         let mut state = self.state.write();
         *state = Default::default();
@@ -35,20 +35,18 @@ impl AdnlReceivedMask {
         }
     }
 
-    pub fn deliver_packet(&self, seqno: i64) -> Result<(), AdnlReceivedMaskError> {
+    pub fn deliver_packet(&self, seqno: i64) -> Result<(), ReceivedMaskError> {
         if seqno <= 0 {
-            return Err(AdnlReceivedMaskError::InvalidSeqno);
+            return Err(ReceivedMaskError::InvalidSeqno);
         }
 
         let mut state = self.state.write();
 
         match seqno {
-            seqno if seqno + 64 <= state.seqno => {
-                return Err(AdnlReceivedMaskError::AlreadyDelivered)
-            }
+            seqno if seqno + 64 <= state.seqno => return Err(ReceivedMaskError::AlreadyDelivered),
             seqno if seqno <= state.seqno => {
                 if (state.mask & (1u64 << (state.seqno - seqno))) > 0 {
-                    return Err(AdnlReceivedMaskError::AlreadyDelivered);
+                    return Err(ReceivedMaskError::AlreadyDelivered);
                 }
             }
             _ => {}
@@ -72,13 +70,13 @@ impl AdnlReceivedMask {
 }
 
 #[derive(Debug, Default)]
-struct AdnlReceivedMaskState {
+struct ReceivedMaskState {
     seqno: i64,
     mask: u64,
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum AdnlReceivedMaskError {
+pub enum ReceivedMaskError {
     #[error("Packet already delivered")]
     AlreadyDelivered,
     #[error("Invalid packet seqno")]

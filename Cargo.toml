@@ -9,6 +9,7 @@ aes = { version = "0.7", features = ["ctr"] }
 async-trait = "0.1"
 anyhow = "1.0"
 curve25519-dalek = "3.1"
+crossbeam-queue = "0.3"
 dashmap = "4.0"
 ed25519-dalek = "1.0"
 generic-array = "0.14"

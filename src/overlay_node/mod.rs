@@ -2,12 +2,14 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use dashmap::DashMap;
-use ton_api::ton;
+use ton_api::ton::{self, TLObject};
 
 use crate::adnl_node::*;
 use crate::subscriber::*;
 use crate::utils::*;
-use ton_api::ton::TLObject;
+
+mod broadcast_receiver;
+mod overlay_shard;
 
 pub struct OverlayNode {
     adnl: Arc<AdnlNode>,
@@ -100,7 +102,7 @@ impl OverlayNode {
         let mut result = Vec::new();
 
         for node in nodes.nodes.0 {
-            let suitable_key = matches!(&node.id, ton::PublicKey::Pub_Ed25519(id) if &id.key.0 != self.node_key.id().public_key());
+            let suitable_key = matches!(&node.id, ton::PublicKey::Pub_Ed25519(id) if &id.key.0 != self.node_key.id().public_key().as_bytes());
             if !suitable_key {
                 continue;
             }

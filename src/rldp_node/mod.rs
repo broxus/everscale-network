@@ -4,6 +4,8 @@ use anyhow::Result;
 use dashmap::DashMap;
 use ton_api::ton;
 
+pub use self::decoder::RaptorQDecoder;
+pub use self::encoder::RaptorQEncoder;
 use self::peer::*;
 use self::transfers_cache::*;
 use crate::adnl_node::AdnlNode;

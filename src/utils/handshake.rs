@@ -37,7 +37,8 @@ pub fn build_handshake_packet(
         .try_into()
         .unwrap();
 
-    let shared_secret = compute_shared_secret(&temp_private_key_part, peer_id_full.public_key())?;
+    let shared_secret =
+        compute_shared_secret(&temp_private_key_part, peer_id_full.public_key().as_bytes())?;
     build_packet_cipher(&shared_secret, checksum).apply_keystream(&mut buffer[96..]);
 
     // Done

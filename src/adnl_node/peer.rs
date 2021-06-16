@@ -2,7 +2,6 @@ use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 
 use dashmap::DashMap;
 
-use super::received_mask::*;
 use crate::utils::*;
 
 pub type AdnlPeers = DashMap<AdnlNodeIdShort, AdnlPeer>;
@@ -57,7 +56,7 @@ impl AdnlPeer {
 }
 
 pub struct AdnlPeerState {
-    mask: AdnlReceivedMask,
+    mask: ReceivedMask,
     reinit_date: AtomicI32,
 }
 
@@ -76,7 +75,7 @@ impl AdnlPeerState {
         }
     }
 
-    pub fn mask(&self) -> &AdnlReceivedMask {
+    pub fn mask(&self) -> &ReceivedMask {
         &self.mask
     }
 

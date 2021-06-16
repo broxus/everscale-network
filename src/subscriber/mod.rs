@@ -1,5 +1,3 @@
-mod ping_subscriber;
-
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -9,6 +7,8 @@ use ton_api::{BoxedSerialize, IntoBoxed};
 
 pub use self::ping_subscriber::AdnlPingSubscriber;
 use crate::utils::*;
+
+mod ping_subscriber;
 
 #[async_trait::async_trait]
 pub trait Subscriber: Send + Sync {

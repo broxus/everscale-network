@@ -20,7 +20,7 @@ pub struct Transfer {
     /// Total data length
     total_len: usize,
     /// Transfer timings used to check its validity
-    timings: TransferTimings,
+    timings: UpdatedAt,
 }
 
 impl Transfer {
@@ -33,7 +33,7 @@ impl Transfer {
         }
     }
 
-    pub fn timings(&self) -> &TransferTimings {
+    pub fn timings(&self) -> &UpdatedAt {
         &self.timings
     }
 
@@ -118,35 +118,6 @@ impl<'a> Deref for TransferPartRef<'a> {
 
     fn deref(&self) -> &Self::Target {
         self.0.value().as_slice()
-    }
-}
-
-pub struct TransferTimings {
-    started_at: Instant,
-    updated_at: AtomicU64,
-}
-
-impl TransferTimings {
-    fn new() -> Self {
-        Self {
-            started_at: Instant::now(),
-            updated_at: Default::default(),
-        }
-    }
-
-    pub fn refresh(&self) {
-        self.updated_at
-            .store(self.started_at.elapsed().as_secs(), Ordering::Release)
-    }
-
-    pub fn is_expired(&self, timeout: u64) -> bool {
-        self.started_at.elapsed().as_secs() - self.updated_at.load(Ordering::Acquire) >= timeout
-    }
-}
-
-impl Default for TransferTimings {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

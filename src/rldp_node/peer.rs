@@ -1,14 +1,14 @@
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
+use crossbeam_queue::SegQueue;
 use parking_lot::Mutex;
 use tokio::sync::Barrier;
 
 #[derive(Default)]
 pub struct RldpPeer {
     queries: AtomicU32,
-    queue: Mutex<VecDeque<Arc<Barrier>>>,
+    queue: SegQueue<Arc<Barrier>>,
 }
 
 impl RldpPeer {
@@ -18,7 +18,7 @@ impl RldpPeer {
         }
 
         let barrier = Arc::new(Barrier::new(2));
-        self.queue.lock().push_back(barrier.clone());
+        self.queue.push(barrier.clone());
         barrier.wait().await;
     }
 
@@ -28,7 +28,7 @@ impl RldpPeer {
         }
 
         loop {
-            if let Some(barrier) = self.queue.lock().pop_front() {
+            if let Some(barrier) = self.queue.pop() {
                 barrier.wait().await;
                 return;
             }

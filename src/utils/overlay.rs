@@ -1,30 +1,32 @@
+use std::convert::TryFrom;
+
 use anyhow::Result;
 use ed25519_dalek::ed25519::signature::Signature;
 use ed25519_dalek::Verifier;
 use ton_api::ton;
 
 use super::{hash, serialize, serialize_boxed};
+use crate::utils::AdnlNodeIdFull;
 
 pub fn verify_node(overlay_id: &OverlayIdShort, node: &ton::overlay::node::Node) -> Result<()> {
     if node.overlay.0 != overlay_id.0 {
         return Err(OverlayError::OverlayIdMismatch.into());
     }
 
-    let key = match &node.id {
-        ton::PublicKey::Pub_Ed25519(id) => ed25519_dalek::PublicKey::from_bytes(&id.key.0).unwrap(),
-        _ => return Err(OverlayError::UnsupportedNodeKey.into()),
-    };
+    let node_id = AdnlNodeIdFull::try_from(&node.id)?;
 
     let node_to_sign = serialize_boxed(ton::overlay::node::tosign::ToSign {
         id: ton::adnl::id::short::Short {
-            id: ton::int256(key.to_bytes()),
+            id: ton::int256(node_id.compute_short_id()?.into()),
         },
         overlay: node.overlay,
         version: node.version,
     })?;
 
     let other_signature = ed25519_dalek::Signature::from_bytes(&node.signature)?;
-    key.verify(&node_to_sign, &other_signature)?;
+    node_id
+        .public_key()
+        .verify(&node_to_sign, &other_signature)?;
 
     Ok(())
 }

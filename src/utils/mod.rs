@@ -12,14 +12,19 @@ pub use self::overlay::*;
 pub use self::packet_view::*;
 pub use self::queries_cache::*;
 pub use self::query::*;
+pub use self::received_mask::*;
+pub use self::updated_at::*;
 
 mod address_list;
 mod handshake;
 mod node_id;
 mod overlay;
 mod packet_view;
+mod peer_cache;
 mod queries_cache;
 mod query;
+mod received_mask;
+mod updated_at;
 
 pub fn gen_packet_offset() -> Vec<u8> {
     use rand::Rng;

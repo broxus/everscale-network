@@ -21,7 +21,6 @@ use crate::utils::*;
 mod channel;
 mod config;
 mod peer;
-mod received_mask;
 mod transfer;
 
 pub struct AdnlNode {
@@ -565,7 +564,7 @@ impl AdnlNode {
                 log::debug!("Create channel {} -> {}", local_id, peer_id);
                 Some(
                     ton::adnl::message::message::CreateChannel {
-                        key: ton::int256(*peer.id().public_key()),
+                        key: ton::int256(peer.id().public_key().to_bytes()),
                         date: now(),
                     }
                     .into_boxed(),
@@ -907,7 +906,7 @@ impl AdnlNode {
         };
         let peer = peer.value();
 
-        let channel_public_key = peer.id().public_key();
+        let channel_public_key = peer.id().public_key().as_bytes();
 
         if let Some(public_key) = local_public_key {
             if channel_public_key != public_key {
