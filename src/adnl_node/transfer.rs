@@ -1,6 +1,5 @@
 use std::ops::Deref;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::time::Instant;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::Result;
 use dashmap::mapref::one::Ref;

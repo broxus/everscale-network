@@ -1,19 +1,24 @@
+use std::convert::TryFrom;
 use std::sync::Arc;
 
 use anyhow::Result;
 use dashmap::DashMap;
 use ton_api::ton::{self, TLObject};
 
+use self::overlay_shard::*;
 use crate::adnl_node::*;
 use crate::subscriber::*;
 use crate::utils::*;
+use std::convert::TryInto;
 
 mod broadcast_receiver;
 mod overlay_shard;
 
 pub struct OverlayNode {
     adnl: Arc<AdnlNode>,
+    local_id: AdnlNodeIdShort,
     node_key: Arc<StoredAdnlNodeKey>,
+    overlays: DashMap<OverlayIdShort, Arc<OverlayShard>>,
     subscribers: DashMap<OverlayIdShort, Arc<dyn OverlaySubscriber>>,
     zero_state_file_hash: [u8; 32],
 }
@@ -27,7 +32,9 @@ impl OverlayNode {
         let node_key = adnl.key_by_tag(key_tag)?;
         Ok(Arc::new(Self {
             adnl,
+            local_id: node_key.id().compute_short_id()?,
             node_key,
+            overlays: Default::default(),
             subscribers: Default::default(),
             zero_state_file_hash,
         }))
@@ -83,6 +90,103 @@ impl OverlayNode {
         Ok(changed)
     }
 
+    pub fn add_public_peer(
+        &self,
+        overlay_id: &OverlayIdShort,
+        ip_address: AdnlAddressUdp,
+        node: &ton::overlay::node::Node,
+    ) -> Result<Option<AdnlNodeIdShort>> {
+        let overlay = self.get_overlay(overlay_id)?;
+        if overlay.is_private() {
+            return Err(OverlayNodeError::PublicPeerToPrivateOverlay.into());
+        }
+
+        if let Err(e) = verify_node(overlay_id, node) {
+            log::warn!("Error during overlay peer verification: {:?}", e);
+            return Ok(None);
+        }
+
+        let peer_id_full = AdnlNodeIdFull::try_from(&node.id)?;
+        let peer_id = peer_id_full.compute_short_id()?;
+
+        let is_new_peer = self
+            .adnl
+            .add_peer(&self.local_id, &peer_id, ip_address, peer_id_full)?;
+        if is_new_peer {
+            overlay.add_public_peer(&peer_id, node);
+            Ok(Some(peer_id))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn delete_public_peer(
+        &self,
+        overlay_id: &OverlayIdShort,
+        peer_id: &AdnlNodeIdShort,
+    ) -> Result<bool> {
+        let overlay = self.get_overlay(overlay_id)?;
+        if overlay.is_private() {
+            return Err(OverlayNodeError::PublicPeerToPrivateOverlay.into());
+        }
+        Ok(overlay.delete_public_peer(peer_id))
+    }
+
+    pub fn write_cached_peers(
+        &self,
+        overlay_id: &OverlayIdShort,
+        amount: usize,
+        dst: &PeersCache,
+    ) -> Result<()> {
+        self.get_overlay(overlay_id)?
+            .write_cached_peers(amount, dst);
+        Ok(())
+    }
+
+    pub fn get_query_prefix(&self, overlay_id: &OverlayIdShort) -> Result<Vec<u8>> {
+        Ok(self.get_overlay(overlay_id)?.query_prefix().clone())
+    }
+
+    pub fn add_private_overlay(
+        &self,
+        overlay_id: &OverlayIdShort,
+        overlay_key: &Arc<StoredAdnlNodeKey>,
+        peers: &[AdnlNodeIdShort],
+    ) -> Result<bool> {
+        todo!()
+    }
+
+    pub fn delete_private_overlay(&self, overlay_id: &OverlayIdShort) -> Result<bool> {
+        use dashmap::mapref::entry::Entry;
+
+        match self.overlays.entry(*overlay_id) {
+            Entry::Occupied(entry) => {
+                if !entry.get().is_private() {
+                    return Err(OverlayNodeError::DeletingPublicOverlay.into());
+                }
+                entry.remove();
+                Ok(true)
+            }
+            Entry::Vacant(_) => Ok(false),
+        }
+    }
+
+    pub async fn wait_for_broadcast(
+        &self,
+        overlay_id: &OverlayIdShort,
+    ) -> Result<IncomingBroadcastInfo> {
+        let overlay = self.get_overlay(overlay_id)?.clone();
+        Ok(overlay.wait_for_broadcast().await)
+    }
+
+    pub async fn wait_for_peers(
+        &self,
+        overlay_id: &OverlayIdShort,
+    ) -> Result<Vec<ton::overlay::node::Node>> {
+        let overlay = self.get_overlay(overlay_id)?.clone();
+        Ok(overlay.wait_for_peers().await)
+    }
+
     pub fn compute_overlay_id(&self, workchain: i32, shard: i64) -> Result<OverlayIdFull> {
         compute_overlay_id(workchain, shard, self.zero_state_file_hash)
     }
@@ -90,6 +194,16 @@ impl OverlayNode {
     pub fn compute_overlay_short_id(&self, workchain: i32, shard: i64) -> Result<OverlayIdShort> {
         self.compute_overlay_id(workchain, shard)
             .and_then(|id| id.compute_short_id())
+    }
+
+    fn get_overlay(
+        &self,
+        overlay_id: &OverlayIdShort,
+    ) -> Result<dashmap::mapref::one::Ref<OverlayIdShort, Arc<OverlayShard>>> {
+        match self.overlays.get(overlay_id) {
+            Some(overlay) => Ok(overlay),
+            None => return Err(OverlayNodeError::UnknownOverlay.into()),
+        }
     }
 
     fn process_nodes(
@@ -210,4 +324,10 @@ pub enum OverlayNodeError {
     UnsupportedOverlayMessage,
     #[error("Unsupported overlay broadcast message")]
     UnsupportedOverlayBroadcastMessage,
+    #[error("Unknown overlay")]
+    UnknownOverlay,
+    #[error("Cannot add public peer to private overlay")]
+    PublicPeerToPrivateOverlay,
+    #[error("Cannot delete public overlay")]
+    DeletingPublicOverlay,
 }

@@ -1,18 +1,19 @@
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::convert::TryInto;
 
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use parking_lot::RwLock;
+use rand::seq::SliceRandom;
 
 use super::node_id::*;
 
 pub struct PeersCache {
-    state: RwLock<PeerCacheState>,
+    state: RwLock<PeersCacheState>,
 }
 
 impl PeersCache {
     pub fn with_capacity(capacity: u32) -> Self {
         Self {
-            state: RwLock::new(PeerCacheState {
+            state: RwLock::new(PeersCacheState {
                 cache: Default::default(),
                 index: Default::default(),
                 capacity,
@@ -42,48 +43,88 @@ impl PeersCache {
 
     pub fn get_random_peers(
         &self,
-        count: u32,
+        amount: usize,
         except: Option<&AdnlNodeIdShort>,
     ) -> Vec<AdnlNodeIdShort> {
-        use rand::seq::SliceRandom;
-
         let state = self.state.read();
 
         let items = state
             .index
             .choose_multiple(
                 &mut rand::thread_rng(),
-                if except.is_some() { count + 1 } else { count } as usize,
+                if except.is_some() { amount + 1 } else { amount },
             )
             .cloned();
 
         match except {
-            Some(except) => items
-                .filter(|item| item != except)
-                .take(count as usize)
-                .collect(),
+            Some(except) => items.filter(|item| item != except).take(amount).collect(),
             None => items.collect(),
         }
     }
 
-    pub fn put(&self, peer_id: AdnlNodeIdShort) -> bool {
-        use dashmap::mapref::entry::Entry;
+    /// NOTE: will deadlock if `other` is the same as self
+    pub fn randomly_fill_from(
+        &self,
+        other: &PeersCache,
+        amount: usize,
+        except: Option<&DashSet<AdnlNodeIdShort>>,
+    ) {
+        let selected_amount = match except {
+            Some(peers) => amount + peers.len(),
+            None => amount,
+        };
+
+        let other_state = other.state.read();
+        let new_peers = other_state
+            .index
+            .choose_multiple(&mut rand::thread_rng(), selected_amount)
+            .cloned();
 
         let mut state = self.state.write();
+        match except {
+            Some(except) => {
+                new_peers
+                    .filter(|peer_id| !except.contains(peer_id))
+                    .take(amount)
+                    .for_each(|peer_id| {
+                        state.put(peer_id);
+                    });
+            }
+            None => new_peers.for_each(|peer_id| {
+                state.put(peer_id);
+            }),
+        }
+    }
+
+    pub fn put(&self, peer_id: AdnlNodeIdShort) -> bool {
+        self.state.write().put(peer_id)
+    }
+}
+
+struct PeersCacheState {
+    cache: DashMap<AdnlNodeIdShort, u32>,
+    index: Vec<AdnlNodeIdShort>,
+    capacity: u32,
+    upper: u32,
+}
+
+impl PeersCacheState {
+    fn put(&mut self, peer_id: AdnlNodeIdShort) -> bool {
+        use dashmap::mapref::entry::Entry;
 
         // Insert new peer into cache
-        let (index, upper) = match state.cache.entry(peer_id) {
+        let (index, upper) = match self.cache.entry(peer_id) {
             Entry::Vacant(entry) => {
                 // Calculate index in range [0..limit)
 
-                let mut index = state.upper;
-                let mut upper = state.upper + 1;
+                let mut index = self.upper;
+                let mut upper = self.upper + 1;
 
-                if index >= state.capacity {
-                    if index >= state.capacity * 2 {
-                        upper -= state.capacity;
+                if index >= self.capacity {
+                    if index >= self.capacity * 2 {
+                        upper -= self.capacity;
                     }
-                    index %= state.capacity;
+                    index %= self.capacity;
                 }
 
                 entry.insert(index);
@@ -93,31 +134,24 @@ impl PeersCache {
             Entry::Occupied(_) => return false,
         };
 
-        state.upper = upper;
+        self.upper = upper;
 
         // Update index
-        if index < state.index.len() {
-            let old_peer = std::mem::replace(&mut state.index[index], peer_id);
+        if index < self.index.len() {
+            let old_peer = std::mem::replace(&mut self.index[index], peer_id);
 
             // Remove old peer
-            if let Entry::Occupied(entry) = state.cache.entry(old_peer) {
+            if let Entry::Occupied(entry) = self.cache.entry(old_peer) {
                 if entry.get() == &(index as u32) {
                     entry.remove();
                 }
             }
         } else {
-            state.index.push(peer_id);
+            self.index.push(peer_id);
         }
 
         true
     }
-}
-
-struct PeerCacheState {
-    cache: DashMap<AdnlNodeIdShort, u32>,
-    index: Vec<AdnlNodeIdShort>,
-    capacity: u32,
-    upper: u32,
 }
 
 #[cfg(test)]

@@ -2,7 +2,6 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use crossbeam_queue::SegQueue;
-use parking_lot::Mutex;
 use tokio::sync::Barrier;
 
 #[derive(Default)]

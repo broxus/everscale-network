@@ -7,7 +7,7 @@ pub struct UpdatedAt {
 }
 
 impl UpdatedAt {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             started_at: Instant::now(),
             updated_at: Default::default(),

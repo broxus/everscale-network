@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use crossbeam_queue::SegQueue;
-use parking_lot::Mutex;
 use tokio::sync::Barrier;
 
 pub struct BroadcastReceiver<T> {
@@ -28,13 +27,13 @@ impl<T: Send + 'static> BroadcastReceiver<T> {
         });
     }
 
-    pub async fn pop(&self) -> Result<T> {
+    pub async fn pop(&self) -> T {
         self.sync_lock.fetch_add(1, Ordering::Release);
         loop {
             match self.data.pop() {
                 Some(data) => {
                     self.sync_lock.fetch_sub(1, Ordering::Release);
-                    return Ok(data);
+                    return data;
                 }
                 None => {
                     let barrier = Arc::new(Barrier::new(2));

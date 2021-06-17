@@ -10,6 +10,7 @@ pub use self::handshake::*;
 pub use self::node_id::*;
 pub use self::overlay::*;
 pub use self::packet_view::*;
+pub use self::peers_cache::*;
 pub use self::queries_cache::*;
 pub use self::query::*;
 pub use self::received_mask::*;
