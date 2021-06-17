@@ -147,13 +147,22 @@ impl OverlayNode {
         Ok(self.get_overlay(overlay_id)?.query_prefix().clone())
     }
 
+    pub fn add_public_overlay(&self, overlay_id: &OverlayIdShort) -> Result<bool> {
+        self.add_overlay(overlay_id, None)
+    }
+
     pub fn add_private_overlay(
         &self,
         overlay_id: &OverlayIdShort,
         overlay_key: &Arc<StoredAdnlNodeKey>,
         peers: &[AdnlNodeIdShort],
     ) -> Result<bool> {
-        todo!()
+        if !self.add_overlay(overlay_id, Some(overlay_key.clone()))? {
+            return Ok(false);
+        }
+
+        self.get_overlay(overlay_id)?.add_known_peers(peers);
+        Ok(true)
     }
 
     pub fn delete_private_overlay(&self, overlay_id: &OverlayIdShort) -> Result<bool> {
@@ -196,13 +205,33 @@ impl OverlayNode {
             .and_then(|id| id.compute_short_id())
     }
 
+    fn add_overlay(
+        &self,
+        overlay_id: &OverlayIdShort,
+        overlay_key: Option<Arc<StoredAdnlNodeKey>>,
+    ) -> Result<bool> {
+        use dashmap::mapref::entry::Entry;
+
+        Ok(match self.overlays.entry(*overlay_id) {
+            Entry::Vacant(entry) => {
+                entry.insert(OverlayShard::new(
+                    self.adnl.clone(),
+                    *overlay_id,
+                    overlay_key,
+                )?);
+                true
+            }
+            Entry::Occupied(_) => false,
+        })
+    }
+
     fn get_overlay(
         &self,
         overlay_id: &OverlayIdShort,
     ) -> Result<dashmap::mapref::one::Ref<OverlayIdShort, Arc<OverlayShard>>> {
         match self.overlays.get(overlay_id) {
             Some(overlay) => Ok(overlay),
-            None => return Err(OverlayNodeError::UnknownOverlay.into()),
+            None => Err(OverlayNodeError::UnknownOverlay.into()),
         }
     }
 

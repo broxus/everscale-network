@@ -11,12 +11,12 @@ pub struct PeersCache {
 }
 
 impl PeersCache {
-    pub fn with_capacity(capacity: u32) -> Self {
+    pub fn with_capacity(capacity: usize) -> Self {
         Self {
             state: RwLock::new(PeersCacheState {
                 cache: Default::default(),
                 index: Default::default(),
-                capacity,
+                capacity: capacity as u32,
                 upper: 0,
             }),
         }
@@ -98,6 +98,16 @@ impl PeersCache {
 
     pub fn put(&self, peer_id: AdnlNodeIdShort) -> bool {
         self.state.write().put(peer_id)
+    }
+
+    pub fn extend<I>(&self, peers: I)
+    where
+        I: IntoIterator<Item = AdnlNodeIdShort>,
+    {
+        let mut state = self.state.write();
+        for peer_id in peers.into_iter() {
+            state.put(peer_id);
+        }
     }
 }
 

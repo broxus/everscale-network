@@ -20,7 +20,7 @@ use crate::utils::*;
 pub struct OverlayShard {
     adnl: Arc<AdnlNode>,
     overlay_id: OverlayIdShort,
-    overlay_key: Option<Arc<StoredAdnlNodeKey>>,
+    overlay_key: Option<(AdnlNodeIdShort, Arc<StoredAdnlNodeKey>)>,
 
     owned_broadcasts: DashMap<BroadcastId, OwnedBroadcast>,
     finished_broadcasts: SegQueue<BroadcastId>,
@@ -40,8 +40,102 @@ pub struct OverlayShard {
 }
 
 impl OverlayShard {
+    pub fn new(
+        adnl: Arc<AdnlNode>,
+        overlay_id: OverlayIdShort,
+        overlay_key: Option<Arc<StoredAdnlNodeKey>>,
+    ) -> Result<Arc<Self>> {
+        let overlay_key = overlay_key
+            .map(|key| -> Result<(_, _)> {
+                let peer_id = key.id().compute_short_id()?;
+                Ok((peer_id, key))
+            })
+            .transpose()?;
+
+        let query_prefix = serialize(&ton::rpc::overlay::Query {
+            overlay: ton::int256(overlay_id.into()),
+        })?;
+
+        let message_prefix = serialize_boxed(ton::overlay::message::Message {
+            overlay: ton::int256(overlay_id.into()),
+        })?;
+
+        let overlay = Arc::new(Self {
+            adnl,
+            overlay_id,
+            overlay_key,
+            owned_broadcasts: DashMap::new(),
+            finished_broadcasts: SegQueue::new(),
+            finished_broadcast_count: AtomicU32::new(0),
+            received_peers: Arc::new(BroadcastReceiver::default()),
+            received_broadcasts: Arc::new(BroadcastReceiver::default()),
+            nodes: DashMap::new(),
+            ignored_peers: DashSet::new(),
+            known_peers: PeersCache::with_capacity(MAX_PEERS),
+            random_peers: PeersCache::with_capacity(MAX_SHARD_PEERS),
+            neighbours: PeersCache::with_capacity(MAX_SHARD_NEIGHBOURS),
+            query_prefix,
+            message_prefix,
+        });
+
+        overlay.update_neighbours(MAX_SHARD_NEIGHBOURS);
+
+        tokio::spawn({
+            const MAX_BROADCAST_LOG: u32 = 1000;
+
+            const GC_TIMEOUT: u64 = 1000; // Milliseconds
+            const PEERS_TIMEOUT: u64 = 60000; // Milliseconds
+
+            let overlay = Arc::downgrade(&overlay);
+
+            async move {
+                let mut peers_timeout = 0;
+                while let Some(overlay) = overlay.upgrade() {
+                    while overlay.finished_broadcast_count.load(Ordering::Acquire)
+                        > MAX_BROADCAST_LOG
+                    {
+                        if let Some(broadcast_id) = overlay.finished_broadcasts.pop() {
+                            overlay.owned_broadcasts.remove(&broadcast_id);
+                        }
+                        overlay
+                            .finished_broadcast_count
+                            .fetch_sub(1, Ordering::Release);
+                    }
+
+                    peers_timeout += GC_TIMEOUT;
+                    if peers_timeout > PEERS_TIMEOUT {
+                        if overlay.is_private() {
+                            overlay.update_neighbours(1);
+                        } else {
+                            overlay.update_random_peers(1);
+                        }
+                        peers_timeout = 0;
+                    }
+
+                    tokio::time::sleep(Duration::from_millis(GC_TIMEOUT)).await;
+                }
+            }
+        });
+
+        Ok(overlay)
+    }
+
     pub fn is_private(&self) -> bool {
         self.overlay_key.is_some()
+    }
+
+    pub fn add_known_peers(&self, peers: &[AdnlNodeIdShort]) {
+        match &self.overlay_key {
+            Some((overlay_peer_id, _)) => self.known_peers.extend(
+                peers
+                    .iter()
+                    .cloned()
+                    .filter(|peer_id| peer_id != overlay_peer_id),
+            ),
+            None => self.known_peers.extend(peers.iter().cloned()),
+        }
+
+        self.update_neighbours(MAX_SHARD_NEIGHBOURS);
     }
 
     pub fn add_public_peer(&self, peer_id: &AdnlNodeIdShort, node: &ton::overlay::node::Node) {
@@ -467,6 +561,7 @@ fn make_fec_part_to_sign(
 const MAX_BROADCAST_WAVE: u32 = 20;
 const MAX_SHARD_NEIGHBOURS: usize = 5;
 const MAX_SHARD_PEERS: usize = 20;
+const MAX_PEERS: usize = 65536;
 
 const BROADCAST_FLAG_ANY_SENDER: i32 = 1; // Any sender
 

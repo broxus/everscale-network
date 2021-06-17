@@ -44,3 +44,13 @@ impl<T: Send + 'static> BroadcastReceiver<T> {
         }
     }
 }
+
+impl<T> Default for BroadcastReceiver<T> {
+    fn default() -> Self {
+        Self {
+            data: Default::default(),
+            barriers: Default::default(),
+            sync_lock: Default::default(),
+        }
+    }
+}

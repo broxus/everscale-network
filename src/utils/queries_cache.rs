@@ -53,7 +53,7 @@ impl QueriesCache {
                 Ok(true)
             }
             Some(_) => Err(QueriesCacheError::UnexpectedState.into()),
-            None => return Ok(false),
+            None => Ok(false),
         }
     }
 }
