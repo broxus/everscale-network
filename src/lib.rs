@@ -1,4 +1,5 @@
 pub use adnl_node::{AdnlNode, AdnlNodeConfig};
+pub use overlay_node::OverlayNode;
 pub use rldp_node::RldpNode;
 pub use subscriber::{
     OverlaySubscriber, QueryBundleConsumingResult, QueryConsumingResult, Subscriber,

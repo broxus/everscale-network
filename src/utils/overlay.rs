@@ -134,8 +134,6 @@ pub type FileHash = [u8; 32];
 
 #[derive(thiserror::Error, Debug)]
 enum OverlayError {
-    #[error("Unsupported node key")]
-    UnsupportedNodeKey,
     #[error("Overlay id mismatch")]
     OverlayIdMismatch,
 }

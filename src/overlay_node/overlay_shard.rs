@@ -22,7 +22,7 @@ pub struct OverlayShard {
     overlay_id: OverlayIdShort,
     overlay_key: Option<(AdnlNodeIdShort, Arc<StoredAdnlNodeKey>)>,
 
-    owned_broadcasts: DashMap<BroadcastId, OwnedBroadcast>,
+    owned_broadcasts: DashMap<BroadcastId, Arc<OwnedBroadcast>>,
     finished_broadcasts: SegQueue<BroadcastId>,
     finished_broadcast_count: AtomicU32,
 
@@ -190,6 +190,95 @@ impl OverlayShard {
         self.received_peers.pop().await
     }
 
+    pub async fn receive_broadcast(
+        self: &Arc<Self>,
+        local_id: &AdnlNodeIdShort,
+        peer_id: &AdnlNodeIdShort,
+        broadcast: ton::overlay::broadcast::Broadcast,
+        raw_data: &[u8],
+    ) -> Result<()> {
+        if self.is_broadcast_outdated(broadcast.date) {
+            return Ok(());
+        }
+
+        let node_id = AdnlNodeIdFull::try_from(&broadcast.src)?;
+        let node_peer_id = node_id.compute_short_id()?;
+        let source = match broadcast.flags {
+            flags if flags & BROADCAST_FLAG_ANY_SENDER == 0 => Some(node_peer_id),
+            _ => None,
+        };
+
+        let signature = make_broadcast_to_sign(&broadcast.data, broadcast.date, source.as_ref())?;
+        let broadcast_id = match self.create_broadcast(&signature) {
+            Some(broadcast_id) => broadcast_id,
+            None => return Ok(()),
+        };
+
+        let other_signature = ed25519_dalek::Signature::from_bytes(&broadcast.signature)?;
+        node_id.public_key().verify(&signature, &other_signature)?;
+
+        self.received_broadcasts.push(IncomingBroadcastInfo {
+            packets: 1,
+            data: broadcast.data.0,
+            from: node_peer_id,
+        });
+
+        let neighbours = self.neighbours.get_random_peers(3, Some(peer_id));
+        self.distribute_broadcast(local_id, &neighbours, raw_data);
+        self.spawn_broadcast_gc_task(broadcast_id);
+
+        Ok(())
+    }
+
+    pub async fn receive_fec_broadcast(
+        self: &Arc<Self>,
+        local_id: &AdnlNodeIdShort,
+        peer_id: &AdnlNodeIdShort,
+        broadcast: ton::overlay::broadcast::BroadcastFec,
+        raw_data: &[u8],
+    ) -> Result<()> {
+        use dashmap::mapref::entry::Entry;
+
+        if self.is_broadcast_outdated(broadcast.date) {
+            return Ok(());
+        }
+
+        let broadcast_id = broadcast.data_hash.0;
+        let node_id = AdnlNodeIdFull::try_from(&broadcast.src)?;
+        let source = node_id.compute_short_id()?;
+
+        let transfer = match self.owned_broadcasts.entry(broadcast_id) {
+            Entry::Vacant(entry) => {
+                let incoming_transfer = self.create_incoming_fec_transfer(&broadcast)?;
+                entry
+                    .insert(Arc::new(OwnedBroadcast::Incoming(incoming_transfer)))
+                    .clone()
+            }
+            Entry::Occupied(entry) => entry.get().clone(),
+        };
+        let transfer = match transfer.as_ref() {
+            OwnedBroadcast::Incoming(transfer) => transfer,
+            OwnedBroadcast::Other => return Ok(()),
+        };
+
+        transfer.updated_at.refresh();
+        if transfer.source != source {
+            log::warn!("Same broadcast but parts from different sources");
+            return Ok(());
+        }
+
+        transfer.history.deliver_packet(broadcast.seqno as i64)?;
+
+        if !transfer.completed.load(Ordering::Acquire) {
+            transfer.broadcast_tx.send(broadcast);
+        }
+
+        let neighbours = self.neighbours.get_random_peers(5, Some(peer_id));
+        self.distribute_broadcast(local_id, &neighbours, raw_data);
+
+        Ok(())
+    }
+
     fn update_random_peers(&self, amount: usize) {
         self.random_peers
             .randomly_fill_from(&self.known_peers, amount, Some(&self.ignored_peers));
@@ -208,6 +297,10 @@ impl OverlayShard {
         }
     }
 
+    fn is_broadcast_outdated(&self, date: i32) -> bool {
+        date + (BROADCAST_TIMEOUT as i32) < now()
+    }
+
     fn create_broadcast(&self, data: &[u8]) -> Option<BroadcastId> {
         use dashmap::mapref::entry::Entry;
 
@@ -215,7 +308,7 @@ impl OverlayShard {
 
         match self.owned_broadcasts.entry(broadcast_id) {
             Entry::Vacant(entry) => {
-                entry.insert(OwnedBroadcast::Other);
+                entry.insert(Arc::new(OwnedBroadcast::Other));
                 Some(broadcast_id)
             }
             Entry::Occupied(_) => None,
@@ -264,7 +357,7 @@ impl OverlayShard {
                 }
 
                 if let Some(broadcast) = overlay_shard.owned_broadcasts.get(&broadcast_id) {
-                    match broadcast.value() {
+                    match broadcast.value().as_ref() {
                         OwnedBroadcast::Incoming(transfer) => {
                             transfer.completed.store(true, Ordering::Release);
                         }
@@ -287,7 +380,7 @@ impl OverlayShard {
                     tokio::time::sleep(Duration::from_millis(BROADCAST_TIMEOUT * 100)).await;
 
                     if let Some(broadcast) = overlay_shard.owned_broadcasts.get(&broadcast_id) {
-                        match broadcast.value() {
+                        match broadcast.value().as_ref() {
                             OwnedBroadcast::Incoming(transfer) => {
                                 if !transfer.updated_at.is_expired(BROADCAST_TIMEOUT) {
                                     continue;
@@ -597,7 +690,6 @@ struct OutgoingFecTransfer {
 enum OwnedBroadcast {
     Other,
     Incoming(IncomingFecTransfer),
-    WillBeIncoming,
 }
 
 type BroadcastFecTx = mpsc::UnboundedSender<ton::overlay::broadcast::BroadcastFec>;

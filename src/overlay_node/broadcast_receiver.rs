@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use anyhow::Result;
 use crossbeam_queue::SegQueue;
 use tokio::sync::Barrier;
 
