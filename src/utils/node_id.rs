@@ -1,6 +1,7 @@
 use std::convert::{TryFrom, TryInto};
 
 use anyhow::Result;
+use rand::Rng;
 use ton_api::ton;
 
 use super::hash;
@@ -63,6 +64,10 @@ impl AdnlNodeIdShort {
         Self(hash)
     }
 
+    pub fn random() -> Self {
+        Self(rand::thread_rng().gen())
+    }
+
     pub fn as_slice(&self) -> &[u8; 32] {
         &self.0
     }
@@ -122,7 +127,7 @@ impl ComputeNodeIds for ed25519_dalek::SecretKey {
 
 impl ComputeNodeIds for ed25519_dalek::PublicKey {
     fn compute_node_ids(&self) -> Result<(AdnlNodeIdFull, AdnlNodeIdShort)> {
-        let full_id = AdnlNodeIdFull::new(self.clone());
+        let full_id = AdnlNodeIdFull::new(*self);
         let short_id = full_id.compute_short_id()?;
         Ok((full_id, short_id))
     }

@@ -20,7 +20,7 @@ mod handshake;
 mod node_id;
 mod overlay;
 mod packet_view;
-mod peer_cache;
+mod peers_cache;
 mod queries_cache;
 mod query;
 mod received_mask;
