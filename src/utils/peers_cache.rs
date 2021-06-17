@@ -1,5 +1,7 @@
+use std::mem::MaybeUninit;
+
 use dashmap::{DashMap, DashSet};
-use parking_lot::RwLock;
+use parking_lot::{RwLock, RwLockReadGuard};
 use rand::seq::SliceRandom;
 
 use super::node_id::*;
@@ -37,6 +39,10 @@ impl PeersCache {
 
     pub fn is_empty(&self) -> bool {
         self.state.read().index.is_empty()
+    }
+
+    pub fn iter(&self) -> PeersCacheIter {
+        PeersCacheIter::new(self.state.read())
     }
 
     pub fn get_random_peers(
@@ -106,6 +112,51 @@ impl PeersCache {
         for peer_id in peers.into_iter() {
             state.put(peer_id);
         }
+    }
+}
+
+pub struct PeersCacheIter<'a> {
+    state: RwLockReadGuard<'a, PeersCacheState>,
+    iter: std::slice::Iter<'a, AdnlNodeIdShort>,
+}
+
+impl<'a> PeersCacheIter<'a> {
+    fn new(state: RwLockReadGuard<'a, PeersCacheState>) -> Self {
+        // SAFETY: index array lifetime is bounded to the lifetime of the `RwLockReadGuard`
+        let iter = unsafe {
+            std::slice::from_raw_parts::<'a>(state.index.as_ptr(), state.index.len()).iter()
+        };
+        Self { state, iter }
+    }
+}
+
+impl<'a> Iterator for PeersCacheIter<'a> {
+    type Item = &'a AdnlNodeIdShort;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
+    }
+}
+
+impl IntoIterator for PeersCache {
+    type Item = AdnlNodeIdShort;
+    type IntoIter = std::vec::IntoIter<AdnlNodeIdShort>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.state.into_inner().index.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a PeersCache {
+    type Item = &'a AdnlNodeIdShort;
+    type IntoIter = PeersCacheIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
     }
 }
 
@@ -221,6 +272,24 @@ mod tests {
 
         for peer_id in peers.iter() {
             assert!(!cache.contains(peer_id));
+        }
+    }
+
+    #[test]
+    fn test_iterator() {
+        let cache = PeersCache::with_capacity(10);
+
+        let peers = std::iter::repeat_with(AdnlNodeIdShort::random)
+            .take(3)
+            .collect::<Vec<_>>();
+
+        for peer_id in peers.iter() {
+            assert!(cache.put(*peer_id));
+        }
+
+        assert_eq!(peers.len(), cache.iter().count());
+        for (cache_peer_id, peer_id) in cache.iter().zip(peers.iter()) {
+            assert_eq!(cache_peer_id, peer_id);
         }
     }
 

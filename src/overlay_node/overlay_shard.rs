@@ -120,8 +120,16 @@ impl OverlayShard {
         Ok(overlay)
     }
 
+    pub fn id(&self) -> &OverlayIdShort {
+        &self.overlay_id
+    }
+
     pub fn is_private(&self) -> bool {
         self.overlay_key.is_some()
+    }
+
+    pub fn overlay_key(&self) -> &Option<(AdnlNodeIdShort, Arc<StoredAdnlNodeKey>)> {
+        &self.overlay_key
     }
 
     pub fn add_known_peers(&self, peers: &[AdnlNodeIdShort]) {
@@ -178,6 +186,16 @@ impl OverlayShard {
         dst.randomly_fill_from(&self.known_peers, amount, Some(&self.ignored_peers));
     }
 
+    pub fn write_random_peers(&self, amount: usize, nodes: &mut Vec<ton::overlay::node::Node>) {
+        let peers = PeersCache::with_capacity(amount);
+        peers.randomly_fill_from(&self.random_peers, amount, None);
+        for peer_id in &peers {
+            if let Some(node) = self.nodes.get(peer_id) {
+                nodes.push(node.clone());
+            }
+        }
+    }
+
     pub fn query_prefix(&self) -> &Vec<u8> {
         &self.query_prefix
     }
@@ -188,6 +206,10 @@ impl OverlayShard {
 
     pub async fn wait_for_peers(&self) -> Vec<ton::overlay::node::Node> {
         self.received_peers.pop().await
+    }
+
+    pub fn push_peers(&self, peers: Vec<ton::overlay::node::Node>) {
+        self.received_peers.push(peers);
     }
 
     pub async fn receive_broadcast(
@@ -270,7 +292,7 @@ impl OverlayShard {
         transfer.history.deliver_packet(broadcast.seqno as i64)?;
 
         if !transfer.completed.load(Ordering::Acquire) {
-            transfer.broadcast_tx.send(broadcast);
+            transfer.broadcast_tx.send(broadcast)?;
         }
 
         let neighbours = self.neighbours.get_random_peers(5, Some(peer_id));

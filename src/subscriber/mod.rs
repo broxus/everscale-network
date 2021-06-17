@@ -64,25 +64,32 @@ pub enum QueryBundleConsumingResult {
     Rejected(Vec<TLObject>),
 }
 
-impl QueryConsumingResult {
-    pub fn consume<A: IntoBoxed>(answer: A) -> Result<Self>
-    where
-        <A as IntoBoxed>::Boxed: serde::Serialize + Send + Sync + 'static,
-    {
-        Ok(Self::Consumed(Some(QueryAnswer::Object(TLObject::new(
-            answer.into_boxed(),
-        )))))
-    }
+macro_rules! impl_consume {
+    ($consuming_result:ident) => {
+        impl $consuming_result {
+            pub fn consume<A: IntoBoxed>(answer: A) -> Result<Self>
+            where
+                <A as IntoBoxed>::Boxed: serde::Serialize + Send + Sync + 'static,
+            {
+                Ok(Self::Consumed(Some(QueryAnswer::Object(TLObject::new(
+                    answer.into_boxed(),
+                )))))
+            }
 
-    pub fn consume_boxed<A>(answer: A) -> Result<Self>
-    where
-        A: BoxedSerialize + serde::Serialize + Send + Sync + 'static,
-    {
-        Ok(Self::Consumed(Some(QueryAnswer::Object(TLObject::new(
-            answer,
-        )))))
-    }
+            pub fn consume_boxed<A>(answer: A) -> Result<Self>
+            where
+                A: BoxedSerialize + serde::Serialize + Send + Sync + 'static,
+            {
+                Ok(Self::Consumed(Some(QueryAnswer::Object(TLObject::new(
+                    answer,
+                )))))
+            }
+        }
+    };
 }
+
+impl_consume!(QueryConsumingResult);
+impl_consume!(QueryBundleConsumingResult);
 
 pub enum QueryAnswer {
     Object(TLObject),

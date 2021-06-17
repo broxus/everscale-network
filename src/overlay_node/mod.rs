@@ -9,6 +9,7 @@ use self::overlay_shard::*;
 use crate::adnl_node::*;
 use crate::subscriber::*;
 use crate::utils::*;
+use ton_api::IntoBoxed;
 
 mod broadcast_receiver;
 mod overlay_shard;
@@ -204,6 +205,11 @@ impl OverlayNode {
             .and_then(|id| id.compute_short_id())
     }
 
+    pub fn get_signed_node(&self, overlay_id: &OverlayIdShort) -> Result<ton::overlay::node::Node> {
+        let shard = self.get_overlay_shard(overlay_id)?;
+        self.sign_local_node(shard.value())
+    }
+
     fn add_overlay_shard(
         &self,
         overlay_id: &OverlayIdShort,
@@ -260,6 +266,46 @@ impl OverlayNode {
 
         result
     }
+
+    fn process_get_random_peers(
+        &self,
+        shard: &OverlayShard,
+        query: ton::rpc::overlay::GetRandomPeers,
+    ) -> Result<ton::overlay::nodes::Nodes> {
+        let peers = self.process_nodes(shard.id(), query.peers);
+        shard.push_peers(peers);
+        self.prepare_random_peers(shard)
+    }
+
+    fn prepare_random_peers(&self, shard: &OverlayShard) -> Result<ton::overlay::nodes::Nodes> {
+        let mut result = vec![self.sign_local_node(shard)?];
+        shard.write_random_peers(MAX_RANDOM_PEERS, &mut result);
+        Ok(ton::overlay::nodes::Nodes {
+            nodes: result.into(),
+        })
+    }
+
+    fn sign_local_node(&self, shard: &OverlayShard) -> Result<ton::overlay::node::Node> {
+        let (peer_id, key) = match shard.overlay_key() {
+            Some((peer_id, key)) => (peer_id, key),
+            None => (&self.local_id, &self.node_key),
+        };
+        let version = now();
+
+        let signature = serialize_boxed(ton::overlay::node::tosign::ToSign {
+            id: peer_id.as_tl(),
+            overlay: ton::int256(shard.id().into()),
+            version,
+        })?;
+        let signature = key.private_key().sign(&signature, key.id().public_key());
+
+        Ok(ton::overlay::node::Node {
+            id: key.id().as_tl().into_boxed(),
+            overlay: ton::int256(shard.id().into()),
+            version,
+            signature: ton::bytes(signature.to_bytes().to_vec()),
+        })
+    }
 }
 
 #[async_trait::async_trait]
@@ -278,10 +324,7 @@ impl Subscriber for OverlayNode {
         };
 
         let overlay_id = match bundle.remove(0).downcast::<ton::overlay::Message>() {
-            Ok(message) => {
-                let id: OverlayIdShort = message.into();
-                id
-            }
+            Ok(message) => message.into(),
             Err(e) => {
                 log::debug!("Unsupported overlay message: {:?}", e);
                 return Ok(false);
@@ -337,11 +380,48 @@ impl Subscriber for OverlayNode {
         &self,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
-        queries: Vec<TLObject>,
+        mut queries: Vec<TLObject>,
     ) -> Result<QueryBundleConsumingResult> {
-        todo!()
+        if queries.len() != 2 {
+            return Ok(QueryBundleConsumingResult::Rejected(queries));
+        }
+
+        let overlay_id = match queries.remove(0).downcast::<ton::rpc::overlay::Query>() {
+            Ok(query) => query.into(),
+            Err(query) => {
+                queries.insert(0, query);
+                return Ok(QueryBundleConsumingResult::Rejected(queries));
+            }
+        };
+
+        let query = match queries
+            .remove(0)
+            .downcast::<ton::rpc::overlay::GetRandomPeers>()
+        {
+            Ok(query) => {
+                let shard = self.get_overlay_shard(&overlay_id)?;
+                return QueryBundleConsumingResult::consume(
+                    self.process_get_random_peers(shard.value(), query)?,
+                );
+            }
+            Err(query) => query,
+        };
+
+        let consumer = match self.subscribers.get(&overlay_id) {
+            Some(consumer) => consumer.clone(),
+            None => return Err(OverlayNodeError::NoConsumerFound.into()),
+        };
+
+        match consumer.try_consume_query(local_id, peer_id, query).await? {
+            QueryConsumingResult::Consumed(result) => {
+                Ok(QueryBundleConsumingResult::Consumed(result))
+            }
+            QueryConsumingResult::Rejected(_) => Err(OverlayNodeError::UnsupportedQuery.into()),
+        }
     }
 }
+
+const MAX_RANDOM_PEERS: usize = 4;
 
 enum QueryBundleType {
     Public,
@@ -362,4 +442,8 @@ pub enum OverlayNodeError {
     PublicPeerToPrivateOverlay,
     #[error("Cannot delete public overlay")]
     DeletingPublicOverlay,
+    #[error("No consumer for message in overlay")]
+    NoConsumerFound,
+    #[error("Unsupported query")]
+    UnsupportedQuery,
 }

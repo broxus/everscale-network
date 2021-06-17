@@ -16,9 +16,7 @@ pub fn verify_node(overlay_id: &OverlayIdShort, node: &ton::overlay::node::Node)
     let node_id = AdnlNodeIdFull::try_from(&node.id)?;
 
     let node_to_sign = serialize_boxed(ton::overlay::node::tosign::ToSign {
-        id: ton::adnl::id::short::Short {
-            id: ton::int256(node_id.compute_short_id()?.into()),
-        },
+        id: node_id.compute_short_id()?.as_tl(),
         overlay: node.overlay,
         version: node.version,
     })?;
@@ -97,9 +95,21 @@ impl From<OverlayIdShort> for [u8; 32] {
     }
 }
 
+impl From<&OverlayIdShort> for [u8; 32] {
+    fn from(id: &OverlayIdShort) -> Self {
+        id.0
+    }
+}
+
 impl From<ton::overlay::Message> for OverlayIdShort {
     fn from(message: ton::overlay::Message) -> Self {
         Self(message.only().overlay.0)
+    }
+}
+
+impl From<ton::rpc::overlay::Query> for OverlayIdShort {
+    fn from(query: ton::rpc::overlay::Query) -> Self {
+        Self(query.overlay.0)
     }
 }
 
