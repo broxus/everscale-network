@@ -4,12 +4,13 @@ use std::sync::Arc;
 use anyhow::Result;
 use dashmap::DashMap;
 use ton_api::ton::{self, TLObject};
+use ton_api::IntoBoxed;
 
 use self::overlay_shard::*;
 use crate::adnl_node::*;
+use crate::rldp_node::*;
 use crate::subscriber::*;
 use crate::utils::*;
-use ton_api::IntoBoxed;
 
 mod broadcast_receiver;
 mod overlay_shard;
@@ -208,6 +209,66 @@ impl OverlayNode {
     pub fn get_signed_node(&self, overlay_id: &OverlayIdShort) -> Result<ton::overlay::node::Node> {
         let shard = self.get_overlay_shard(overlay_id)?;
         self.sign_local_node(shard.value())
+    }
+
+    pub fn send_message(
+        &self,
+        overlay_id: &OverlayIdShort,
+        peer_id: &AdnlNodeIdShort,
+        data: &[u8],
+    ) -> Result<()> {
+        let shard = self.get_overlay_shard(overlay_id)?;
+        let local_id = match shard.overlay_key() {
+            Some((local_id, _)) => local_id,
+            None => &self.local_id,
+        };
+
+        let mut buffer = Vec::with_capacity(shard.message_prefix().len() + data.len());
+        buffer.extend_from_slice(shard.message_prefix());
+        buffer.extend_from_slice(data);
+        self.adnl.send_custom_message(local_id, peer_id, &buffer)
+    }
+
+    pub async fn query(
+        &self,
+        overlay_id: &OverlayIdShort,
+        peer_id: &AdnlNodeIdShort,
+        query: &TLObject,
+        timeout: Option<u64>,
+    ) -> Result<Option<TLObject>> {
+        let shard = self.get_overlay_shard(overlay_id)?.clone();
+        let local_id = match shard.overlay_key() {
+            Some((local_id, _)) => local_id,
+            None => &self.local_id,
+        };
+
+        self.adnl
+            .query_with_prefix(
+                local_id,
+                peer_id,
+                Some(shard.query_prefix()),
+                query,
+                timeout,
+            )
+            .await
+    }
+
+    pub async fn query_via_rldp(
+        &self,
+        overlay_id: &OverlayIdShort,
+        peer_id: &AdnlNodeIdShort,
+        data: &[u8],
+        rldp: &Arc<RldpNode>,
+        max_answer_size: Option<i64>,
+        roundtrip: Option<u64>,
+    ) -> Result<(Option<Vec<u8>>, u64)> {
+        let shard = self.get_overlay_shard(overlay_id)?.clone();
+        let local_id = match shard.overlay_key() {
+            Some((local_id, _)) => local_id,
+            None => &self.local_id,
+        };
+        rldp.query(local_id, peer_id, data, max_answer_size, roundtrip)
+            .await
     }
 
     fn add_overlay_shard(

@@ -1,5 +1,3 @@
-use std::mem::MaybeUninit;
-
 use dashmap::{DashMap, DashSet};
 use parking_lot::{RwLock, RwLockReadGuard};
 use rand::seq::SliceRandom;
@@ -116,7 +114,7 @@ impl PeersCache {
 }
 
 pub struct PeersCacheIter<'a> {
-    state: RwLockReadGuard<'a, PeersCacheState>,
+    _state: RwLockReadGuard<'a, PeersCacheState>,
     iter: std::slice::Iter<'a, AdnlNodeIdShort>,
 }
 
@@ -126,7 +124,10 @@ impl<'a> PeersCacheIter<'a> {
         let iter = unsafe {
             std::slice::from_raw_parts::<'a>(state.index.as_ptr(), state.index.len()).iter()
         };
-        Self { state, iter }
+        Self {
+            _state: state,
+            iter,
+        }
     }
 }
 

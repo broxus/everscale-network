@@ -200,6 +200,10 @@ impl OverlayShard {
         &self.query_prefix
     }
 
+    pub fn message_prefix(&self) -> &Vec<u8> {
+        &self.message_prefix
+    }
+
     pub async fn wait_for_broadcast(&self) -> IncomingBroadcastInfo {
         self.received_broadcasts.pop().await
     }
