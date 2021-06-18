@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 pub use adnl_node::{AdnlNode, AdnlNodeConfig};
 pub use overlay_node::OverlayNode;
 pub use rldp_node::RldpNode;

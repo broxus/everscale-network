@@ -588,7 +588,7 @@ impl AdnlNode {
 
         let signer = match channel.as_ref() {
             Some(channel) => MessageSigner::Channel(channel.value()),
-            None => MessageSigner::Random(local_key.id()),
+            None => MessageSigner::Random(local_key.full_id()),
         };
 
         if size <= MAX_ADNL_MESSAGE_SIZE {

@@ -64,7 +64,7 @@ impl AdnlNodeConfig {
                 match self.keys.entry(short_id) {
                     Entry::Vacant(entry) => {
                         entry.insert(Arc::new(StoredAdnlNodeKey::from_id_and_private_key(
-                            full_id, &key,
+                            short_id, full_id, &key,
                         )));
                         Ok(short_id)
                     }
@@ -123,7 +123,7 @@ mod tests {
         let mut packet = text.as_bytes().to_vec();
         println!("Packet decoded: {}", hex::encode(&packet));
 
-        build_handshake_packet(&first_peer_id, first_peer.id(), &mut packet)?;
+        build_handshake_packet(&first_peer_id, first_peer.full_id(), &mut packet)?;
         println!("Packet encoded: {}", hex::encode(&packet));
 
         println!("Packet decoded: {}", hex::encode(packet.as_slice()));

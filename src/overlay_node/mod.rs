@@ -17,7 +17,6 @@ mod overlay_shard;
 
 pub struct OverlayNode {
     adnl: Arc<AdnlNode>,
-    local_id: AdnlNodeIdShort,
     node_key: Arc<StoredAdnlNodeKey>,
     shards: DashMap<OverlayIdShort, Arc<OverlayShard>>,
     subscribers: DashMap<OverlayIdShort, Arc<dyn OverlaySubscriber>>,
@@ -33,7 +32,6 @@ impl OverlayNode {
         let node_key = adnl.key_by_tag(key_tag)?;
         Ok(Arc::new(Self {
             adnl,
-            local_id: node_key.id().compute_short_id()?,
             node_key,
             shards: Default::default(),
             subscribers: Default::default(),
@@ -110,9 +108,9 @@ impl OverlayNode {
         let peer_id_full = AdnlNodeIdFull::try_from(&node.id)?;
         let peer_id = peer_id_full.compute_short_id()?;
 
-        let is_new_peer = self
-            .adnl
-            .add_peer(&self.local_id, &peer_id, ip_address, peer_id_full)?;
+        let is_new_peer =
+            self.adnl
+                .add_peer(self.node_key.id(), &peer_id, ip_address, peer_id_full)?;
         if is_new_peer {
             shard.add_public_peer(&peer_id, node);
             Ok(Some(peer_id))
@@ -197,6 +195,11 @@ impl OverlayNode {
         Ok(shard.wait_for_peers().await)
     }
 
+    pub async fn wait_for_catchain(&self, overlay_id: &OverlayIdShort) -> Result<CatchainUpdate> {
+        let shard = self.get_overlay_shard(overlay_id)?.clone();
+        Ok(shard.wait_for_catchain().await)
+    }
+
     pub fn compute_overlay_id(&self, workchain: i32, shard: i64) -> Result<OverlayIdFull> {
         compute_overlay_id(workchain, shard, self.zero_state_file_hash)
     }
@@ -211,6 +214,33 @@ impl OverlayNode {
         self.sign_local_node(shard.value())
     }
 
+    pub fn broadcast(
+        &self,
+        overlay_id: &OverlayIdShort,
+        data: &[u8],
+        source: Option<&Arc<StoredAdnlNodeKey>>,
+    ) -> Result<OutgoingBroadcastInfo> {
+        const ORDINARY_BROADCAST_MAX_SIZE: usize = 768;
+
+        let shard = self.get_overlay_shard(overlay_id)?;
+
+        let local_id = match shard.overlay_key() {
+            Some(overlay_key) => overlay_key.id(),
+            None => self.node_key.id(),
+        };
+
+        let key = match source {
+            Some(key) => key,
+            None => &self.node_key,
+        };
+
+        if data.len() <= ORDINARY_BROADCAST_MAX_SIZE {
+            shard.send_broadcast(local_id, data, key)
+        } else {
+            shard.send_fec_broadcast(local_id, data, key)
+        }
+    }
+
     pub fn send_message(
         &self,
         overlay_id: &OverlayIdShort,
@@ -219,8 +249,8 @@ impl OverlayNode {
     ) -> Result<()> {
         let shard = self.get_overlay_shard(overlay_id)?;
         let local_id = match shard.overlay_key() {
-            Some((local_id, _)) => local_id,
-            None => &self.local_id,
+            Some(overlay_id) => overlay_id.id(),
+            None => self.node_key.id(),
         };
 
         let mut buffer = Vec::with_capacity(shard.message_prefix().len() + data.len());
@@ -238,8 +268,8 @@ impl OverlayNode {
     ) -> Result<Option<TLObject>> {
         let shard = self.get_overlay_shard(overlay_id)?.clone();
         let local_id = match shard.overlay_key() {
-            Some((local_id, _)) => local_id,
-            None => &self.local_id,
+            Some(overlay_key) => overlay_key.id(),
+            None => self.node_key.id(),
         };
 
         self.adnl
@@ -264,8 +294,8 @@ impl OverlayNode {
     ) -> Result<(Option<Vec<u8>>, u64)> {
         let shard = self.get_overlay_shard(overlay_id)?.clone();
         let local_id = match shard.overlay_key() {
-            Some((local_id, _)) => local_id,
-            None => &self.local_id,
+            Some(overlay_key) => overlay_key.id(),
+            None => self.node_key.id(),
         };
         rldp.query(local_id, peer_id, data, max_answer_size, roundtrip)
             .await
@@ -311,7 +341,7 @@ impl OverlayNode {
         let mut result = Vec::new();
 
         for node in nodes.nodes.0 {
-            let suitable_key = matches!(&node.id, ton::PublicKey::Pub_Ed25519(id) if &id.key.0 != self.node_key.id().public_key().as_bytes());
+            let suitable_key = matches!(&node.id, ton::PublicKey::Pub_Ed25519(id) if &id.key.0 != self.node_key.full_id().public_key().as_bytes());
             if !suitable_key {
                 continue;
             }
@@ -347,21 +377,23 @@ impl OverlayNode {
     }
 
     fn sign_local_node(&self, shard: &OverlayShard) -> Result<ton::overlay::node::Node> {
-        let (peer_id, key) = match shard.overlay_key() {
-            Some((peer_id, key)) => (peer_id, key),
-            None => (&self.local_id, &self.node_key),
+        let key = match shard.overlay_key() {
+            Some(overlay_key) => overlay_key,
+            None => &self.node_key,
         };
         let version = now();
 
         let signature = serialize_boxed(ton::overlay::node::tosign::ToSign {
-            id: peer_id.as_tl(),
+            id: key.id().as_tl(),
             overlay: ton::int256(shard.id().into()),
             version,
         })?;
-        let signature = key.private_key().sign(&signature, key.id().public_key());
+        let signature = key
+            .private_key()
+            .sign(&signature, key.full_id().public_key());
 
         Ok(ton::overlay::node::Node {
-            id: key.id().as_tl().into_boxed(),
+            id: key.full_id().as_tl().into_boxed(),
             overlay: ton::int256(shard.id().into()),
             version,
             signature: ton::bytes(signature.to_bytes().to_vec()),
@@ -392,7 +424,7 @@ impl Subscriber for OverlayNode {
             }
         };
 
-        let shard = self.get_overlay_shard(&overlay_id)?;
+        let shard = self.get_overlay_shard(&overlay_id)?.clone();
 
         match bundle_type {
             QueryBundleType::Public => {
@@ -430,8 +462,14 @@ impl Subscriber for OverlayNode {
                     _ => return Err(OverlayNodeError::UnsupportedPrivateOverlayMessage.into()),
                 };
 
-                // TODO: handle messages
+                // Notify waiters
+                shard.push_catchain(CatchainUpdate {
+                    peer_id: *peer_id,
+                    catchain_update,
+                    validator_session_update,
+                });
 
+                // Done
                 Ok(true)
             }
         }

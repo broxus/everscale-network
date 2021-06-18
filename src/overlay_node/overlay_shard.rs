@@ -20,7 +20,7 @@ use crate::utils::*;
 pub struct OverlayShard {
     adnl: Arc<AdnlNode>,
     overlay_id: OverlayIdShort,
-    overlay_key: Option<(AdnlNodeIdShort, Arc<StoredAdnlNodeKey>)>,
+    overlay_key: Option<Arc<StoredAdnlNodeKey>>,
 
     owned_broadcasts: DashMap<BroadcastId, Arc<OwnedBroadcast>>,
     finished_broadcasts: SegQueue<BroadcastId>,
@@ -28,6 +28,7 @@ pub struct OverlayShard {
 
     received_peers: Arc<BroadcastReceiver<Vec<ton::overlay::node::Node>>>,
     received_broadcasts: Arc<BroadcastReceiver<IncomingBroadcastInfo>>,
+    received_catchain: Arc<BroadcastReceiver<CatchainUpdate>>,
 
     nodes: DashMap<AdnlNodeIdShort, ton::overlay::node::Node>,
     ignored_peers: DashSet<AdnlNodeIdShort>,
@@ -45,13 +46,6 @@ impl OverlayShard {
         overlay_id: OverlayIdShort,
         overlay_key: Option<Arc<StoredAdnlNodeKey>>,
     ) -> Result<Arc<Self>> {
-        let overlay_key = overlay_key
-            .map(|key| -> Result<(_, _)> {
-                let peer_id = key.id().compute_short_id()?;
-                Ok((peer_id, key))
-            })
-            .transpose()?;
-
         let query_prefix = serialize(&ton::rpc::overlay::Query {
             overlay: ton::int256(overlay_id.into()),
         })?;
@@ -69,6 +63,7 @@ impl OverlayShard {
             finished_broadcast_count: AtomicU32::new(0),
             received_peers: Arc::new(BroadcastReceiver::default()),
             received_broadcasts: Arc::new(BroadcastReceiver::default()),
+            received_catchain: Arc::new(BroadcastReceiver::default()),
             nodes: DashMap::new(),
             ignored_peers: DashSet::new(),
             known_peers: PeersCache::with_capacity(MAX_PEERS),
@@ -128,17 +123,17 @@ impl OverlayShard {
         self.overlay_key.is_some()
     }
 
-    pub fn overlay_key(&self) -> &Option<(AdnlNodeIdShort, Arc<StoredAdnlNodeKey>)> {
+    pub fn overlay_key(&self) -> &Option<Arc<StoredAdnlNodeKey>> {
         &self.overlay_key
     }
 
     pub fn add_known_peers(&self, peers: &[AdnlNodeIdShort]) {
         match &self.overlay_key {
-            Some((overlay_peer_id, _)) => self.known_peers.extend(
+            Some(overlay_key) => self.known_peers.extend(
                 peers
                     .iter()
                     .cloned()
-                    .filter(|peer_id| peer_id != overlay_peer_id),
+                    .filter(|peer_id| peer_id != overlay_key.id()),
             ),
             None => self.known_peers.extend(peers.iter().cloned()),
         }
@@ -214,6 +209,14 @@ impl OverlayShard {
 
     pub fn push_peers(&self, peers: Vec<ton::overlay::node::Node>) {
         self.received_peers.push(peers);
+    }
+
+    pub async fn wait_for_catchain(&self) -> CatchainUpdate {
+        self.received_catchain.pop().await
+    }
+
+    pub fn push_catchain(&self, update: CatchainUpdate) {
+        self.received_catchain.push(update);
     }
 
     pub async fn receive_broadcast(
@@ -303,6 +306,129 @@ impl OverlayShard {
         self.distribute_broadcast(local_id, &neighbours, raw_data);
 
         Ok(())
+    }
+
+    pub fn send_broadcast(
+        self: &Arc<Self>,
+        local_id: &AdnlNodeIdShort,
+        data: &[u8],
+        key: &Arc<StoredAdnlNodeKey>,
+    ) -> Result<OutgoingBroadcastInfo> {
+        let date = now();
+        let signature = make_broadcast_to_sign(data, date, None)?;
+        let broadcast_id = match self.create_broadcast(data) {
+            Some(broadcast_id) => broadcast_id,
+            None => {
+                log::warn!("Trying to send duplicated broadcast");
+                return Ok(Default::default());
+            }
+        };
+        let signature = key
+            .private_key()
+            .sign(&signature, key.full_id().public_key());
+
+        let broadcast = ton::overlay::broadcast::Broadcast {
+            src: key.full_id().as_tl().into_boxed(),
+            certificate: ton::overlay::Certificate::Overlay_EmptyCertificate,
+            flags: BROADCAST_FLAG_ANY_SENDER,
+            data: ton::bytes(data.to_vec()),
+            date,
+            signature: ton::bytes(signature.as_ref().to_vec()),
+        }
+        .into_boxed();
+        let mut buffer = self.message_prefix.clone();
+        serialize_append(&mut buffer, &broadcast)?;
+
+        let neighbours = self.neighbours.get_random_peers(3, None);
+        self.distribute_broadcast(local_id, &neighbours, &buffer);
+        self.spawn_broadcast_gc_task(broadcast_id);
+
+        Ok(OutgoingBroadcastInfo {
+            packets: 1,
+            recipient_count: neighbours.len(),
+        })
+    }
+
+    pub fn send_fec_broadcast(
+        self: &Arc<Self>,
+        local_id: &AdnlNodeIdShort,
+        data: &[u8],
+        key: &Arc<StoredAdnlNodeKey>,
+    ) -> Result<OutgoingBroadcastInfo> {
+        let broadcast_id = match self.create_broadcast(data) {
+            Some(id) => id,
+            None => {
+                log::warn!("Trying to send duplicated broadcast");
+                return Ok(Default::default());
+            }
+        };
+
+        let data_size = data.len() as u32;
+        let (data_tx, mut data_rx) = mpsc::unbounded_channel();
+
+        let mut outgoing_transfer = OutgoingFecTransfer {
+            broadcast_id,
+            encoder: RaptorQEncoder::with_data(data),
+            seqno: 0,
+        };
+        let max_seqno =
+            (data_size / outgoing_transfer.encoder.params().symbol_size as u32 + 1) * 3 / 2;
+
+        // Spawn data producer
+        tokio::spawn({
+            let key = key.clone();
+            let overlay_shard = self.clone();
+
+            async move {
+                while outgoing_transfer.seqno <= max_seqno {
+                    for _ in 0..MAX_BROADCAST_WAVE {
+                        let result = overlay_shard
+                            .prepare_fec_broadcast(&mut outgoing_transfer, &key)
+                            .and_then(|data| {
+                                data_tx.send(data)?;
+                                Ok(())
+                            });
+
+                        if let Err(e) = result {
+                            log::warn!("Failed to send overlay broadcast: {}", e);
+                            return;
+                        }
+
+                        if outgoing_transfer.seqno > max_seqno {
+                            break;
+                        }
+                    }
+
+                    tokio::time::sleep(Duration::from_millis(TRANSFER_LOOP_INTERVAL)).await;
+                }
+            }
+        });
+
+        let neighbours = self.neighbours.get_random_peers(MAX_SHARD_NEIGHBOURS, None);
+        let info = OutgoingBroadcastInfo {
+            packets: max_seqno,
+            recipient_count: neighbours.len(),
+        };
+
+        // Spawn sender
+        tokio::spawn({
+            let overlay_shard = self.clone();
+            let local_id = *local_id;
+
+            async move {
+                while let Some(data) = data_rx.recv().await {
+                    overlay_shard.distribute_broadcast(&local_id, &neighbours, &data);
+                }
+
+                data_rx.close();
+                while data_rx.recv().await.is_some() {}
+
+                overlay_shard.spawn_broadcast_gc_task(broadcast_id);
+            }
+        });
+
+        // Done
+        Ok(info)
     }
 
     fn update_random_peers(&self, amount: usize) {
@@ -434,87 +560,6 @@ impl OverlayShard {
         })
     }
 
-    fn create_outgoing_fec_transfer(
-        self: &Arc<Self>,
-        data: &[u8],
-        source: &Arc<StoredAdnlNodeKey>,
-        overlay_key: AdnlNodeIdShort,
-    ) -> Result<OutgoingBroadcastInfo> {
-        let broadcast_id = match self.create_broadcast(data) {
-            Some(id) => id,
-            None => {
-                log::warn!("Trying to send duplicated broadcast");
-                return Ok(Default::default());
-            }
-        };
-
-        let data_size = data.len() as u32;
-        let (data_tx, mut data_rx) = mpsc::unbounded_channel();
-
-        let mut outgoing_transfer = OutgoingFecTransfer {
-            broadcast_id,
-            encoder: RaptorQEncoder::with_data(data),
-            seqno: 0,
-        };
-        let max_seqno =
-            (data_size / outgoing_transfer.encoder.params().symbol_size as u32 + 1) * 3 / 2;
-
-        // Spawn data producer
-        tokio::spawn({
-            let source = source.clone();
-            let overlay_shard = self.clone();
-
-            async move {
-                while outgoing_transfer.seqno <= max_seqno {
-                    for _ in 0..MAX_BROADCAST_WAVE {
-                        let result = overlay_shard
-                            .prepare_fec_broadcast(&mut outgoing_transfer, &source)
-                            .and_then(|data| {
-                                data_tx.send(data)?;
-                                Ok(())
-                            });
-
-                        if let Err(e) = result {
-                            log::warn!("Failed to send overlay broadcast: {}", e);
-                            return;
-                        }
-
-                        if outgoing_transfer.seqno > max_seqno {
-                            break;
-                        }
-                    }
-
-                    tokio::time::sleep(Duration::from_millis(TRANSFER_LOOP_INTERVAL)).await;
-                }
-            }
-        });
-
-        let neighbours = self.neighbours.get_random_peers(MAX_SHARD_NEIGHBOURS, None);
-        let info = OutgoingBroadcastInfo {
-            packets: max_seqno,
-            recipient_count: neighbours.len(),
-        };
-
-        // Spawn sender
-        tokio::spawn({
-            let overlay_shard = self.clone();
-
-            async move {
-                while let Some(data) = data_rx.recv().await {
-                    overlay_shard.distribute_broadcast(&overlay_key, &neighbours, &data);
-                }
-
-                data_rx.close();
-                while data_rx.recv().await.is_some() {}
-
-                overlay_shard.spawn_broadcast_gc_task(broadcast_id);
-            }
-        });
-
-        // Done
-        Ok(info)
-    }
-
     fn prepare_fec_broadcast(
         &self,
         transfer: &mut OutgoingFecTransfer,
@@ -533,10 +578,12 @@ impl OverlayShard {
             transfer.seqno as i32,
             None,
         )?;
-        let signature = key.private_key().sign(&signature, key.id().public_key());
+        let signature = key
+            .private_key()
+            .sign(&signature, key.full_id().public_key());
 
         let broadcast = ton::overlay::broadcast::BroadcastFec {
-            src: key.id().as_tl().into_boxed(),
+            src: key.full_id().as_tl().into_boxed(),
             certificate: ton::overlay::Certificate::Overlay_EmptyCertificate,
             data_hash: ton::int256(transfer.broadcast_id),
             data_size: transfer.encoder.params().data_size,
@@ -545,7 +592,7 @@ impl OverlayShard {
             seqno: transfer.seqno as i32,
             fec: transfer.encoder.params().clone().into_boxed(),
             date,
-            signature: ton::bytes(signature.to_bytes().to_vec()),
+            signature: ton::bytes(signature.as_ref().to_vec()),
         }
         .into_boxed();
 
@@ -694,9 +741,15 @@ pub struct IncomingBroadcastInfo {
 }
 
 #[derive(Default)]
-struct OutgoingBroadcastInfo {
+pub struct OutgoingBroadcastInfo {
     pub packets: u32,
     pub recipient_count: usize,
+}
+
+pub struct CatchainUpdate {
+    pub peer_id: AdnlNodeIdShort,
+    pub catchain_update: ton::catchain::blockupdate::BlockUpdate,
+    pub validator_session_update: ton::validator_session::blockupdate::BlockUpdate,
 }
 
 struct IncomingFecTransfer {

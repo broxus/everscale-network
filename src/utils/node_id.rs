@@ -140,6 +140,7 @@ enum AdnlNodeIdError {
 }
 
 pub struct StoredAdnlNodeKey {
+    short_id: AdnlNodeIdShort,
     full_id: AdnlNodeIdFull,
     private_key: ed25519_dalek::ExpandedSecretKey,
     private_key_part: [u8; 32],
@@ -147,6 +148,7 @@ pub struct StoredAdnlNodeKey {
 
 impl StoredAdnlNodeKey {
     pub fn from_id_and_private_key(
+        short_id: AdnlNodeIdShort,
         full_id: AdnlNodeIdFull,
         private_key: &ed25519_dalek::SecretKey,
     ) -> Self {
@@ -154,13 +156,18 @@ impl StoredAdnlNodeKey {
         let private_key_part = private_key.to_bytes()[0..32].try_into().unwrap();
 
         Self {
+            short_id,
             full_id,
             private_key,
             private_key_part,
         }
     }
 
-    pub fn id(&self) -> &AdnlNodeIdFull {
+    pub fn id(&self) -> &AdnlNodeIdShort {
+        &self.short_id
+    }
+
+    pub fn full_id(&self) -> &AdnlNodeIdFull {
         &self.full_id
     }
 
