@@ -12,7 +12,7 @@ use sha2::Digest;
 use tokio::sync::mpsc;
 use ton_api::{ton, IntoBoxed};
 
-use super::broadcast_receiver::*;
+use super::{broadcast_receiver::*, MAX_PEERS};
 use crate::adnl_node::*;
 use crate::rldp_node::*;
 use crate::utils::*;
@@ -727,7 +727,6 @@ fn make_fec_part_to_sign(
 const MAX_BROADCAST_WAVE: u32 = 20;
 const MAX_SHARD_NEIGHBOURS: usize = 5;
 const MAX_SHARD_PEERS: usize = 20;
-const MAX_PEERS: usize = 65536;
 
 const BROADCAST_FLAG_ANY_SENDER: i32 = 1; // Any sender
 

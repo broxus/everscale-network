@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use ton_api::{ton, IntoBoxed, Serializer};
+use ton_api::{ton, BoxedSerialize, IntoBoxed, Serializer};
 
 use super::node_id::*;
 use super::{deserialize_bundle, serialize, NoFailure};
@@ -130,6 +130,16 @@ pub enum QueryProcessingResult<T> {
     Rejected,
 }
 
+pub fn parse_answer<T>(answer: ton::TLObject) -> Result<T>
+where
+    T: BoxedSerialize + serde::Serialize + Send + Sync + 'static,
+{
+    match answer.downcast::<T>() {
+        Ok(answer) => Ok(answer),
+        Err(_) => Err(QueryError::UnsupportedResponse.into()),
+    }
+}
+
 fn convert_answer<A, F>(answer: Option<QueryAnswer>, convert: F) -> Result<Option<A>>
 where
     F: Fn(Vec<u8>) -> A,
@@ -155,3 +165,9 @@ impl std::fmt::Display for ShortQueryId<'_> {
 }
 
 pub type QueryId = [u8; 32];
+
+#[derive(thiserror::Error, Debug)]
+enum QueryError {
+    #[error("Unsupported response")]
+    UnsupportedResponse,
+}

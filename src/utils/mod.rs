@@ -6,6 +6,7 @@ use ton_api::ton::TLObject;
 use ton_api::{BoxedSerialize, Deserializer, IntoBoxed, Serializer};
 
 pub use self::address_list::*;
+pub use self::dht::*;
 pub use self::handshake::*;
 pub use self::node_id::*;
 pub use self::overlay::*;
@@ -17,6 +18,7 @@ pub use self::received_mask::*;
 pub use self::updated_at::*;
 
 mod address_list;
+mod dht;
 mod handshake;
 mod node_id;
 mod overlay;

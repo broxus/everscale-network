@@ -112,6 +112,12 @@ impl From<AdnlNodeIdShort> for [u8; 32] {
     }
 }
 
+impl From<AdnlNodeIdShort> for ton::int256 {
+    fn from(id: AdnlNodeIdShort) -> Self {
+        ton::int256(id.0)
+    }
+}
+
 pub trait ComputeNodeIds {
     fn compute_node_ids(&self) -> Result<(AdnlNodeIdFull, AdnlNodeIdShort)>;
 }

@@ -522,6 +522,8 @@ impl Subscriber for OverlayNode {
 
 const MAX_RANDOM_PEERS: usize = 4;
 
+pub const MAX_PEERS: usize = 65536;
+
 enum QueryBundleType {
     Public,
     Private,
