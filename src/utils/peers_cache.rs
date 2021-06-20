@@ -24,10 +24,7 @@ impl PeersCache {
         self.state.read().cache.contains_key(peer)
     }
 
-    pub fn get<I>(&self, index: I) -> Option<AdnlNodeIdShort>
-    where
-        I: std::slice::SliceIndex<[AdnlNodeIdShort], Output = AdnlNodeIdShort>,
-    {
+    pub fn get(&self, index: usize) -> Option<AdnlNodeIdShort> {
         self.state.read().index.get(index).cloned()
     }
 
@@ -110,6 +107,27 @@ impl PeersCache {
         for peer_id in peers.into_iter() {
             state.put(peer_id);
         }
+    }
+}
+
+#[derive(Default)]
+pub struct ExternalPeersCacheIter(usize);
+
+impl ExternalPeersCacheIter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn get(&self, cache: &PeersCache) -> Option<AdnlNodeIdShort> {
+        cache.get(self.0)
+    }
+
+    pub fn bump(&mut self) {
+        self.0 += 1;
+    }
+
+    pub fn reset(&mut self) {
+        self.0 = 0;
     }
 }
 

@@ -112,6 +112,20 @@ impl DhtNode {
         self.known_peers.iter()
     }
 
+    pub fn get_known_peer(
+        &self,
+        external_iter: &mut Option<ExternalPeersCacheIter>,
+    ) -> Option<AdnlNodeIdShort> {
+        match external_iter {
+            Some(iter) => {
+                iter.bump();
+                iter
+            }
+            None => external_iter.get_or_insert_with(Default::default),
+        }
+        .get(&self.known_peers)
+    }
+
     fn process_ping(&self, query: &ton::rpc::dht::Ping) -> ton::dht::pong::Pong {
         ton::dht::pong::Pong {
             random_id: query.random_id,
@@ -282,8 +296,68 @@ impl Subscriber for DhtNode {
     }
 }
 
+pub struct ExternalDhtIterator {
+    iter: Option<ExternalPeersCacheIter>,
+    peer_id: AdnlNodeIdShort,
+    order: Vec<(u8, AdnlNodeIdShort)>,
+}
+
+impl ExternalDhtIterator {
+    fn with_peer_id(dht: &DhtNode, peer_id: AdnlNodeIdShort) -> Self {
+        let mut result = Self {
+            iter: None,
+            peer_id,
+            order: Vec::new(),
+        };
+        result.update(dht);
+        result
+    }
+
+    fn update(&mut self, dht: &DhtNode) {
+        let mut next = match &self.iter {
+            Some(iter) => iter.get(&dht.known_peers),
+            None => dht.get_known_peer(&mut self.iter),
+        };
+
+        while let Some(peer) = next {
+            let affinity = get_affinity(&peer, &self.peer_id);
+
+            let add = match self.order.last() {
+                Some((top_affinity, _)) => {
+                    *top_affinity <= affinity || self.order.len() < MAX_TASKS
+                }
+                None => true,
+            };
+
+            if add {
+                self.order.push((affinity, peer))
+            }
+
+            next = dht.get_known_peer(&mut self.iter);
+        }
+
+        self.order.sort_unstable_by_key(|(affinity, _)| *affinity);
+
+        if let Some((top_affinity, _)) = self.order.last() {
+            let mut drop_to = 0;
+
+            while self.order.len() - drop_to > MAX_TASKS {
+                if self.order[drop_to].0 < *top_affinity {
+                    drop_to += 1;
+                } else {
+                    break;
+                }
+            }
+
+            self.order.drain(0..drop_to);
+        }
+    }
+}
+
 const DHT_KEY_ADDRESS: &str = "address";
 const DHT_KEY_NODES: &str = "nodes";
+
+const MAX_TASKS: usize = 5;
 
 #[derive(thiserror::Error, Debug)]
 enum DhtNodeError {
