@@ -6,9 +6,12 @@ use ton_api::ton::{self, TLObject};
 use super::address_list::*;
 use super::node_id::*;
 
-pub fn make_dht_key(peer_id: &AdnlNodeIdShort, name: &str) -> ton::dht::key::Key {
+pub fn make_dht_key<T>(id: &T, name: &str) -> ton::dht::key::Key
+where
+    T: AsRef<[u8; 32]>,
+{
     ton::dht::key::Key {
-        id: ton::int256(*peer_id.as_slice()),
+        id: ton::int256(*id.as_ref()),
         name: ton::bytes(name.as_bytes().to_vec()),
         idx: 0,
     }

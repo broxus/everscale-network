@@ -21,10 +21,7 @@ pub fn verify_node(overlay_id: &OverlayIdShort, node: &ton::overlay::node::Node)
         version: node.version,
     })?;
 
-    let other_signature = ed25519_dalek::Signature::from_bytes(&node.signature)?;
-    node_id
-        .public_key()
-        .verify(&node_to_sign, &other_signature)?;
+    node_id.verify(&node_to_sign, &node.signature)?;
 
     Ok(())
 }
@@ -110,6 +107,18 @@ impl From<ton::overlay::Message> for OverlayIdShort {
 impl From<ton::rpc::overlay::Query> for OverlayIdShort {
     fn from(query: ton::rpc::overlay::Query) -> Self {
         Self(query.overlay.0)
+    }
+}
+
+impl From<[u8; 32]> for OverlayIdShort {
+    fn from(id: [u8; 32]) -> Self {
+        Self(id)
+    }
+}
+
+impl AsRef<[u8; 32]> for OverlayIdShort {
+    fn as_ref(&self) -> &[u8; 32] {
+        &self.0
     }
 }
 

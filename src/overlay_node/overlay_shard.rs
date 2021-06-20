@@ -237,14 +237,14 @@ impl OverlayShard {
             _ => None,
         };
 
-        let signature = make_broadcast_to_sign(&broadcast.data, broadcast.date, source.as_ref())?;
-        let broadcast_id = match self.create_broadcast(&signature) {
+        let broadcast_to_sign =
+            make_broadcast_to_sign(&broadcast.data, broadcast.date, source.as_ref())?;
+        let broadcast_id = match self.create_broadcast(&broadcast_to_sign) {
             Some(broadcast_id) => broadcast_id,
             None => return Ok(()),
         };
 
-        let other_signature = ed25519_dalek::Signature::from_bytes(&broadcast.signature)?;
-        node_id.public_key().verify(&signature, &other_signature)?;
+        node_id.verify(&broadcast_to_sign, &broadcast.signature)?;
 
         self.received_broadcasts.push(IncomingBroadcastInfo {
             packets: 1,
@@ -636,7 +636,7 @@ fn process_fec_broadcast(
     let broadcast_id = &broadcast.data_hash.0;
     let node_id = AdnlNodeIdFull::try_from(&broadcast.src)?;
 
-    let signature = make_fec_part_to_sign(
+    let broadcast_to_sign = make_fec_part_to_sign(
         broadcast_id,
         broadcast.data_size,
         broadcast.date,
@@ -650,9 +650,7 @@ fn process_fec_broadcast(
             None
         },
     )?;
-
-    let other_signature = ed25519_dalek::Signature::from_bytes(&broadcast.signature)?;
-    node_id.public_key().verify(&signature, &other_signature)?;
+    node_id.verify(&broadcast_to_sign, &broadcast.signature)?;
 
     match decoder.decode(broadcast.seqno as u32, &broadcast.data) {
         Some(result) if result.len() != broadcast.data_size as usize => {

@@ -1,10 +1,12 @@
 use std::convert::{TryFrom, TryInto};
 
 use anyhow::Result;
+use ed25519_dalek::ed25519::signature::Signature;
+use ed25519_dalek::Verifier;
 use rand::Rng;
-use ton_api::ton;
+use ton_api::{ton, IntoBoxed};
 
-use super::hash;
+use super::{hash, serialize, serialize_boxed};
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct AdnlNodeIdFull(ed25519_dalek::PublicKey);
@@ -22,6 +24,23 @@ impl AdnlNodeIdFull {
         ton::pub_::publickey::Ed25519 {
             key: ton::int256(self.0.to_bytes()),
         }
+    }
+
+    pub fn verify(&self, message: &[u8], other_signature: &[u8]) -> Result<()> {
+        let other_signature = ed25519_dalek::Signature::from_bytes(other_signature)?;
+        self.0.verify(message, &other_signature)?;
+        Ok(())
+    }
+
+    pub fn verify_boxed<T, F>(&self, data: &T, extractor: F) -> Result<()>
+    where
+        T: IntoBoxed + Clone,
+        F: FnOnce(&mut T) -> &mut ton::bytes,
+    {
+        let mut data = data.clone();
+        let signature = std::mem::take(&mut extractor(&mut data).0);
+        let buffer = serialize_boxed(data)?;
+        self.verify(&buffer, &signature)
     }
 
     pub fn compute_short_id(&self) -> Result<AdnlNodeIdShort> {
@@ -118,6 +137,12 @@ impl From<AdnlNodeIdShort> for ton::int256 {
     }
 }
 
+impl AsRef<[u8; 32]> for AdnlNodeIdShort {
+    fn as_ref(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
 pub trait ComputeNodeIds {
     fn compute_node_ids(&self) -> Result<(AdnlNodeIdFull, AdnlNodeIdShort)>;
 }
@@ -187,5 +212,18 @@ impl StoredAdnlNodeKey {
 
     pub fn sign(&self, data: &[u8]) -> ed25519_dalek::Signature {
         self.private_key.sign(data, self.full_id.public_key())
+    }
+
+    pub fn sign_boxed<T, F, R>(&self, data: T, inserter: F) -> Result<R>
+    where
+        T: IntoBoxed,
+        F: FnOnce(T::Boxed, ton::bytes) -> R,
+    {
+        let data = data.into_boxed();
+        let mut buffer = serialize(&data)?;
+        let signature = self.sign(&buffer);
+        buffer.truncate(0);
+        buffer.extend_from_slice(signature.as_ref());
+        Ok(inserter(data, ton::bytes(buffer)))
     }
 }

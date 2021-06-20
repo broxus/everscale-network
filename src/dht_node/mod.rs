@@ -48,12 +48,19 @@ impl DhtNode {
         Ok(Arc::new(dht_node))
     }
 
-    pub fn add_peer(&self, peer: &ton::dht::node::Node) -> Result<Option<AdnlNodeIdShort>> {
+    pub fn add_peer(&self, peer: ton::dht::node::Node) -> Result<Option<AdnlNodeIdShort>> {
         use dashmap::mapref::entry::Entry;
 
-        todo!();
-
         let peer_full_id = AdnlNodeIdFull::try_from(&peer.id)?;
+
+        if peer_full_id
+            .verify_boxed(&peer, |p| &mut p.signature)
+            .is_err()
+        {
+            log::warn!("Error when verifying DHT peer");
+            return Ok(None);
+        }
+
         let peer_id = peer_full_id.compute_short_id()?;
         let peer_ip_address = parse_address_list(&peer.addr_list)?;
 
@@ -65,7 +72,7 @@ impl DhtNode {
         }
 
         if self.known_peers.put(peer_id) {
-            self.buckets.insert(self.node_key.id(), &peer_id, peer);
+            self.buckets.insert(self.node_key.id(), &peer_id, &peer);
         }
 
         Ok(Some(peer_id))
@@ -81,7 +88,7 @@ impl DhtNode {
             None => return Ok(false),
         };
         let nodes = answer.only().nodes;
-        for node in nodes.0.iter() {
+        for node in nodes.0.into_iter() {
             self.add_peer(node)?;
         }
         Ok(true)
@@ -134,8 +141,22 @@ impl DhtNode {
         self.sign_local_node()
     }
 
-    fn process_store(&self, query: &ton::rpc::dht::Store) -> Result<ton::dht::Stored> {
-        todo!();
+    fn process_store(&self, query: ton::rpc::dht::Store) -> Result<ton::dht::Stored> {
+        if query.value.ttl <= now() {
+            return Err(DhtNodeError::InsertedValueExpired.into());
+        }
+
+        let key_id = hash(query.value.key.key.clone())?;
+
+        match query.value.key.update_rule {
+            ton::dht::UpdateRule::Dht_UpdateRule_Signature => {
+                self.storage.insert_signed_value(key_id, query.value)?;
+            }
+            ton::dht::UpdateRule::Dht_UpdateRule_OverlayNodes => {
+                self.storage.insert_overlay_nodes(key_id, query.value)?;
+            }
+            _ => return Err(DhtNodeError::UnsupportedStoreQuery.into()),
+        }
 
         Ok(ton::dht::Stored::Dht_Stored)
     }
@@ -184,9 +205,9 @@ impl DhtNode {
             version: now(),
             signature: Default::default(),
         };
-        sign_boxed(node, &self.node_key, |node, signature| {
+        self.node_key.sign_boxed(node, |node, signature| {
             let mut node = node.only();
-            node.signature.0 = signature;
+            node.signature = signature;
             node
         })
     }
@@ -223,7 +244,7 @@ impl Subscriber for DhtNode {
         };
 
         let query = match query.downcast::<ton::rpc::dht::Store>() {
-            Ok(query) => return QueryConsumingResult::consume_boxed(self.process_store(&query)?),
+            Ok(query) => return QueryConsumingResult::consume_boxed(self.process_store(query)?),
             Err(query) => query,
         };
 
@@ -249,7 +270,7 @@ impl Subscriber for DhtNode {
             }
         };
 
-        self.add_peer(&peer)?;
+        self.add_peer(peer)?;
 
         let query = queries.remove(0);
         match self.try_consume_query(local_id, peer_id, query).await? {
@@ -261,20 +282,8 @@ impl Subscriber for DhtNode {
     }
 }
 
-fn sign_boxed<T, F>(data: T, key: &StoredAdnlNodeKey, f: F) -> Result<T>
-where
-    T: IntoBoxed,
-    F: FnOnce(T::Boxed, Vec<u8>) -> T,
-{
-    let data = data.into_boxed();
-    let mut buffer = serialize(&data)?;
-    let signature = key.sign(&buffer);
-    buffer.truncate(0);
-    buffer.extend_from_slice(signature.as_ref());
-    Ok(f(data, buffer))
-}
-
 const DHT_KEY_ADDRESS: &str = "address";
+const DHT_KEY_NODES: &str = "nodes";
 
 #[derive(thiserror::Error, Debug)]
 enum DhtNodeError {
@@ -282,4 +291,8 @@ enum DhtNodeError {
     NoAddressFound,
     #[error("Unexpected DHT query")]
     UnexpectedQuery,
+    #[error("Inserted value is expired")]
+    InsertedValueExpired,
+    #[error("Unsupported store query")]
+    UnsupportedStoreQuery,
 }
