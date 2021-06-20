@@ -6,8 +6,6 @@ use std::time::Duration;
 use anyhow::Result;
 use crossbeam_queue::SegQueue;
 use dashmap::{DashMap, DashSet};
-use ed25519_dalek::ed25519::signature::Signature;
-use ed25519_dalek::Verifier;
 use sha2::Digest;
 use tokio::sync::mpsc;
 use ton_api::{ton, IntoBoxed};

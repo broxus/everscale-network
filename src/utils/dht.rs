@@ -5,6 +5,45 @@ use ton_api::ton::{self, TLObject};
 
 use super::address_list::*;
 use super::node_id::*;
+use super::now;
+use ton_api::IntoBoxed;
+
+pub const DHT_VALUE_TIMEOUT: i32 = 3600; // Seconds
+
+pub fn sign_dht_value(
+    key: &StoredAdnlNodeKey,
+    name: &str,
+    value: &[u8],
+) -> Result<ton::dht::value::Value> {
+    let value = ton::dht::value::Value {
+        key: sign_dht_key_description(key, name)?,
+        value: ton::bytes(value.to_vec()),
+        ttl: now() + DHT_VALUE_TIMEOUT,
+        signature: Default::default(),
+    };
+    key.sign_boxed(value, |value, signature| {
+        let mut value = value.only();
+        value.signature = signature;
+        value
+    })
+}
+
+pub fn sign_dht_key_description(
+    key: &StoredAdnlNodeKey,
+    name: &str,
+) -> Result<ton::dht::keydescription::KeyDescription> {
+    let key_description = ton::dht::keydescription::KeyDescription {
+        key: make_dht_key(key.id(), name),
+        id: key.full_id().as_tl().into_boxed(),
+        update_rule: ton::dht::UpdateRule::Dht_UpdateRule_Signature,
+        signature: Default::default(),
+    };
+    key.sign_boxed(key_description, |key, signature| {
+        let mut key = key.only();
+        key.signature = signature;
+        key
+    })
+}
 
 pub fn make_dht_key<T>(id: &T, name: &str) -> ton::dht::key::Key
 where

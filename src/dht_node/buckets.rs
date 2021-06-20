@@ -1,4 +1,3 @@
-use anyhow::Result;
 use dashmap::DashMap;
 use ton_api::ton;
 
@@ -9,6 +8,10 @@ pub struct Buckets {
 }
 
 impl Buckets {
+    pub fn iter(&self) -> std::slice::Iter<DashMap<AdnlNodeIdShort, ton::dht::node::Node>> {
+        self.buckets.iter()
+    }
+
     pub fn insert(
         &self,
         local_id: &AdnlNodeIdShort,
@@ -17,7 +20,7 @@ impl Buckets {
     ) {
         use dashmap::mapref::entry::Entry;
 
-        let affinity = get_affinity(local_id, peer_id);
+        let affinity = get_affinity(local_id.as_slice(), peer_id.as_slice());
         match self.buckets[affinity as usize].entry(*peer_id) {
             Entry::Occupied(entry) => {
                 if entry.get().version < peer.version {
@@ -91,6 +94,15 @@ impl Buckets {
     }
 }
 
+impl<'a> IntoIterator for &'a Buckets {
+    type Item = &'a DashMap<AdnlNodeIdShort, ton::dht::node::Node>;
+    type IntoIter = std::slice::Iter<'a, DashMap<AdnlNodeIdShort, ton::dht::node::Node>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 impl Default for Buckets {
     fn default() -> Self {
         Self {
@@ -99,10 +111,7 @@ impl Default for Buckets {
     }
 }
 
-pub fn get_affinity(key1: &AdnlNodeIdShort, key2: &AdnlNodeIdShort) -> u8 {
-    let key1 = key1.as_slice();
-    let key2 = key2.as_slice();
-
+pub fn get_affinity(key1: &[u8; 32], key2: &[u8; 32]) -> u8 {
     let mut result = 0;
     for i in 0..32 {
         match key1[i] ^ key2[i] {

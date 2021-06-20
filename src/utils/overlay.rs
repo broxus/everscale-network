@@ -1,8 +1,6 @@
 use std::convert::TryFrom;
 
 use anyhow::Result;
-use ed25519_dalek::ed25519::signature::Signature;
-use ed25519_dalek::Verifier;
 use ton_api::ton;
 
 use super::{hash, serialize, serialize_boxed};

@@ -12,12 +12,17 @@ impl PeersCache {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             state: RwLock::new(PeersCacheState {
+                version: 0,
                 cache: Default::default(),
                 index: Default::default(),
                 capacity: capacity as u32,
                 upper: 0,
             }),
         }
+    }
+
+    pub fn version(&self) -> u64 {
+        self.state.read().version
     }
 
     pub fn contains(&self, peer: &AdnlNodeIdShort) -> bool {
@@ -180,6 +185,7 @@ impl<'a> IntoIterator for &'a PeersCache {
 }
 
 struct PeersCacheState {
+    version: u64,
     cache: DashMap<AdnlNodeIdShort, u32>,
     index: Vec<AdnlNodeIdShort>,
     capacity: u32,
@@ -205,6 +211,7 @@ impl PeersCacheState {
                     index %= self.capacity;
                 }
 
+                self.version += 1;
                 entry.insert(index);
 
                 (index as usize, upper)

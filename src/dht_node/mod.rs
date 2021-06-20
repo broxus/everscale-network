@@ -2,18 +2,20 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 use anyhow::Result;
-use dashmap::DashMap;
+use rand::Rng;
 use ton_api::ton::{self, TLObject};
+use ton_api::IntoBoxed;
 
 use self::buckets::*;
+use self::response_collector::*;
 use self::storage::*;
 use crate::adnl_node::AdnlNode;
 use crate::overlay_node::MAX_PEERS;
 use crate::subscriber::*;
 use crate::utils::*;
-use ton_api::IntoBoxed;
 
 mod buckets;
+mod response_collector;
 mod storage;
 
 pub struct DhtNode {
@@ -49,8 +51,6 @@ impl DhtNode {
     }
 
     pub fn add_peer(&self, peer: ton::dht::node::Node) -> Result<Option<AdnlNodeIdShort>> {
-        use dashmap::mapref::entry::Entry;
-
         let peer_full_id = AdnlNodeIdFull::try_from(&peer.id)?;
 
         if peer_full_id
@@ -94,18 +94,207 @@ impl DhtNode {
         Ok(true)
     }
 
+    pub async fn find_overlay_nodes(
+        self: &Arc<Self>,
+        overlay_id: &OverlayIdShort,
+        external_iter: &mut Option<ExternalDhtIterator>,
+    ) -> Result<Vec<(AdnlAddressUdp, ton::overlay::node::Node)>> {
+        let mut result = Vec::new();
+        let mut nodes = Vec::new();
+
+        let key = make_dht_key(overlay_id, DHT_KEY_NODES);
+
+        loop {
+            let mut nodes_lists = self
+                .find_value(
+                    key.clone(),
+                    |value| value.is::<ton::overlay::Nodes>(),
+                    true,
+                    external_iter,
+                )
+                .await?;
+            if nodes_lists.is_empty() {
+                break;
+            }
+
+            while let Some((_, nodes_lists)) = nodes_lists.pop() {
+                if let Ok(nodes_list) = nodes_lists.downcast::<ton::overlay::Nodes>() {
+                    nodes.append(&mut nodes_list.only().nodes.0);
+                } else {
+                    continue;
+                }
+            }
+
+            let mut response_collector = ResponseCollector::new();
+
+            let cache = PeersCache::with_capacity(MAX_PEERS);
+            while let Some(node) = nodes.pop() {
+                let peer_full_id = AdnlNodeIdFull::try_from(&node.id)?;
+                let peer_id = peer_full_id.compute_short_id()?;
+                if !cache.put(peer_id) {
+                    continue;
+                }
+
+                let response_tx = response_collector.make_request();
+
+                let dht = self.clone();
+                tokio::spawn(async move {
+                    match dht.find_address(&peer_id).await {
+                        Ok((ip, _)) => {
+                            log::debug!("---- Got overlay node {}", ip);
+                            response_tx.send(Some((Some(ip), node)));
+                        }
+                        Err(_) => {
+                            log::debug!("---- Overlay node {} not found", peer_id);
+                            response_tx.send(Some((None, node)));
+                        }
+                    }
+                });
+            }
+
+            loop {
+                match response_collector.wait(false).await {
+                    Some(Some((None, node))) => nodes.push(node),
+                    Some(Some((Some(ip), node))) => result.push((ip, node)),
+                    _ => break,
+                }
+            }
+
+            if !result.is_empty() {
+                break;
+            }
+
+            if external_iter.is_none() {
+                break;
+            }
+        }
+
+        Ok(result)
+    }
+
+    pub async fn store_overlay_node(
+        self: &Arc<Self>,
+        overlay_full_id: &OverlayIdFull,
+        node: &ton::overlay::node::Node,
+    ) -> Result<bool> {
+        let overlay_full_id = ton::pub_::publickey::Overlay {
+            name: ton::bytes(overlay_full_id.as_slice().to_vec()),
+        };
+        let overlay_id = hash(overlay_full_id.clone())?.into();
+
+        verify_node(&overlay_id, node)?;
+
+        let key = make_dht_key(&overlay_id, DHT_KEY_NODES);
+        let value = ton::dht::value::Value {
+            key: ton::dht::keydescription::KeyDescription {
+                key: key.clone(),
+                id: overlay_full_id.into_boxed(),
+                update_rule: ton::dht::UpdateRule::Dht_UpdateRule_OverlayNodes,
+                signature: Default::default(),
+            },
+            value: ton::bytes(serialize_boxed(ton::overlay::nodes::Nodes {
+                nodes: vec![node.clone()].into(),
+            })?),
+            ttl: now() + DHT_VALUE_TIMEOUT,
+            signature: Default::default(),
+        };
+
+        self.storage
+            .insert_overlay_nodes(hash(key.clone())?, value.clone())?;
+
+        self.store_value(
+            key,
+            value,
+            |value| value.is::<ton::overlay::Nodes>(),
+            true,
+            |mut values| {
+                while let Some((_, value)) = values.pop() {
+                    match value.downcast::<ton::overlay::Nodes>() {
+                        Ok(value) => {
+                            for stored_node in value.only().nodes.iter() {
+                                if stored_node == node {
+                                    return Ok(true);
+                                }
+                            }
+                        }
+                        Err(_) => continue,
+                    }
+                }
+                Ok(false)
+            },
+        )
+        .await
+    }
+
     pub async fn find_address(
         self: &Arc<Self>,
         peer_id: &AdnlNodeIdShort,
     ) -> Result<(AdnlAddressUdp, AdnlNodeIdFull)> {
         let mut address_list = self
-            .find_value(make_dht_key(peer_id, DHT_KEY_ADDRESS))
+            .find_value(
+                make_dht_key(peer_id, DHT_KEY_ADDRESS),
+                |value| value.is::<ton::adnl::AddressList>(),
+                false,
+                &mut None,
+            )
             .await?;
 
         match address_list.pop() {
             Some((key, value)) => parse_dht_value_address(key, value),
             None => Err(DhtNodeError::NoAddressFound.into()),
         }
+    }
+
+    pub async fn store_ip_address(self: &Arc<Self>, key: &StoredAdnlNodeKey) -> Result<bool> {
+        let value = serialize_boxed(self.adnl.build_address_list(None))?;
+        let value = sign_dht_value(key, DHT_KEY_ADDRESS, &value)?;
+        let key = make_dht_key(key.id(), DHT_KEY_ADDRESS);
+
+        self.storage
+            .insert_signed_value(hash(key.clone())?, value.clone())?;
+
+        self.store_value(
+            key,
+            value,
+            |value| value.is::<ton::adnl::AddressList>(),
+            false,
+            |mut values| {
+                while let Some((_, value)) = values.pop() {
+                    match value.downcast::<ton::adnl::AddressList>() {
+                        Ok(address_list) => {
+                            let ip = parse_address_list(&address_list.only())?;
+                            if ip == self.adnl.ip_address() {
+                                return Ok(true);
+                            } else {
+                                log::warn!(
+                                    "Found another stored address {}, expected {}",
+                                    ip,
+                                    self.adnl.ip_address()
+                                );
+                                continue;
+                            }
+                        }
+                        Err(_) => continue,
+                    }
+                }
+                Ok(false)
+            },
+        )
+        .await
+    }
+
+    pub fn fetch_address_locally(
+        &self,
+        peer_id: &AdnlNodeIdShort,
+    ) -> Result<Option<(AdnlAddressUdp, AdnlNodeIdFull)>> {
+        let key = make_dht_key(peer_id, DHT_KEY_ADDRESS);
+        Ok(match self.storage.get(&hash(key)?) {
+            Some(stored) => {
+                let value = deserialize(&stored.value)?;
+                Some(parse_dht_value_address(stored.key, value)?)
+            }
+            None => None,
+        })
     }
 
     pub fn iter_known_peers(&self) -> impl Iterator<Item = &AdnlNodeIdShort> {
@@ -124,6 +313,31 @@ impl DhtNode {
             None => external_iter.get_or_insert_with(Default::default),
         }
         .get(&self.known_peers)
+    }
+
+    pub fn get_known_peers(&self, limit: usize) -> Vec<ton::dht::node::Node> {
+        let mut result = Vec::new();
+
+        'outer: for bucket in &self.buckets {
+            for peer in bucket {
+                result.push(peer.value().clone());
+                if result.len() == limit {
+                    break 'outer;
+                }
+            }
+        }
+
+        result
+    }
+
+    pub async fn ping(&self, peer_id: &AdnlNodeIdShort) -> Result<bool> {
+        let random_id = rand::thread_rng().gen();
+        let query = TLObject::new(ton::rpc::dht::Ping { random_id });
+        let answer = match self.query(peer_id, &query).await? {
+            Some(answer) => parse_answer::<ton::dht::Pong>(answer)?,
+            None => return Ok(false),
+        };
+        Ok(answer.random_id() == &random_id)
     }
 
     fn process_ping(&self, query: &ton::rpc::dht::Ping) -> ton::dht::pong::Pong {
@@ -145,7 +359,12 @@ impl DhtNode {
                 value: value.into_boxed(),
             }
             .into_boxed(),
-            None => ton::dht::valueresult::ValueNotFound { nodes: todo!() }.into_boxed(),
+            None => ton::dht::valueresult::ValueNotFound {
+                nodes: ton::dht::nodes::Nodes {
+                    nodes: self.get_known_peers(query.k as usize).into(),
+                },
+            }
+            .into_boxed(),
         };
 
         Ok(result)
@@ -197,19 +416,166 @@ impl DhtNode {
             .await
     }
 
-    async fn find_value(
+    async fn query_value<F>(
+        &self,
+        peer_id: &AdnlNodeIdShort,
+        query: &TLObject,
+        check: F,
+    ) -> Result<Option<(ton::dht::keydescription::KeyDescription, TLObject)>>
+    where
+        F: Fn(&TLObject) -> bool,
+    {
+        Ok(match self.query(peer_id, query).await? {
+            Some(answer) => match parse_answer::<ton::dht::ValueResult>(answer)? {
+                ton::dht::ValueResult::Dht_ValueFound(answer) => {
+                    let value = answer.value.only();
+                    let object = deserialize(&value.value)?;
+                    if check(&object) {
+                        Some((value.key, object))
+                    } else {
+                        None
+                    }
+                }
+                ton::dht::ValueResult::Dht_ValueNotFound(answer) => {
+                    for node in answer.nodes.nodes.0.into_iter() {
+                        self.add_peer(node)?;
+                    }
+                    None
+                }
+            },
+            None => None,
+        })
+    }
+
+    async fn find_value<F>(
         self: &Arc<Self>,
         key: ton::dht::key::Key,
-    ) -> Result<Vec<(ton::dht::keydescription::KeyDescription, TLObject)>> {
-        let key = hash(key)?;
+        check: F,
+        all: bool,
+        external_iter: &mut Option<ExternalDhtIterator>,
+    ) -> Result<Vec<(ton::dht::keydescription::KeyDescription, TLObject)>>
+    where
+        F: Fn(&TLObject) -> bool + Copy + Send + 'static,
+    {
+        let key_id = hash(key)?;
+        let iter =
+            external_iter.get_or_insert_with(|| ExternalDhtIterator::with_key_id(self, key_id));
+        if iter.key_id != key_id {
+            return Err(DhtNodeError::KeyMismatch.into());
+        }
 
-        //let mut result = Vec::new();
-        let query = TLObject::new(ton::rpc::dht::FindValue {
-            key: ton::int256(key),
+        let mut result = Vec::new();
+        let query = Arc::new(TLObject::new(ton::rpc::dht::FindValue {
+            key: ton::int256(key_id),
             k: 6,
-        });
+        }));
 
-        todo!()
+        let mut response_collector = LimitedResponseCollector::new(MAX_TASKS);
+
+        let mut known_peers_cache_version = self.known_peers.version();
+        loop {
+            while let Some((_, peer_id)) = iter.order.pop() {
+                let dht = self.clone();
+                let query = query.clone();
+                let response_tx = match response_collector.make_request() {
+                    Some(tx) => tx,
+                    None => break,
+                };
+
+                tokio::spawn(async move {
+                    match dht.query_value(&peer_id, &query, check).await {
+                        Ok(found) => response_tx.send(found),
+                        Err(e) => {
+                            log::warn!("find_value error: {}", e);
+                            response_tx.send(None);
+                        }
+                    }
+                });
+            }
+
+            let mut finished = false;
+            loop {
+                match response_collector.wait(!all).await {
+                    Some(Some(response)) => result.push(response),
+                    Some(_) => {}
+                    None => finished = true,
+                }
+
+                if all || result.is_empty() {
+                    let new_cache_version = self.known_peers.version();
+                    if known_peers_cache_version != new_cache_version {
+                        iter.update(self);
+                        known_peers_cache_version = new_cache_version;
+                    }
+                }
+
+                if finished || !all || result.len() < MAX_TASKS {
+                    break;
+                }
+            }
+
+            if finished || all && result.len() >= MAX_TASKS || !all && !result.is_empty() {
+                break;
+            }
+        }
+
+        if iter.order.is_empty() {
+            external_iter.take();
+        }
+
+        Ok(result)
+    }
+
+    async fn store_value<FK, FV>(
+        self: &Arc<Self>,
+        key: ton::dht::key::Key,
+        value: ton::dht::value::Value,
+        check_type: FK,
+        check_all: bool,
+        check_values: FV,
+    ) -> Result<bool>
+    where
+        FK: Fn(&TLObject) -> bool + Copy + Send + 'static,
+        FV: Fn(Vec<(ton::dht::keydescription::KeyDescription, TLObject)>) -> Result<bool>,
+    {
+        let query = Arc::new(TLObject::new(ton::rpc::dht::Store { value }));
+
+        let mut response_collector = ResponseCollector::new();
+
+        let mut iter = ExternalPeersCacheIter::new();
+        while iter.get(&self.known_peers).is_some() {
+            while let Some(peer_id) = iter.get(&self.known_peers) {
+                iter.bump();
+
+                let dht = self.clone();
+                let query = query.clone();
+                let response_tx = response_collector.make_request();
+                tokio::spawn(async move {
+                    let response = match dht.query(&peer_id, &query).await {
+                        Ok(Some(answer)) => match parse_answer::<ton::dht::Stored>(answer) {
+                            Ok(_) => Some(()),
+                            Err(_) => None,
+                        },
+                        Ok(None) => None,
+                        Err(_) => None,
+                    };
+                    response_tx.send(response);
+                });
+            }
+
+            while response_collector.wait(false).await.is_some() {}
+
+            let values = self
+                .find_value(key.clone(), check_type, check_all, &mut None)
+                .await?;
+            if check_values(values)? {
+                return Ok(true);
+            }
+
+            iter.bump();
+        }
+
+        Ok(false)
     }
 
     fn sign_local_node(&self) -> Result<ton::dht::node::Node> {
@@ -298,15 +664,15 @@ impl Subscriber for DhtNode {
 
 pub struct ExternalDhtIterator {
     iter: Option<ExternalPeersCacheIter>,
-    peer_id: AdnlNodeIdShort,
+    key_id: StorageKey,
     order: Vec<(u8, AdnlNodeIdShort)>,
 }
 
 impl ExternalDhtIterator {
-    fn with_peer_id(dht: &DhtNode, peer_id: AdnlNodeIdShort) -> Self {
+    fn with_key_id(dht: &DhtNode, key_id: StorageKey) -> Self {
         let mut result = Self {
             iter: None,
-            peer_id,
+            key_id,
             order: Vec::new(),
         };
         result.update(dht);
@@ -320,7 +686,7 @@ impl ExternalDhtIterator {
         };
 
         while let Some(peer) = next {
-            let affinity = get_affinity(&peer, &self.peer_id);
+            let affinity = get_affinity(&peer.as_slice(), &self.key_id);
 
             let add = match self.order.last() {
                 Some((top_affinity, _)) => {
@@ -369,4 +735,6 @@ enum DhtNodeError {
     InsertedValueExpired,
     #[error("Unsupported store query")]
     UnsupportedStoreQuery,
+    #[error("DHT key mismatch in value search")]
+    KeyMismatch,
 }
