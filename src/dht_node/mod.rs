@@ -5,17 +5,24 @@ use anyhow::Result;
 use dashmap::DashMap;
 use ton_api::ton::{self, TLObject};
 
+use self::buckets::*;
+use self::storage::*;
 use crate::adnl_node::AdnlNode;
 use crate::overlay_node::MAX_PEERS;
+use crate::subscriber::*;
 use crate::utils::*;
+use ton_api::IntoBoxed;
+
+mod buckets;
+mod storage;
 
 pub struct DhtNode {
     adnl: Arc<AdnlNode>,
     node_key: Arc<StoredAdnlNodeKey>,
     known_peers: PeersCache,
 
-    buckets: DashMap<u8, DashMap<AdnlNodeIdShort, ton::dht::node::Node>>,
-    storage: DashMap<AdnlNodeIdShort, ton::dht::value::Value>,
+    buckets: Buckets,
+    storage: Storage,
 
     query_prefix: Vec<u8>,
 }
@@ -28,12 +35,17 @@ impl DhtNode {
             adnl,
             node_key,
             known_peers: PeersCache::with_capacity(MAX_PEERS),
-            buckets: DashMap::new(),
-            storage: DashMap::new(),
+            buckets: Buckets::default(),
+            storage: Storage::default(),
             query_prefix: Vec::new(),
         };
 
-        todo!()
+        let query = ton::rpc::dht::Query {
+            node: dht_node.sign_local_node()?,
+        };
+        serialize_inplace(&mut dht_node.query_prefix, &query)?;
+
+        Ok(Arc::new(dht_node))
     }
 
     pub fn add_peer(&self, peer: &ton::dht::node::Node) -> Result<Option<AdnlNodeIdShort>> {
@@ -53,18 +65,7 @@ impl DhtNode {
         }
 
         if self.known_peers.put(peer_id) {
-            let affinity = get_affinity(self.node_key.id(), &peer_id);
-            let bucket = self.buckets.entry(affinity).or_default();
-            match bucket.entry(peer_id) {
-                Entry::Occupied(entry) => {
-                    if entry.get().version < peer.version {
-                        entry.replace_entry(peer.clone());
-                    }
-                }
-                Entry::Vacant(entry) => {
-                    entry.insert(peer.clone());
-                }
-            }
+            self.buckets.insert(self.node_key.id(), &peer_id, peer);
         }
 
         Ok(Some(peer_id))
@@ -81,7 +82,7 @@ impl DhtNode {
         };
         let nodes = answer.only().nodes;
         for node in nodes.0.iter() {
-            self.add_peer(node);
+            self.add_peer(node)?;
         }
         Ok(true)
     }
@@ -102,6 +103,41 @@ impl DhtNode {
 
     pub fn iter_known_peers(&self) -> impl Iterator<Item = &AdnlNodeIdShort> {
         self.known_peers.iter()
+    }
+
+    fn process_ping(&self, query: &ton::rpc::dht::Ping) -> ton::dht::pong::Pong {
+        ton::dht::pong::Pong {
+            random_id: query.random_id,
+        }
+    }
+
+    fn process_find_node(&self, query: &ton::rpc::dht::FindNode) -> ton::dht::nodes::Nodes {
+        self.buckets.find(self.node_key.id(), &query.key.0, query.k)
+    }
+
+    fn process_find_value(
+        &self,
+        query: &ton::rpc::dht::FindValue,
+    ) -> Result<ton::dht::ValueResult> {
+        let result = match self.storage.get(&query.key.0) {
+            Some(value) => ton::dht::valueresult::ValueFound {
+                value: value.into_boxed(),
+            }
+            .into_boxed(),
+            None => ton::dht::valueresult::ValueNotFound { nodes: todo!() }.into_boxed(),
+        };
+
+        Ok(result)
+    }
+
+    fn process_get_signed_address_list(&self) -> Result<ton::dht::node::Node> {
+        self.sign_local_node()
+    }
+
+    fn process_store(&self, query: &ton::rpc::dht::Store) -> Result<ton::dht::Stored> {
+        todo!();
+
+        Ok(ton::dht::Stored::Dht_Stored)
     }
 
     async fn query(&self, peer_id: &AdnlNodeIdShort, query: &TLObject) -> Result<Option<TLObject>> {
@@ -140,6 +176,102 @@ impl DhtNode {
 
         todo!()
     }
+
+    fn sign_local_node(&self) -> Result<ton::dht::node::Node> {
+        let node = ton::dht::node::Node {
+            id: self.node_key.full_id().as_tl().into_boxed(),
+            addr_list: self.adnl.build_address_list(None),
+            version: now(),
+            signature: Default::default(),
+        };
+        sign_boxed(node, &self.node_key, |node, signature| {
+            let mut node = node.only();
+            node.signature.0 = signature;
+            node
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl Subscriber for DhtNode {
+    async fn try_consume_query(
+        &self,
+        _local_id: &AdnlNodeIdShort,
+        _peer_id: &AdnlNodeIdShort,
+        query: TLObject,
+    ) -> Result<QueryConsumingResult> {
+        let query = match query.downcast::<ton::rpc::dht::Ping>() {
+            Ok(query) => return QueryConsumingResult::consume(self.process_ping(&query)),
+            Err(query) => query,
+        };
+
+        let query = match query.downcast::<ton::rpc::dht::FindNode>() {
+            Ok(query) => return QueryConsumingResult::consume(self.process_find_node(&query)),
+            Err(query) => query,
+        };
+
+        let query = match query.downcast::<ton::rpc::dht::FindValue>() {
+            Ok(query) => {
+                return QueryConsumingResult::consume_boxed(self.process_find_value(&query)?)
+            }
+            Err(query) => query,
+        };
+
+        let query = match query.downcast::<ton::rpc::dht::GetSignedAddressList>() {
+            Ok(_) => return QueryConsumingResult::consume(self.process_get_signed_address_list()?),
+            Err(query) => query,
+        };
+
+        let query = match query.downcast::<ton::rpc::dht::Store>() {
+            Ok(query) => return QueryConsumingResult::consume_boxed(self.process_store(&query)?),
+            Err(query) => query,
+        };
+
+        log::warn!("Unexpected DHT query");
+        Ok(QueryConsumingResult::Rejected(query))
+    }
+
+    async fn try_consume_query_bundle(
+        &self,
+        local_id: &AdnlNodeIdShort,
+        peer_id: &AdnlNodeIdShort,
+        mut queries: Vec<TLObject>,
+    ) -> Result<QueryBundleConsumingResult> {
+        if queries.len() != 2 {
+            return Ok(QueryBundleConsumingResult::Rejected(queries));
+        }
+
+        let peer = match queries.remove(0).downcast::<ton::rpc::dht::Query>() {
+            Ok(query) => query.node,
+            Err(query) => {
+                queries.insert(0, query);
+                return Ok(QueryBundleConsumingResult::Rejected(queries));
+            }
+        };
+
+        self.add_peer(&peer)?;
+
+        let query = queries.remove(0);
+        match self.try_consume_query(local_id, peer_id, query).await? {
+            QueryConsumingResult::Consumed(answer) => {
+                Ok(QueryBundleConsumingResult::Consumed(answer))
+            }
+            QueryConsumingResult::Rejected(_) => Err(DhtNodeError::UnexpectedQuery.into()),
+        }
+    }
+}
+
+fn sign_boxed<T, F>(data: T, key: &StoredAdnlNodeKey, f: F) -> Result<T>
+where
+    T: IntoBoxed,
+    F: FnOnce(T::Boxed, Vec<u8>) -> T,
+{
+    let data = data.into_boxed();
+    let mut buffer = serialize(&data)?;
+    let signature = key.sign(&buffer);
+    buffer.truncate(0);
+    buffer.extend_from_slice(signature.as_ref());
+    Ok(f(data, buffer))
 }
 
 const DHT_KEY_ADDRESS: &str = "address";
@@ -148,4 +280,6 @@ const DHT_KEY_ADDRESS: &str = "address";
 enum DhtNodeError {
     #[error("No address found")]
     NoAddressFound,
+    #[error("Unexpected DHT query")]
+    UnexpectedQuery,
 }

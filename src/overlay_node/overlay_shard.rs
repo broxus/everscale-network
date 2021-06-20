@@ -323,9 +323,7 @@ impl OverlayShard {
                 return Ok(Default::default());
             }
         };
-        let signature = key
-            .private_key()
-            .sign(&signature, key.full_id().public_key());
+        let signature = key.sign(&signature);
 
         let broadcast = ton::overlay::broadcast::Broadcast {
             src: key.full_id().as_tl().into_boxed(),
@@ -578,9 +576,7 @@ impl OverlayShard {
             transfer.seqno as i32,
             None,
         )?;
-        let signature = key
-            .private_key()
-            .sign(&signature, key.full_id().public_key());
+        let signature = key.sign(&signature);
 
         let broadcast = ton::overlay::broadcast::BroadcastFec {
             src: key.full_id().as_tl().into_boxed(),

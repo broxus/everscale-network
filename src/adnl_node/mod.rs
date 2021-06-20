@@ -645,8 +645,6 @@ impl AdnlNode {
             MessageToSend::Multiple(messages) => (None, Some(messages.into())),
         };
 
-        let now = now();
-
         let mut data = serialize(
             &ton::adnl::packetcontents::PacketContents {
                 rand1: ton::bytes(gen_packet_offset()),
@@ -662,13 +660,7 @@ impl AdnlNode {
                 },
                 message,
                 messages,
-                address: Some(ton::adnl::addresslist::AddressList {
-                    addrs: vec![self.config.ip_address().as_tl()].into(),
-                    version: now,
-                    reinit_date: self.start_time,
-                    priority: 0,
-                    expire_at: now + ADDRESS_LIST_TIMEOUT,
-                }),
+                address: Some(self.build_address_list(Some(now() + ADDRESS_LIST_TIMEOUT))),
                 priority_address: None,
                 seqno: Some(peer.sender_state().mask().bump_seqno()),
                 confirm_seqno: Some(peer.receiver_state().mask().seqno()),
@@ -705,6 +697,20 @@ impl AdnlNode {
 
     pub fn ip_address(&self) -> AdnlAddressUdp {
         self.config.ip_address()
+    }
+
+    pub fn build_address_list(
+        &self,
+        expire_at: Option<i32>,
+    ) -> ton::adnl::addresslist::AddressList {
+        let now = now();
+        ton::adnl::addresslist::AddressList {
+            addrs: vec![self.config.ip_address().as_tl()].into(),
+            version: now,
+            reinit_date: self.start_time,
+            priority: 0,
+            expire_at: expire_at.unwrap_or_default(),
+        }
     }
 
     pub fn add_key(&self, key: ed25519_dalek::SecretKey, tag: usize) -> Result<AdnlNodeIdShort> {

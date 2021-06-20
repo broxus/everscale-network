@@ -388,9 +388,7 @@ impl OverlayNode {
             overlay: ton::int256(shard.id().into()),
             version,
         })?;
-        let signature = key
-            .private_key()
-            .sign(&signature, key.full_id().public_key());
+        let signature = key.sign(&signature);
 
         Ok(ton::overlay::node::Node {
             id: key.full_id().as_tl().into_boxed(),

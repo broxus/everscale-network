@@ -184,4 +184,8 @@ impl StoredAdnlNodeKey {
     pub fn private_key_part(&self) -> &[u8; 32] {
         &self.private_key_part
     }
+
+    pub fn sign(&self, data: &[u8]) -> ed25519_dalek::Signature {
+        self.private_key.sign(data, self.full_id.public_key())
+    }
 }

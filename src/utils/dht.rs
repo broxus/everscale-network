@@ -29,35 +29,6 @@ pub fn parse_dht_value_address(
     Ok((ip_address, full_id))
 }
 
-pub fn get_affinity(key1: &AdnlNodeIdShort, key2: &AdnlNodeIdShort) -> u8 {
-    let key1 = key1.as_slice();
-    let key2 = key2.as_slice();
-
-    let mut result = 0;
-    for i in 0..32 {
-        match key1[i] ^ key2[i] {
-            0 => result += 8,
-            x => {
-                if x & 0xf0 == 0 {
-                    result += BITS[(x & 0x0f) as usize] + 4;
-                } else {
-                    result += BITS[(x >> 4) as usize]
-                }
-                break;
-            }
-        }
-    }
-    result
-}
-
-/// XOR  | BITS
-/// 0000 | 4
-/// 0001 | 3
-/// 001x | 2
-/// 01xx | 1
-/// 1xxx | 0
-const BITS: [u8; 16] = [4, 3, 2, 2, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0];
-
 #[derive(thiserror::Error, Debug)]
 enum DhtError {
     #[error("DHT value type mismatch")]
