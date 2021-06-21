@@ -814,7 +814,10 @@ impl AdnlNode {
         log::debug!("Sent query {}", ShortQueryId(&query_id));
 
         self.send_message(local_id, peer_id, message)?;
-        let channel = self.channels_by_peers.get(peer_id);
+        let channel = self
+            .channels_by_peers
+            .get(peer_id)
+            .map(|entry| entry.value().clone());
 
         tokio::spawn({
             let queries = self.queries.clone();
