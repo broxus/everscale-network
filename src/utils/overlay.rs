@@ -120,6 +120,12 @@ impl AsRef<[u8; 32]> for OverlayIdShort {
     }
 }
 
+impl std::fmt::Display for OverlayIdShort {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(&base64::encode(&self.0))
+    }
+}
+
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct PrivateOverlayIdShort([u8; 32]);
 

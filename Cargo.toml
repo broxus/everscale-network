@@ -8,6 +8,7 @@ edition = "2018"
 aes = { version = "0.7", features = ["ctr"] }
 async-trait = "0.1"
 anyhow = "1.0"
+base64 = "0.13"
 curve25519-dalek = "3.1"
 crossbeam-queue = "0.3"
 dashmap = "4.0"

@@ -156,10 +156,10 @@ impl std::fmt::Display for AdnlAddressUdp {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_fmt(format_args!(
             "{}.{}.{}.{}:{}",
-            (self.0 >> 40) as u16,
-            (self.0 >> 32) as u16,
-            (self.0 >> 24) as u16,
-            (self.0 >> 16) as u16,
+            (self.0 >> 40) as u8,
+            (self.0 >> 32) as u8,
+            (self.0 >> 24) as u8,
+            (self.0 >> 16) as u8,
             self.0 as u16
         ))
     }

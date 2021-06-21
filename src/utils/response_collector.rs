@@ -20,6 +20,12 @@ impl<T> ResponseCollector<T> {
     }
 }
 
+impl<T> Default for ResponseCollector<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct LimitedResponseCollector<T> {
     max_count: usize,
     inner: ResponseCollectorImpl<T>,
@@ -31,6 +37,10 @@ impl<T> LimitedResponseCollector<T> {
             max_count,
             inner: ResponseCollectorImpl::new(),
         }
+    }
+
+    pub fn count(&self) -> usize {
+        self.inner.count
     }
 
     pub fn make_request(&mut self) -> Option<ResponseCollectorSender<T>> {

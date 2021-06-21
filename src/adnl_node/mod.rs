@@ -59,9 +59,14 @@ impl AdnlNode {
     pub fn with_config(config: AdnlNodeConfig) -> Arc<Self> {
         let (sender_queue_tx, sender_queue_rx) = mpsc::unbounded_channel();
 
+        let peers = DashMap::new();
+        for key in config.keys().iter() {
+            peers.insert(*key.id(), Default::default());
+        }
+
         Arc::new(Self {
             config,
-            peers: Default::default(),
+            peers,
             channels_by_id: Default::default(),
             channels_by_peers: Default::default(),
             channels_to_confirm: Default::default(),
@@ -483,7 +488,7 @@ impl AdnlNode {
             return Err(AdnlPacketError::ReinitDatesMismatch.into());
         }
 
-        let peers = self.get_peers(&local_id)?;
+        let peers = self.get_peers(local_id)?;
         let peer = if from_channel {
             if let Some(channel) = self.channels_by_peers.get(&peer_id) {
                 peers.get(channel.peer_id())

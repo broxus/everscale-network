@@ -6,16 +6,15 @@ use rand::Rng;
 use ton_api::ton::{self, TLObject};
 use ton_api::IntoBoxed;
 
-use self::buckets::*;
-use self::response_collector::*;
-use self::storage::*;
 use crate::adnl_node::AdnlNode;
 use crate::overlay_node::MAX_PEERS;
 use crate::subscriber::*;
 use crate::utils::*;
 
+use self::buckets::*;
+use self::storage::*;
+
 mod buckets;
-mod response_collector;
 mod storage;
 
 pub struct DhtNode {
@@ -686,7 +685,7 @@ impl ExternalDhtIterator {
         };
 
         while let Some(peer) = next {
-            let affinity = get_affinity(&peer.as_slice(), &self.key_id);
+            let affinity = get_affinity(peer.as_slice(), &self.key_id);
 
             let add = match self.order.last() {
                 Some((top_affinity, _)) => {

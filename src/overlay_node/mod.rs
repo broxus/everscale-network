@@ -259,6 +259,31 @@ impl OverlayNode {
         self.adnl.send_custom_message(local_id, peer_id, &buffer)
     }
 
+    pub async fn get_random_peers(
+        &self,
+        overlay_id: &OverlayIdShort,
+        peer_id: &AdnlNodeIdShort,
+        timeout: Option<u64>,
+    ) -> Result<Option<Vec<ton::overlay::node::Node>>> {
+        let shard = self.get_overlay_shard(overlay_id)?.clone();
+
+        let query = TLObject::new(ton::rpc::overlay::GetRandomPeers {
+            peers: self.prepare_random_peers(&shard)?,
+        });
+        let answer = self.query(overlay_id, peer_id, &query, timeout).await?;
+        match answer {
+            Some(answer) => {
+                let answer: ton::overlay::Nodes = parse_answer(answer)?;
+                log::trace!("Got random peers from {}", peer_id);
+                Ok(Some(self.process_nodes(overlay_id, answer.only())))
+            }
+            None => {
+                log::warn!("No random peers from {}", peer_id);
+                Ok(None)
+            }
+        }
+    }
+
     pub async fn query(
         &self,
         overlay_id: &OverlayIdShort,
