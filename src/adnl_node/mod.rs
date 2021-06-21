@@ -38,7 +38,7 @@ pub struct AdnlNode {
     channels_to_confirm: DashMap<AdnlNodeIdShort, Arc<AdnlChannel>>,
 
     /// Pending transfers of large messages that were split
-    transfers: DashMap<TransferId, Arc<Transfer>>,
+    incoming_transfers: DashMap<TransferId, Arc<Transfer>>,
 
     /// Pending queries
     queries: Arc<QueriesCache>,
@@ -56,21 +56,21 @@ impl AdnlNode {
     pub const MIN_QUERY_TIMEOUT: u64 = 500; // Milliseconds
     pub const MAX_QUERY_TIMEOUT: u64 = 5000; // Milliseconds
 
-    pub fn new(config: AdnlNodeConfig) -> Self {
+    pub fn with_config(config: AdnlNodeConfig) -> Arc<Self> {
         let (sender_queue_tx, sender_queue_rx) = mpsc::unbounded_channel();
 
-        Self {
+        Arc::new(Self {
             config,
             peers: Default::default(),
             channels_by_id: Default::default(),
             channels_by_peers: Default::default(),
             channels_to_confirm: Default::default(),
-            transfers: Default::default(),
+            incoming_transfers: Default::default(),
             queries: Default::default(),
             sender_queue_tx,
             sender_queue_rx: Mutex::new(Some(sender_queue_rx)),
             start_time: now(),
-        }
+        })
     }
 
     pub async fn start(self: &Arc<Self>, mut subscribers: Vec<Arc<dyn Subscriber>>) -> Result<()> {
@@ -107,13 +107,7 @@ impl AdnlNode {
             let start = start.clone();
 
             tokio::spawn(async move {
-                loop {
-                    // Check if node is still alive
-                    let _node = match node.upgrade() {
-                        Some(node) => node,
-                        None => return,
-                    };
-
+                while let Some(_node) = node.upgrade() {
                     // Poll
                     subscriber.poll(&start).await;
                 }
@@ -269,14 +263,14 @@ impl AdnlNode {
         // Handle split message case
         let alt_message = if let ton::adnl::Message::Adnl_Message_Part(part) = message {
             let transfer_id = part.hash.0;
-            let transfer = match self.transfers.entry(transfer_id) {
+            let transfer = match self.incoming_transfers.entry(transfer_id) {
                 // Create new transfer state if it was a new incoming transfer
                 Entry::Vacant(entry) => {
                     let entry = entry.insert(Arc::new(Transfer::new(part.total_size as usize)));
                     let transfer = entry.value().clone();
 
                     tokio::spawn({
-                        let transfers = self.transfers.clone();
+                        let incoming_transfers = self.incoming_transfers.clone();
                         let transfer = transfer.clone();
 
                         async move {
@@ -286,7 +280,7 @@ impl AdnlNode {
                                     continue;
                                 }
 
-                                if transfers.remove(&transfer_id).is_some() {
+                                if incoming_transfers.remove(&transfer_id).is_some() {
                                     log::debug!(
                                         "ADNL transfer {} timed out",
                                         hex::encode(&transfer_id)
@@ -309,11 +303,11 @@ impl AdnlNode {
             // Update transfer
             match transfer.add_part(part.offset as usize, part.data.to_vec(), &transfer_id) {
                 Ok(Some(message)) => {
-                    self.transfers.remove(&transfer_id);
+                    self.incoming_transfers.remove(&transfer_id);
                     Some(message)
                 }
                 Err(error) => {
-                    self.transfers.remove(&transfer_id);
+                    self.incoming_transfers.remove(&transfer_id);
                     return Err(error);
                 }
                 _ => return Ok(()),
@@ -454,7 +448,7 @@ impl AdnlNode {
 
         const CLOCK_TOLERANCE: i32 = 60;
 
-        let explicit_peer_id = peer_id.is_some();
+        let from_channel = peer_id.is_some();
 
         // Extract peer id
         let peer_id = if let Some(peer_id) = peer_id {
@@ -490,7 +484,7 @@ impl AdnlNode {
         }
 
         let peers = self.get_peers(&local_id)?;
-        let peer = if explicit_peer_id {
+        let peer = if from_channel {
             if let Some(channel) = self.channels_by_peers.get(&peer_id) {
                 peers.get(channel.peer_id())
             } else {
@@ -638,47 +632,42 @@ impl AdnlNode {
         signer: MessageSigner,
         message: MessageToSend,
     ) -> Result<()> {
-        const ADDRESS_LIST_TIMEOUT: i32 = 10000; // Seconds
+        const ADDRESS_LIST_TIMEOUT: i32 = 1000; // Seconds
 
         let (message, messages) = match message {
             MessageToSend::Single(message) => (Some(message), None),
             MessageToSend::Multiple(messages) => (None, Some(messages.into())),
         };
 
-        let mut data = serialize(
-            &ton::adnl::packetcontents::PacketContents {
-                rand1: ton::bytes(gen_packet_offset()),
-                from: match signer {
-                    MessageSigner::Channel(_) => None,
-                    MessageSigner::Random(local_id_full) => {
-                        Some(local_id_full.as_tl().into_boxed())
-                    }
-                },
-                from_short: match signer {
-                    MessageSigner::Channel(_) => None,
-                    MessageSigner::Random(_) => Some(local_id.as_tl()),
-                },
-                message,
-                messages,
-                address: Some(self.build_address_list(Some(now() + ADDRESS_LIST_TIMEOUT))),
-                priority_address: None,
-                seqno: Some(peer.sender_state().mask().bump_seqno()),
-                confirm_seqno: Some(peer.receiver_state().mask().seqno()),
-                recv_addr_list_version: None,
-                recv_priority_addr_list_version: None,
-                reinit_date: match signer {
-                    MessageSigner::Channel(_) => None,
-                    MessageSigner::Random(_) => Some(peer.receiver_state().reinit_date()),
-                },
-                dst_reinit_date: match signer {
-                    MessageSigner::Channel(_) => None,
-                    MessageSigner::Random(_) => Some(peer.sender_state().reinit_date()),
-                },
-                signature: None,
-                rand2: ton::bytes(gen_packet_offset()),
-            }
-            .into_boxed(),
-        )?;
+        let mut data = serialize_boxed(ton::adnl::packetcontents::PacketContents {
+            rand1: ton::bytes(gen_packet_offset()),
+            from: match signer {
+                MessageSigner::Channel(_) => None,
+                MessageSigner::Random(local_id_full) => Some(local_id_full.as_tl().into_boxed()),
+            },
+            from_short: match signer {
+                MessageSigner::Channel(_) => None,
+                MessageSigner::Random(_) => Some(local_id.as_tl()),
+            },
+            message,
+            messages,
+            address: Some(self.build_address_list(Some(now() + ADDRESS_LIST_TIMEOUT))),
+            priority_address: None,
+            seqno: Some(peer.sender_state().mask().bump_seqno()),
+            confirm_seqno: Some(peer.receiver_state().mask().seqno()),
+            recv_addr_list_version: None,
+            recv_priority_addr_list_version: None,
+            reinit_date: match signer {
+                MessageSigner::Channel(_) => None,
+                MessageSigner::Random(_) => Some(peer.receiver_state().reinit_date()),
+            },
+            dst_reinit_date: match signer {
+                MessageSigner::Channel(_) => None,
+                MessageSigner::Random(_) => Some(peer.sender_state().reinit_date()),
+            },
+            signature: None,
+            rand2: ton::bytes(gen_packet_offset()),
+        })?;
 
         match signer {
             MessageSigner::Channel(channel) => channel.encrypt(&mut data)?,
@@ -876,7 +865,7 @@ impl AdnlNode {
 
     fn reset_peer(&self, local_id: &AdnlNodeIdShort, peer_id: &AdnlNodeIdShort) -> Result<()> {
         let peers = self.get_peers(local_id)?;
-        let peer = peers.get(peer_id).ok_or(AdnlNodeError::UnknownPeer)?;
+        let mut peer = peers.get_mut(peer_id).ok_or(AdnlNodeError::UnknownPeer)?;
 
         log::warn!("Resetting peer pair {} -> {}", local_id, peer_id);
 
@@ -885,11 +874,7 @@ impl AdnlNode {
             .or_else(|| self.channels_by_peers.remove(peer_id))
             .and_then(|(_, removed)| {
                 let new_peer = peer.clone_with_reinit();
-
-                // Make sure that there are no references to `peers` table
-                std::mem::drop(peer);
-
-                peers.insert(*peer_id, new_peer);
+                *peer = new_peer;
 
                 self.channels_by_id.remove(removed.channel_in_id())
             });
