@@ -1,4 +1,6 @@
-use dashmap::{DashMap, DashSet};
+use std::collections::HashMap;
+
+use dashmap::DashSet;
 use parking_lot::{RwLock, RwLockReadGuard};
 use rand::seq::SliceRandom;
 
@@ -186,7 +188,7 @@ impl<'a> IntoIterator for &'a PeersCache {
 
 struct PeersCacheState {
     version: u64,
-    cache: DashMap<AdnlNodeIdShort, u32>,
+    cache: HashMap<AdnlNodeIdShort, u32>,
     index: Vec<AdnlNodeIdShort>,
     capacity: u32,
     upper: u32,
@@ -194,7 +196,7 @@ struct PeersCacheState {
 
 impl PeersCacheState {
     fn put(&mut self, peer_id: AdnlNodeIdShort) -> bool {
-        use dashmap::mapref::entry::Entry;
+        use std::collections::hash_map::Entry;
 
         // Insert new peer into cache
         let (index, upper) = match self.cache.entry(peer_id) {

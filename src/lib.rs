@@ -10,6 +10,7 @@ pub use subscriber::{
 
 mod adnl_node;
 mod dht_node;
+mod network;
 mod overlay_node;
 mod rldp_node;
 mod subscriber;
