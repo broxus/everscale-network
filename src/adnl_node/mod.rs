@@ -393,10 +393,13 @@ impl AdnlNode {
             "confirmation",
         )?;
 
-        // Insert new channel
-        self.channels_by_peers.insert(*peer_id, channel.clone());
-        self.channels_by_id
-            .insert(*channel.channel_in_id(), channel);
+        // Insert new channel into pending
+        if self.channels_to_confirm.insert(*peer_id, channel).is_some() {
+            // Make sure that removed channel will no longer exist anywhere
+            self.channels_by_peers
+                .remove(peer_id)
+                .and_then(|(_, removed)| self.channels_by_id.remove(removed.channel_in_id()));
+        }
 
         // Done
         Ok(())
@@ -430,13 +433,10 @@ impl AdnlNode {
             None => return Err(AdnlNodeError::ChannelKeyMismatch.into()),
         };
 
-        // Insert new channel into pending
-        if self.channels_to_confirm.insert(*peer_id, channel).is_some() {
-            // Make sure that removed channel will no longer exist anywhere
-            self.channels_by_peers
-                .remove(peer_id)
-                .and_then(|(_, removed)| self.channels_by_id.remove(removed.channel_in_id()));
-        }
+        // Insert new channel
+        self.channels_by_peers.insert(*peer_id, channel.clone());
+        self.channels_by_id
+            .insert(*channel.channel_in_id(), channel);
 
         // Done
         Ok(message)
@@ -811,7 +811,7 @@ impl AdnlNode {
     ) -> Result<Option<ton::TLObject>> {
         let (query_id, message) = build_query(prefix, query)?;
         let pending_query = self.queries.add_query(query_id);
-        log::debug!("Sent query {}", ShortQueryId(&query_id));
+        //log::debug!("Sent query {}", ShortQueryId(&query_id));
 
         self.send_message(local_id, peer_id, message)?;
         let channel = self
@@ -824,18 +824,20 @@ impl AdnlNode {
 
             async move {
                 let timeout = timeout.unwrap_or(Self::MAX_QUERY_TIMEOUT);
-                log::info!(
-                    "Scheduling drop for query {} in {}ms",
-                    ShortQueryId(&query_id),
-                    timeout
-                );
+                // log::info!(
+                //     "Scheduling drop for query {} in {}ms",
+                //     ShortQueryId(&query_id),
+                //     timeout
+                // );
 
                 tokio::time::sleep(Duration::from_millis(timeout)).await;
 
-                log::info!("Trying to drop query {}", ShortQueryId(&query_id));
+                //log::info!("Trying to drop query {}", ShortQueryId(&query_id));
 
                 match queries.update_query(query_id, None).await {
-                    Ok(true) => log::info!("Dropped query {}", ShortQueryId(&query_id)),
+                    Ok(true) => {
+                        //log::info!("Dropped query {}", ShortQueryId(&query_id))
+                    }
                     Err(e) => {
                         log::info!("Failed to drop query {} ({})", ShortQueryId(&query_id), e)
                     }
@@ -845,7 +847,7 @@ impl AdnlNode {
         });
 
         let query = pending_query.wait().await;
-        log::info!("Finished query {}", ShortQueryId(&query_id));
+        //log::info!("Finished query {}", ShortQueryId(&query_id));
 
         match query {
             Ok(Some(answer)) => Ok(Some(deserialize(&answer)?)),

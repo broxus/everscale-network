@@ -306,7 +306,7 @@ impl Neighbours {
         {
             Ok(Some(answer)) => {
                 let capabilities = parse_answer::<ton::ton_node::Capabilities>(answer)?;
-                log::trace!(
+                log::info!(
                     "Got capabilities from {} {}: {:?}",
                     neighbour.peer_id(),
                     self.overlay_id,
