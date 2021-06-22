@@ -341,6 +341,7 @@ impl AdnlNode {
                 }
                 None
             }
+            ton::adnl::Message::Adnl_Message_Nop => None,
             ton::adnl::Message::Adnl_Message_Query(query) => {
                 match process_message_adnl_query(local_id, peer_id, subscribers, query).await? {
                     QueryProcessingResult::Processed(answer) => answer,
@@ -505,7 +506,14 @@ impl AdnlNode {
                 match dst_reinit_date.cmp(&peer.receiver_state().reinit_date()) {
                     Ordering::Equal => {}
                     Ordering::Greater => return Err(AdnlPacketError::DstReinitDateTooNew.into()),
-                    Ordering::Less => return Err(AdnlPacketError::DstReinitDateTooOld.into()),
+                    Ordering::Less => {
+                        self.send_message(
+                            local_id,
+                            &peer_id,
+                            ton::adnl::Message::Adnl_Message_Nop,
+                        )?;
+                        return Err(AdnlPacketError::DstReinitDateTooOld.into());
+                    }
                 }
             }
 
@@ -549,6 +557,13 @@ impl AdnlNode {
     ) -> Result<()> {
         const MAX_ADNL_MESSAGE_SIZE: usize = 1024;
 
+        const MSG_ANSWER_SIZE: usize = 44;
+        const MSG_CONFIRM_CHANNEL_SIZE: usize = 72;
+        const MSG_CREATE_CHANNEL_SIZE: usize = 40;
+        const MSG_CUSTOM_SIZE: usize = 12;
+        const MSG_NOP_SIZE: usize = 4;
+        const MSG_QUERY_SIZE: usize = 44;
+
         let peers = self.get_peers(local_id)?;
         let peer = match peers.get(peer_id) {
             Some(peer) => peer,
@@ -574,14 +589,15 @@ impl AdnlNode {
 
         let mut size = create_channel_message
             .is_some()
-            .then(|| 40)
+            .then(|| MSG_CREATE_CHANNEL_SIZE)
             .unwrap_or_default();
 
         size += match &message {
-            ton::adnl::Message::Adnl_Message_Answer(msg) => msg.answer.len() + 44,
-            ton::adnl::Message::Adnl_Message_ConfirmChannel(_) => 72,
-            ton::adnl::Message::Adnl_Message_Custom(msg) => msg.data.len() + 12,
-            ton::adnl::Message::Adnl_Message_Query(msg) => msg.query.len() + 44,
+            ton::adnl::Message::Adnl_Message_Answer(msg) => msg.answer.len() + MSG_ANSWER_SIZE,
+            ton::adnl::Message::Adnl_Message_ConfirmChannel(_) => MSG_CONFIRM_CHANNEL_SIZE,
+            ton::adnl::Message::Adnl_Message_Custom(msg) => msg.data.len() + MSG_CUSTOM_SIZE,
+            ton::adnl::Message::Adnl_Message_Nop => MSG_NOP_SIZE,
+            ton::adnl::Message::Adnl_Message_Query(msg) => msg.query.len() + MSG_QUERY_SIZE,
             _ => return Err(AdnlNodeError::UnexpectedMessageToSend.into()),
         };
 
@@ -600,29 +616,56 @@ impl AdnlNode {
 
             self.send_packet(local_id, peer_id, peer, signer, message)
         } else {
-            if let Some(message) = create_channel_message.map(MessageToSend::Single) {
-                self.send_packet(local_id, peer_id, peer, signer, message)?;
+            fn build_part_message(
+                data: &[u8],
+                hash: &[u8; 32],
+                max_size: usize,
+                offset: &mut usize,
+            ) -> ton::adnl::Message {
+                let len = std::cmp::min(data.len(), *offset + max_size);
+
+                let result = ton::adnl::message::message::Part {
+                    hash: ton::int256(*hash),
+                    total_size: data.len() as i32,
+                    offset: *offset as i32,
+                    data: ton::bytes(data[*offset..len].to_vec()),
+                }
+                .into_boxed();
+
+                *offset += len;
+                result
             }
 
             let data = serialize(&message)?;
             let hash: [u8; 32] = sha2::Sha256::digest(&data).as_slice().try_into().unwrap();
-
             let mut offset = 0;
-            while offset < data.len() {
-                let next_offset = std::cmp::min(data.len(), offset + MAX_ADNL_MESSAGE_SIZE);
 
-                let message = MessageToSend::Single(
-                    ton::adnl::message::message::Part {
-                        hash: ton::int256(hash),
-                        total_size: data.len() as i32,
-                        offset: offset as i32,
-                        data: ton::bytes(data[offset..next_offset].to_vec()),
-                    }
-                    .into_boxed(),
+            if let Some(create_channel_message) = create_channel_message {
+                let message = build_part_message(
+                    &data,
+                    &hash,
+                    MAX_ADNL_MESSAGE_SIZE - MSG_CREATE_CHANNEL_SIZE,
+                    &mut offset,
                 );
 
+                self.send_packet(
+                    local_id,
+                    peer_id,
+                    peer,
+                    signer,
+                    MessageToSend::Multiple(vec![create_channel_message, message]),
+                )?;
+            }
+
+            while offset < data.len() {
+                let message = MessageToSend::Single(build_part_message(
+                    &data,
+                    &hash,
+                    MAX_ADNL_MESSAGE_SIZE,
+                    &mut offset,
+                ));
+
                 self.send_packet(local_id, peer_id, peer, signer, message)?;
-                offset = next_offset;
             }
 
             Ok(())
