@@ -96,7 +96,7 @@ impl DhtNode {
     pub async fn find_overlay_nodes(
         self: &Arc<Self>,
         overlay_id: &OverlayIdShort,
-        external_iter: &mut Option<ExternalDhtIterator>,
+        external_iter: &mut Option<ExternalDhtIter>,
     ) -> Result<Vec<(AdnlAddressUdp, ton::overlay::node::Node)>> {
         let mut result = Vec::new();
         let mut nodes = Vec::new();
@@ -451,14 +451,13 @@ impl DhtNode {
         key: ton::dht::key::Key,
         check: F,
         all: bool,
-        external_iter: &mut Option<ExternalDhtIterator>,
+        external_iter: &mut Option<ExternalDhtIter>,
     ) -> Result<Vec<(ton::dht::keydescription::KeyDescription, TLObject)>>
     where
         F: Fn(&TLObject) -> bool + Copy + Send + 'static,
     {
         let key_id = hash(key)?;
-        let iter =
-            external_iter.get_or_insert_with(|| ExternalDhtIterator::with_key_id(self, key_id));
+        let iter = external_iter.get_or_insert_with(|| ExternalDhtIter::with_key_id(self, key_id));
         if iter.key_id != key_id {
             return Err(DhtNodeError::KeyMismatch.into());
         }
@@ -661,13 +660,13 @@ impl Subscriber for DhtNode {
     }
 }
 
-pub struct ExternalDhtIterator {
+pub struct ExternalDhtIter {
     iter: Option<ExternalPeersCacheIter>,
     key_id: StorageKey,
     order: Vec<(u8, AdnlNodeIdShort)>,
 }
 
-impl ExternalDhtIterator {
+impl ExternalDhtIter {
     fn with_key_id(dht: &DhtNode, key_id: StorageKey) -> Self {
         let mut result = Self {
             iter: None,

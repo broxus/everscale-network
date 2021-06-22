@@ -929,6 +929,15 @@ impl AdnlNode {
     }
 }
 
+pub fn compute_adnl_query_timeout(roundtrip: Option<u64>) -> u64 {
+    let timeout = roundtrip.unwrap_or(AdnlNode::MAX_QUERY_TIMEOUT);
+    if timeout < AdnlNode::MIN_QUERY_TIMEOUT {
+        AdnlNode::MIN_QUERY_TIMEOUT
+    } else {
+        timeout
+    }
+}
+
 struct PacketToSend {
     destination: AdnlAddressUdp,
     data: Vec<u8>,
