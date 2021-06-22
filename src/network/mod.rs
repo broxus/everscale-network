@@ -5,4 +5,4 @@ mod neighbour;
 mod neighbours;
 mod neighbours_cache;
 
-const MAX_NEIGHBOURS: usize = 16;
+pub const MAX_NEIGHBOURS: usize = 16;

@@ -10,7 +10,7 @@ use sha2::Digest;
 use tokio::sync::mpsc;
 use ton_api::{ton, IntoBoxed};
 
-use super::{broadcast_receiver::*, MAX_PEERS};
+use super::{broadcast_receiver::*, MAX_OVERLAY_PEERS};
 use crate::adnl_node::*;
 use crate::rldp_node::*;
 use crate::utils::*;
@@ -64,7 +64,7 @@ impl OverlayShard {
             received_catchain: Arc::new(BroadcastReceiver::default()),
             nodes: DashMap::new(),
             ignored_peers: DashSet::new(),
-            known_peers: PeersCache::with_capacity(MAX_PEERS),
+            known_peers: PeersCache::with_capacity(MAX_OVERLAY_PEERS),
             random_peers: PeersCache::with_capacity(MAX_SHARD_PEERS),
             neighbours: PeersCache::with_capacity(MAX_SHARD_NEIGHBOURS),
             query_prefix,

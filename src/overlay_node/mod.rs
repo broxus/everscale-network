@@ -545,7 +545,7 @@ impl Subscriber for OverlayNode {
 
 const MAX_RANDOM_PEERS: usize = 4;
 
-pub const MAX_PEERS: usize = 65536;
+pub const MAX_OVERLAY_PEERS: usize = 65536;
 
 enum QueryBundleType {
     Public,
@@ -553,7 +553,7 @@ enum QueryBundleType {
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum OverlayNodeError {
+enum OverlayNodeError {
     #[error("Unsupported private overlay message")]
     UnsupportedPrivateOverlayMessage,
     #[error("Unsupported overlay message")]

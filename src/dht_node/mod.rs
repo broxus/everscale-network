@@ -7,7 +7,7 @@ use ton_api::ton::{self, TLObject};
 use ton_api::IntoBoxed;
 
 use crate::adnl_node::AdnlNode;
-use crate::overlay_node::MAX_PEERS;
+use crate::overlay_node::MAX_OVERLAY_PEERS;
 use crate::subscriber::*;
 use crate::utils::*;
 
@@ -35,7 +35,7 @@ impl DhtNode {
         let mut dht_node = Self {
             adnl,
             node_key,
-            known_peers: PeersCache::with_capacity(MAX_PEERS),
+            known_peers: PeersCache::with_capacity(MAX_OVERLAY_PEERS),
             buckets: Buckets::default(),
             storage: Storage::default(),
             query_prefix: Vec::new(),
@@ -126,7 +126,7 @@ impl DhtNode {
 
             let mut response_collector = ResponseCollector::new();
 
-            let cache = PeersCache::with_capacity(MAX_PEERS);
+            let cache = PeersCache::with_capacity(MAX_OVERLAY_PEERS);
             while let Some(node) = nodes.pop() {
                 let peer_full_id = AdnlNodeIdFull::try_from(&node.id)?;
                 let peer_id = peer_full_id.compute_short_id()?;

@@ -197,7 +197,7 @@ impl AdnlNode {
                         .handle_received_data(PacketView::from(buffer.as_mut_slice()), &subscribers)
                         .await
                     {
-                        log::warn!("Failed to handle received data: {}", e);
+                        log::debug!("Failed to handle received data: {}", e);
                     }
                 });
             }

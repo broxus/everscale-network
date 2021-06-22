@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::Result;
 use parking_lot::{RwLock, RwLockWriteGuard};
 use rand::Rng;
 
@@ -22,7 +21,7 @@ impl NeighboursCache {
 
         let mut state = result.state.write();
         for peer_id in initial_peers.iter().take(MAX_NEIGHBOURS) {
-            state.insert(*peer_id).unwrap();
+            state.insert(*peer_id);
         }
         std::mem::drop(state);
 
@@ -47,6 +46,10 @@ impl NeighboursCache {
         average_failures: f64,
     ) -> Option<Arc<Neighbour>> {
         self.state.read().choose_neighbour(rng, average_failures)
+    }
+
+    pub fn insert(&self, peer_id: AdnlNodeIdShort) -> bool {
+        self.state.write().insert(peer_id)
     }
 
     pub fn get(&self, peer_id: &AdnlNodeIdShort) -> Option<Arc<Neighbour>> {
@@ -155,21 +158,21 @@ impl NeighboursCacheState {
         result
     }
 
-    pub fn insert(&mut self, peer_id: AdnlNodeIdShort) -> Result<bool> {
+    pub fn insert(&mut self, peer_id: AdnlNodeIdShort) -> bool {
         use std::collections::hash_map::Entry;
 
         if self.indices.len() >= MAX_NEIGHBOURS {
-            return Err(NeighboursCacheError::Overflow.into());
+            return false;
         }
 
-        Ok(match self.values.entry(peer_id) {
+        match self.values.entry(peer_id) {
             Entry::Vacant(entry) => {
                 entry.insert(Arc::new(Neighbour::new(peer_id)));
                 self.indices.push(peer_id);
                 true
             }
             Entry::Occupied(_) => false,
-        })
+        }
     }
 
     pub fn insert_or_replace_unreliable<R: Rng>(
@@ -259,9 +262,4 @@ pub enum NeighboursCacheHint {
     HasSpace,
     MaybeHasUnreliable,
     DefinitelyFull,
-}
-#[derive(thiserror::Error, Debug)]
-enum NeighboursCacheError {
-    #[error("Neighbours cache overflow")]
-    Overflow,
 }

@@ -36,8 +36,8 @@ impl Neighbours {
         overlay: &Arc<OverlayNode>,
         overlay_id: &OverlayIdShort,
         initial_peers: &[AdnlNodeIdShort],
-    ) -> Self {
-        Self {
+    ) -> Arc<Self> {
+        Arc::new(Self {
             dht: dht.clone(),
             overlay: overlay.clone(),
             overlay_id: *overlay_id,
@@ -46,7 +46,7 @@ impl Neighbours {
             failed_attempts: Default::default(),
             all_attempts: Default::default(),
             start: Instant::now(),
-        }
+        })
     }
 
     pub fn start_reloading_neighbours(self: &Arc<Self>) {
@@ -145,11 +145,15 @@ impl Neighbours {
         self.cache.contains(peer_id)
     }
 
+    pub fn add(&self, peer_id: AdnlNodeIdShort) -> bool {
+        self.cache.insert(peer_id)
+    }
+
     pub fn contains_overlay_peer(&self, peer_id: &AdnlNodeIdShort) -> bool {
         self.overlay_peers.contains(peer_id)
     }
 
-    pub fn insert_overlay_peer(&self, peer_id: AdnlNodeIdShort) {
+    pub fn add_overlay_peer(&self, peer_id: AdnlNodeIdShort) {
         self.overlay_peers.insert(peer_id);
     }
 
@@ -240,7 +244,7 @@ impl Neighbours {
                 match neighbours.dht.find_address(&peer_id).await {
                     Ok((ip, _)) => {
                         log::info!("add_new_peers: found overlay peer address: {}", ip);
-                        neighbours.insert_overlay_peer(peer_id);
+                        neighbours.add_overlay_peer(peer_id);
                     }
                     Err(e) => {
                         log::warn!("add_new_peers: failed to find overlay peer address: {}", e);
