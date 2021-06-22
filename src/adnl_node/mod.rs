@@ -38,7 +38,7 @@ pub struct AdnlNode {
     channels_to_confirm: DashMap<AdnlNodeIdShort, Arc<AdnlChannel>>,
 
     /// Pending transfers of large messages that were split
-    incoming_transfers: DashMap<TransferId, Arc<Transfer>>,
+    incoming_transfers: Arc<DashMap<TransferId, Arc<Transfer>>>,
 
     /// Pending queries
     queries: Arc<QueriesCache>,
@@ -214,7 +214,12 @@ impl AdnlNode {
         let (local_id, peer_id) =
             if let Some(local_id) = parse_handshake_packet(self.config.keys(), &mut data, None)? {
                 (local_id, None)
-            } else if let Some(channel) = self.channels_by_id.get(&data[0..32]) {
+            } else if let Some(channel) = {
+                log::warn!("GOT MESSAGE FROM CHANNE");
+                self.channels_by_id.get(&data[0..32])
+            } {
+                log::warn!("GOT MESSAGE FROM !KNOWN! CHANNEL: {}", channel.peer_id());
+
                 let channel = channel.value();
                 channel.decrypt(&mut data)?;
                 if let Some((key, removed)) = self.channels_to_confirm.remove(channel.peer_id()) {
@@ -395,12 +400,19 @@ impl AdnlNode {
         )?;
 
         // Insert new channel into pending
-        if self.channels_to_confirm.insert(*peer_id, channel).is_some() {
+        if self
+            .channels_to_confirm
+            .insert(*peer_id, channel.clone())
+            .is_some()
+        {
             // Make sure that removed channel will no longer exist anywhere
             self.channels_by_peers
                 .remove(peer_id)
                 .and_then(|(_, removed)| self.channels_by_id.remove(removed.channel_in_id()));
         }
+
+        self.channels_by_id
+            .insert(*channel.channel_in_id(), channel);
 
         // Done
         Ok(())
