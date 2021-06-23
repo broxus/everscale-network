@@ -220,7 +220,7 @@ impl Neighbours {
                 let neighbours = self.clone();
                 tokio::spawn(async move {
                     if let Err(e) = neighbours.update_capabilities(neighbour).await {
-                        log::warn!("Failed to ping peer: {}", e);
+                        log::debug!("Failed to ping peer: {}", e);
                     }
                     response_tx.send(Some(()));
                 });

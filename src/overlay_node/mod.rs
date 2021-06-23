@@ -278,7 +278,7 @@ impl OverlayNode {
                 Ok(Some(self.process_nodes(overlay_id, answer.only())))
             }
             None => {
-                log::warn!("No random peers from {}", peer_id);
+                log::trace!("No random peers from {}", peer_id);
                 Ok(None)
             }
         }
