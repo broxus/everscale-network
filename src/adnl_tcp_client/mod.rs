@@ -13,6 +13,7 @@ use ton_api::IntoBoxed;
 
 use self::ping_cache::*;
 use crate::utils::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 mod ping_cache;
 
@@ -20,6 +21,7 @@ pub struct AdnlTcpClient {
     ping_cache: Arc<PingCache>,
     queries_cache: Arc<QueriesCache>,
     sender: mpsc::UnboundedSender<PacketToSend>,
+    pub has_broken: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone)]
@@ -30,6 +32,9 @@ pub struct AdnlTcpClientConfig {
 
 impl AdnlTcpClient {
     pub async fn ping(&self, timeout: u64) -> Result<()> {
+        if self.has_broken.load(Ordering::Acquire) {
+            anyhow::bail!("Socket is closed")
+        }
         let (seqno, pending_ping) = self.ping_cache.add_query();
         let message = serialize(&TLObject::new(pending_ping.as_tl()))?;
         let _ = self.sender.send(PacketToSend {
@@ -58,6 +63,9 @@ impl AdnlTcpClient {
     }
 
     pub async fn query(&self, query: &TLObject) -> Result<TLObject> {
+        if self.has_broken.load(Ordering::Acquire) {
+            anyhow::bail!("Socket is closed")
+        }
         let (query_id, message) = build_query(query)?;
         let message = serialize(&message)?;
 
@@ -93,10 +101,13 @@ impl AdnlTcpClient {
 
         let socket = tokio::net::TcpSocket::new_v4()?;
         socket.set_reuseaddr(true)?;
-
         let socket = tokio::net::TcpStream::connect(config.server_address).await?;
         socket.set_linger(Some(Duration::from_secs(0)))?;
-        let (mut socket_rx, mut socket_tx) = socket.into_split();
+        let (socket_rx, socket_tx) = socket.into_split();
+        let mut socket_rx = tokio_io_timeout::TimeoutReader::new(socket_rx);
+        socket_rx.set_timeout(Some(Duration::from_secs(5)));
+        let mut socket_tx = tokio_io_timeout::TimeoutWriter::new(socket_tx);
+        socket_tx.set_timeout(Some(Duration::from_secs(5)));
 
         let (tx, mut rx) = mpsc::unbounded_channel();
 
@@ -116,9 +127,12 @@ impl AdnlTcpClient {
             ping_cache: Arc::new(Default::default()),
             queries_cache: Arc::new(Default::default()),
             sender: tx,
+            has_broken: Arc::new(AtomicBool::new(false)),
         });
 
+        let has_broken = client.has_broken.clone();
         tokio::spawn(async move {
+            let has_broken = has_broken.clone();
             while let Some(mut packet) = rx.recv().await {
                 if packet.should_encrypt {
                     let packet = &mut packet.data;
@@ -137,39 +151,47 @@ impl AdnlTcpClient {
                     cipher_send.apply_keystream(packet);
                 }
 
-                if let Err(e) = socket_tx.write_all(&packet.data).await {
+                if let Err(e) = socket_tx.get_mut().write_all(&packet.data).await {
                     log::error!("Failed to send packet: {}", e);
+                    has_broken.store(true, Ordering::SeqCst);
+                    return;
                 }
             }
         });
 
         tokio::spawn({
             let client = Arc::downgrade(&client);
-
             async move {
                 loop {
                     let client = match client.upgrade() {
                         Some(client) => client,
                         None => return,
                     };
+                    if client.has_broken.load(Ordering::Acquire) {
+                        return;
+                    }
 
                     let mut length = [0; 4];
-                    if let Err(e) = socket_rx.read_exact(&mut length).await {
+                    if let Err(e) = socket_rx.get_mut().read_exact(&mut length).await {
                         log::error!("Failed to read packet length: {}", e);
-                        continue;
+                        client.has_broken.store(true, Ordering::SeqCst);
+                        return;
                     }
                     cipher_receive.apply_keystream(&mut length);
 
                     let length = u32::from_le_bytes(length) as usize;
                     if length < 64 {
                         log::error!("Too small size for ADNL packet: {}", length);
+                        client.has_broken.store(true, Ordering::SeqCst);
                         continue;
                     }
 
+                    //todo upper bound buffer check. OOM is bad, u know
                     let mut buffer = vec![0; length];
-                    if let Err(e) = socket_rx.read_exact(&mut buffer).await {
+                    if let Err(e) = socket_rx.get_mut().read_exact(&mut buffer).await {
                         log::error!("Failed to read buffer of length {}: {}", length, e);
-                        continue;
+                        client.has_broken.store(true, Ordering::SeqCst);
+                        return;
                     }
                     cipher_receive.apply_keystream(&mut buffer);
 
