@@ -249,10 +249,6 @@ fn build_query(query: &TLObject) -> Result<(QueryId, ton::adnl::Message)> {
 }
 
 #[derive(thiserror::Error, Debug)]
-#[error("Bad public key data")]
-struct BadPublicKeyData;
-
-#[derive(thiserror::Error, Debug)]
 #[error("Query timeout")]
 struct QueryTimeout;
 
