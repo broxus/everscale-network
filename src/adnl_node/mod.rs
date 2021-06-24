@@ -56,6 +56,15 @@ impl AdnlNode {
     pub const MIN_QUERY_TIMEOUT: u64 = 500; // Milliseconds
     pub const MAX_QUERY_TIMEOUT: u64 = 5000; // Milliseconds
 
+    pub fn compute_query_timeout(roundtrip: Option<u64>) -> u64 {
+        let timeout = roundtrip.unwrap_or(AdnlNode::MAX_QUERY_TIMEOUT);
+        if timeout < AdnlNode::MIN_QUERY_TIMEOUT {
+            AdnlNode::MIN_QUERY_TIMEOUT
+        } else {
+            timeout
+        }
+    }
+
     pub fn with_config(config: AdnlNodeConfig) -> Arc<Self> {
         let (sender_queue_tx, sender_queue_rx) = mpsc::unbounded_channel();
 
@@ -962,15 +971,6 @@ impl AdnlNode {
         log::debug!("Channel {}: {} -> {}", context, local_id, peer_id);
 
         Ok(Arc::new(channel))
-    }
-}
-
-pub fn compute_adnl_query_timeout(roundtrip: Option<u64>) -> u64 {
-    let timeout = roundtrip.unwrap_or(AdnlNode::MAX_QUERY_TIMEOUT);
-    if timeout < AdnlNode::MIN_QUERY_TIMEOUT {
-        AdnlNode::MIN_QUERY_TIMEOUT
-    } else {
-        timeout
     }
 }
 

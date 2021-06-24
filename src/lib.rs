@@ -3,7 +3,7 @@
 pub use adnl_node::{AdnlNode, AdnlNodeConfig};
 pub use adnl_tcp_client::{AdnlTcpClient, AdnlTcpClientConfig};
 pub use dht_node::{DhtNode, ExternalDhtIter};
-pub use network::{Neighbour, Neighbours, MAX_NEIGHBOURS};
+pub use network::{Neighbour, Neighbours, OverlayClient, MAX_NEIGHBOURS};
 pub use overlay_node::{OverlayNode, MAX_OVERLAY_PEERS};
 pub use rldp_node::RldpNode;
 pub use subscriber::{

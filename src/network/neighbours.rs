@@ -297,7 +297,7 @@ impl Neighbours {
             self.overlay_id
         );
 
-        let timeout = Some(compute_adnl_query_timeout(neighbour.roundtrip_adnl()));
+        let timeout = Some(AdnlNode::compute_query_timeout(neighbour.roundtrip_adnl()));
 
         match self
             .overlay
