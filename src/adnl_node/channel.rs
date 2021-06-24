@@ -22,10 +22,10 @@ impl AdnlChannel {
     pub fn new(
         local_id: AdnlNodeIdShort,
         peer_id: AdnlNodeIdShort,
-        local_private_key_part: &[u8; 32],
-        peer_public_key: &[u8; 32],
+        channel_private_key_part: &[u8; 32],
+        channel_public_key: &[u8; 32],
     ) -> Result<Self> {
-        let shared_secret = compute_shared_secret(local_private_key_part, peer_public_key)?;
+        let shared_secret = compute_shared_secret(channel_private_key_part, channel_public_key)?;
         let mut reversed_secret = shared_secret;
         reversed_secret.reverse();
 
@@ -36,8 +36,8 @@ impl AdnlChannel {
         };
 
         Ok(Self {
-            channel_out: ChannelSide::from_secret(in_secret)?,
-            channel_in: ChannelSide::from_secret(out_secret)?,
+            channel_out: ChannelSide::from_secret(out_secret)?,
+            channel_in: ChannelSide::from_secret(in_secret)?,
             local_id,
             peer_id,
             drop: Default::default(),
@@ -119,6 +119,33 @@ impl ChannelSide {
     }
 }
 
+pub struct ChannelKey {
+    public_key: ed25519_dalek::PublicKey,
+    private_key_part: [u8; 32],
+}
+
+impl ChannelKey {
+    pub fn generate() -> Self {
+        let private_key = ed25519_dalek::SecretKey::generate(&mut rand::thread_rng());
+        let public_key = ed25519_dalek::PublicKey::from(&private_key);
+        let private_key = ed25519_dalek::ExpandedSecretKey::from(&private_key);
+        let private_key_part = private_key.to_bytes()[0..32].try_into().unwrap();
+
+        Self {
+            public_key,
+            private_key_part,
+        }
+    }
+
+    pub fn public_key(&self) -> &ed25519_dalek::PublicKey {
+        &self.public_key
+    }
+
+    pub fn private_key_part(&self) -> &[u8; 32] {
+        &self.private_key_part
+    }
+}
+
 pub type AdnlChannelId = [u8; 32];
 
 fn compute_channel_id(secret: [u8; 32]) -> Result<AdnlChannelId> {
@@ -138,4 +165,62 @@ enum AdnlChannelError {
     ChannelMessageIsTooShort(usize),
     #[error("Invalid channel message checksum")]
     InvalidChannelMessageChecksum,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_encrypt_decrypt() {
+        let peer1_key = ed25519_dalek::SecretKey::generate(&mut rand::thread_rng());
+        let peer1_id = peer1_key.compute_node_ids().unwrap().1;
+        let peer1_channel_key = ChannelKey::generate();
+
+        let peer2_key = ed25519_dalek::SecretKey::generate(&mut rand::thread_rng());
+        let peer2_id = peer2_key.compute_node_ids().unwrap().1;
+        let peer2_channel_key = ChannelKey::generate();
+
+        let channel12 = AdnlChannel::new(
+            peer1_id,
+            peer2_id,
+            peer1_channel_key.private_key_part(),
+            peer2_channel_key.public_key().as_bytes(),
+        )
+        .unwrap();
+
+        let channel21 = AdnlChannel::new(
+            peer2_id,
+            peer1_id,
+            peer2_channel_key.private_key_part(),
+            peer1_channel_key.public_key().as_bytes(),
+        )
+        .unwrap();
+
+        let message = "Hello world!";
+
+        // Send 1 to 2
+        {
+            let mut packet = message.as_bytes().to_vec();
+            channel12.encrypt(&mut packet).unwrap();
+
+            let mut received_packet = PacketView::from(packet.as_mut_slice());
+            channel21.decrypt(&mut received_packet).unwrap();
+
+            let received_message = String::from_utf8(received_packet.as_slice().to_vec()).unwrap();
+            assert_eq!(received_message, message);
+        }
+
+        // Send 2 to 1
+        {
+            let mut packet = message.as_bytes().to_vec();
+            channel21.encrypt(&mut packet).unwrap();
+
+            let mut received_packet = PacketView::from(packet.as_mut_slice());
+            channel12.decrypt(&mut received_packet).unwrap();
+
+            let received_message = String::from_utf8(received_packet.as_slice().to_vec()).unwrap();
+            assert_eq!(received_message, message);
+        }
+    }
 }
