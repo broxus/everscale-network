@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 
 use dashmap::DashMap;
 
+use super::channel::ChannelKey;
 use crate::utils::*;
 
 pub type AdnlPeers = DashMap<AdnlNodeIdShort, AdnlPeer>;
@@ -9,6 +10,7 @@ pub type AdnlPeers = DashMap<AdnlNodeIdShort, AdnlPeer>;
 pub struct AdnlPeer {
     id: AdnlNodeIdFull,
     ip_address: AtomicU64,
+    channel_key: ChannelKey,
     receiver_state: AdnlPeerState,
     sender_state: AdnlPeerState,
 }
@@ -18,6 +20,7 @@ impl AdnlPeer {
         Self {
             id,
             ip_address: AtomicU64::new(ip_address.into()),
+            channel_key: ChannelKey::generate(),
             receiver_state: AdnlPeerState::for_receive_with_reinit_date(reinit_date),
             sender_state: AdnlPeerState::for_send(),
         }
@@ -29,6 +32,10 @@ impl AdnlPeer {
 
     pub fn ip_address(&self) -> AdnlAddressUdp {
         self.ip_address.load(Ordering::Acquire).into()
+    }
+
+    pub fn channel_key(&self) -> &ChannelKey {
+        &self.channel_key
     }
 
     pub fn set_ip_address(&self, ip_address: AdnlAddressUdp) {
@@ -49,6 +56,7 @@ impl AdnlPeer {
         Self {
             id: self.id,
             ip_address: AtomicU64::from(self.ip_address.load(Ordering::Acquire)),
+            channel_key: ChannelKey::generate(),
             receiver_state: AdnlPeerState::for_receive_with_reinit_date(reinit_date + 1),
             sender_state: AdnlPeerState::for_send(),
         }

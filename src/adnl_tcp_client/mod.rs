@@ -1,4 +1,5 @@
 use std::net::SocketAddrV4;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,7 +14,6 @@ use ton_api::IntoBoxed;
 
 use self::ping_cache::*;
 use crate::utils::*;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 mod ping_cache;
 
@@ -28,13 +28,16 @@ pub struct AdnlTcpClient {
 pub struct AdnlTcpClientConfig {
     pub server_address: SocketAddrV4,
     pub server_key: ed25519_dalek::PublicKey,
+    pub socket_read_timeout: Duration,
+    pub socket_send_timeout: Duration,
 }
 
 impl AdnlTcpClient {
     pub async fn ping(&self, timeout: u64) -> Result<()> {
         if self.has_broken.load(Ordering::Acquire) {
-            anyhow::bail!("Socket is closed")
+            return Err(AdnlTcpClientError::SocketClosed.into());
         }
+
         let (seqno, pending_ping) = self.ping_cache.add_query();
         let message = serialize(&TLObject::new(pending_ping.as_tl()))?;
         let _ = self.sender.send(PacketToSend {
@@ -64,8 +67,9 @@ impl AdnlTcpClient {
 
     pub async fn query(&self, query: &TLObject) -> Result<TLObject> {
         if self.has_broken.load(Ordering::Acquire) {
-            anyhow::bail!("Socket is closed")
+            return Err(AdnlTcpClientError::SocketClosed.into());
         }
+
         let (query_id, message) = build_query(query)?;
         let message = serialize(&message)?;
 
@@ -92,7 +96,7 @@ impl AdnlTcpClient {
 
         match pending_query.wait().await? {
             Some(query) => Ok(deserialize(&query)?),
-            None => Err(QueryTimeout.into()),
+            None => Err(AdnlTcpClientError::QueryTimeout.into()),
         }
     }
 
@@ -105,9 +109,9 @@ impl AdnlTcpClient {
         socket.set_linger(Some(Duration::from_secs(0)))?;
         let (socket_rx, socket_tx) = socket.into_split();
         let mut socket_rx = tokio_io_timeout::TimeoutReader::new(socket_rx);
-        socket_rx.set_timeout(Some(Duration::from_secs(5)));
+        socket_rx.set_timeout(Some(config.socket_read_timeout));
         let mut socket_tx = tokio_io_timeout::TimeoutWriter::new(socket_tx);
-        socket_tx.set_timeout(Some(Duration::from_secs(5)));
+        socket_tx.set_timeout(Some(config.socket_send_timeout));
 
         let (tx, mut rx) = mpsc::unbounded_channel();
 
@@ -175,23 +179,21 @@ impl AdnlTcpClient {
                     let mut length = [0; 4];
                     if let Err(e) = socket_rx.get_mut().read_exact(&mut length).await {
                         log::error!("Failed to read packet length: {}", e);
-                        client.has_broken.store(true, Ordering::SeqCst);
+                        client.has_broken.store(true, Ordering::Release);
                         return;
                     }
                     cipher_receive.apply_keystream(&mut length);
 
                     let length = u32::from_le_bytes(length) as usize;
                     if length < 64 {
-                        log::error!("Too small size for ADNL packet: {}", length);
-                        client.has_broken.store(true, Ordering::SeqCst);
+                        log::warn!("Too small size for ADNL packet: {}", length);
                         continue;
                     }
 
-                    //todo upper bound buffer check. OOM is bad, u know
                     let mut buffer = vec![0; length];
                     if let Err(e) = socket_rx.get_mut().read_exact(&mut buffer).await {
                         log::error!("Failed to read buffer of length {}: {}", length, e);
-                        client.has_broken.store(true, Ordering::SeqCst);
+                        client.has_broken.store(true, Ordering::Release);
                         return;
                     }
                     cipher_receive.apply_keystream(&mut buffer);
@@ -271,11 +273,15 @@ fn build_query(query: &TLObject) -> Result<(QueryId, ton::adnl::Message)> {
     ))
 }
 
-#[derive(thiserror::Error, Debug)]
-#[error("Query timeout")]
-struct QueryTimeout;
-
 struct PacketToSend {
     data: Vec<u8>,
     should_encrypt: bool,
+}
+
+#[derive(thiserror::Error, Debug)]
+enum AdnlTcpClientError {
+    #[error("Query timeout")]
+    QueryTimeout,
+    #[error("Socket is closed")]
+    SocketClosed,
 }
