@@ -157,7 +157,7 @@ impl AdnlTcpClient {
 
                 if let Err(e) = socket_tx.get_mut().write_all(&packet.data).await {
                     log::error!("Failed to send packet: {}", e);
-                    has_broken.store(true, Ordering::SeqCst);
+                    has_broken.store(true, Ordering::Release);
                     return;
                 }
             }
