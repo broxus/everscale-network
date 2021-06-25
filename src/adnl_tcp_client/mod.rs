@@ -33,7 +33,7 @@ pub struct AdnlTcpClientConfig {
 }
 
 impl AdnlTcpClient {
-    pub async fn ping(&self, timeout: u64) -> Result<()> {
+    pub async fn ping(&self, timeout: Duration) -> Result<()> {
         if self.has_broken.load(Ordering::Acquire) {
             return Err(AdnlTcpClientError::SocketClosed.into());
         }
@@ -49,7 +49,6 @@ impl AdnlTcpClient {
             let ping_cache = self.ping_cache.clone();
 
             async move {
-                let timeout = Duration::from_secs(timeout);
                 tokio::time::sleep(timeout).await;
 
                 match ping_cache.update_query(seqno, false).await {
