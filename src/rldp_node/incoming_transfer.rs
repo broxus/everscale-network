@@ -133,10 +133,10 @@ impl IncomingTransfer {
                 Ok(Some(self.buffer.as_slice()))
             }
             None if self.confirm_count == 9 => {
-                let seqno = decoder.seqno() as i32;
+                let max_seqno = decoder.seqno() as i32;
                 let confirm = self.confirm();
                 confirm.part = message.part;
-                confirm.seqno = seqno;
+                confirm.seqno = max_seqno;
                 self.confirm_count = 0;
                 serialize_inplace(&mut self.buffer, &self.confirm)?;
                 Ok(Some(self.buffer.as_slice()))

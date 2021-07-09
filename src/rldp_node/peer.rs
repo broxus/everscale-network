@@ -12,7 +12,7 @@ pub struct RldpPeer {
 
 impl RldpPeer {
     pub async fn begin_query(&self) {
-        if self.queries.fetch_add(1, Ordering::Acquire) < MAX_QUERIES {
+        if self.queries.fetch_add(1, Ordering::AcqRel) < MAX_QUERIES {
             return;
         }
 
@@ -22,7 +22,7 @@ impl RldpPeer {
     }
 
     pub async fn end_query(&self) {
-        if self.queries.fetch_sub(1, Ordering::Acquire) < MAX_QUERIES {
+        if self.queries.fetch_sub(1, Ordering::AcqRel) < MAX_QUERIES {
             return;
         }
 

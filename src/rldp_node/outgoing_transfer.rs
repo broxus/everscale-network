@@ -48,7 +48,8 @@ impl<'a> OutgoingTransfer<'a> {
     pub fn message(&mut self) -> &mut ton::rldp::messagepart::MessagePart {
         match &mut self.message {
             ton::rldp::MessagePart::Rldp_MessagePart(message) => message,
-            _ => unreachable!(),
+            // SAFETY: `self.message` is only initialized in `OutgoingTransfer::new`
+            _ => unsafe { std::hint::unreachable_unchecked() },
         }
     }
 
@@ -181,7 +182,7 @@ impl OutgoingTransferState {
     }
 
     pub fn set_seqno_in(&self, seqno: u32) {
-        if seqno < self.seqno_out() {
+        if seqno > self.seqno_out() {
             return;
         }
 
