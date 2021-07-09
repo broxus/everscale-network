@@ -191,7 +191,7 @@ impl OutgoingTransferState {
             let _ = self.seqno_in.compare_exchange(
                 seqno_in,
                 seqno,
-                Ordering::Acquire,
+                Ordering::Release,
                 Ordering::Relaxed,
             );
         }
