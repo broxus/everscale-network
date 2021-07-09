@@ -17,6 +17,7 @@ pub use self::queries_cache::*;
 pub use self::query::*;
 pub use self::received_mask::*;
 pub use self::response_collector::*;
+pub use self::socket::*;
 pub use self::updated_at::*;
 
 mod address_list;
@@ -31,6 +32,7 @@ mod queries_cache;
 mod query;
 mod received_mask;
 mod response_collector;
+mod socket;
 mod updated_at;
 
 pub fn gen_packet_offset() -> Vec<u8> {

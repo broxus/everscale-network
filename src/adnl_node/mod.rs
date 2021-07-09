@@ -1,5 +1,5 @@
 use std::convert::TryInto;
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::SocketAddrV4;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -95,9 +95,7 @@ impl AdnlNode {
         };
 
         // Bind node socket
-        let socket = Arc::new(
-            UdpSocket::bind((Ipv4Addr::UNSPECIFIED, self.config.ip_address().port())).await?,
-        );
+        let socket = make_udp_socket(self.config.ip_address().port())?;
 
         subscribers.push(Arc::new(AdnlPingSubscriber));
         let subscribers = Arc::new(subscribers);
