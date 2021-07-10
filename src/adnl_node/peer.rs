@@ -64,27 +64,27 @@ impl AdnlPeer {
 }
 
 pub struct AdnlPeerState {
-    mask: ReceivedMask,
+    packets_history: PacketsHistory,
     reinit_date: AtomicI32,
 }
 
 impl AdnlPeerState {
     fn for_receive_with_reinit_date(reinit_date: i32) -> Self {
         Self {
-            mask: Default::default(),
+            packets_history: PacketsHistory::for_recv(),
             reinit_date: AtomicI32::new(reinit_date),
         }
     }
 
     fn for_send() -> Self {
         Self {
-            mask: Default::default(),
+            packets_history: PacketsHistory::for_send(),
             reinit_date: Default::default(),
         }
     }
 
-    pub fn mask(&self) -> &ReceivedMask {
-        &self.mask
+    pub fn history(&self) -> &PacketsHistory {
+        &self.packets_history
     }
 
     pub fn reinit_date(&self) -> i32 {

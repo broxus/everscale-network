@@ -244,7 +244,12 @@ impl AdnlNode {
             .map_err(AdnlNodeError::UnknownPacket)?;
 
         // Validate packet
-        let peer_id = self.check_packet(&packet, &local_id, peer_id)?;
+        let peer_id = match self.check_packet(&packet, &local_id, peer_id)? {
+            // New packet
+            Some(peer_id) => peer_id,
+            // Repeated packet
+            None => return Ok(()),
+        };
 
         // Process message(s)
         if let Some(message) = packet.message() {
@@ -460,7 +465,7 @@ impl AdnlNode {
         packet: &ton::adnl::PacketContents,
         local_id: &AdnlNodeIdShort,
         peer_id: Option<AdnlNodeIdShort>,
-    ) -> Result<AdnlNodeIdShort> {
+    ) -> Result<Option<AdnlNodeIdShort>> {
         use std::cmp::Ordering;
 
         const CLOCK_TOLERANCE: i32 = 60;
@@ -537,8 +542,8 @@ impl AdnlNode {
                     } else {
                         peer.sender_state().set_reinit_date(reinit_date);
                         if sender_reinit_date != 0 {
-                            peer.sender_state().mask().reset();
-                            peer.receiver_state().mask().reset();
+                            peer.sender_state().history().reset();
+                            peer.receiver_state().history().reset();
                         }
                     }
                 }
@@ -547,17 +552,19 @@ impl AdnlNode {
         }
 
         if let Some(&seqno) = packet.seqno() {
-            peer.receiver_state().mask().deliver_packet(seqno)?;
+            if !peer.receiver_state().history().deliver_packet(seqno) {
+                return Ok(None);
+            }
         }
 
         if let Some(&confirm_seqno) = packet.confirm_seqno() {
-            let sender_seqno = peer.sender_state().mask().seqno();
+            let sender_seqno = peer.sender_state().history().seqno();
             if confirm_seqno > sender_seqno {
                 return Err(AdnlPacketError::ConfirmationSeqnoTooNew.into());
             }
         }
 
-        Ok(peer_id)
+        Ok(Some(peer_id))
     }
 
     fn send_message(
@@ -712,8 +719,8 @@ impl AdnlNode {
             messages,
             address: Some(self.build_address_list(Some(now() + ADDRESS_LIST_TIMEOUT))),
             priority_address: None,
-            seqno: Some(peer.sender_state().mask().bump_seqno()),
-            confirm_seqno: Some(peer.receiver_state().mask().seqno()),
+            seqno: Some(peer.sender_state().history().bump_seqno()),
+            confirm_seqno: Some(peer.receiver_state().history().seqno()),
             recv_addr_list_version: None,
             recv_priority_addr_list_version: None,
             reinit_date: match signer {

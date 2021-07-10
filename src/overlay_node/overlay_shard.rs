@@ -290,11 +290,13 @@ impl OverlayShard {
 
         transfer.updated_at.refresh();
         if transfer.source != source {
-            log::warn!("Same broadcast but parts from different sources");
+            log::trace!("Same broadcast but parts from different sources");
             return Ok(());
         }
 
-        transfer.history.deliver_packet(broadcast.seqno as i64)?;
+        if !transfer.history.deliver_packet(broadcast.seqno as i64) {
+            return Ok(());
+        }
 
         if !transfer.completed.load(Ordering::Acquire) {
             transfer.broadcast_tx.send(broadcast)?;
@@ -549,7 +551,7 @@ impl OverlayShard {
 
         Ok(IncomingFecTransfer {
             completed: Default::default(),
-            history: Default::default(),
+            history: PacketsHistory::for_recv(),
             broadcast_tx,
             source: peer_id,
             updated_at: Default::default(),
@@ -745,7 +747,7 @@ pub struct CatchainUpdate {
 
 struct IncomingFecTransfer {
     completed: AtomicBool,
-    history: ReceivedMask,
+    history: PacketsHistory,
     broadcast_tx: BroadcastFecTx,
     source: AdnlNodeIdShort,
     updated_at: UpdatedAt,
