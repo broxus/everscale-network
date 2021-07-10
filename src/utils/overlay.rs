@@ -26,12 +26,12 @@ pub fn verify_node(overlay_id: &OverlayIdShort, node: &ton::overlay::node::Node)
 
 pub fn compute_overlay_id(
     workchain: i32,
-    shard: i64,
+    _shard: i64,
     zero_state_file_hash: FileHash,
 ) -> Result<OverlayIdFull> {
     let overlay = ton::ton_node::shardpublicoverlayid::ShardPublicOverlayId {
         workchain,
-        shard,
+        shard: 1i64 << 63, // WHY?!!
         zero_state_file_hash: ton::int256(zero_state_file_hash),
     };
     hash(overlay).map(OverlayIdFull)
