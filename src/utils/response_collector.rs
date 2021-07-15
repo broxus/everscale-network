@@ -11,6 +11,10 @@ impl<T> ResponseCollector<T> {
         }
     }
 
+    pub fn count(&self) -> usize {
+        self.inner.count
+    }
+
     pub fn make_request(&mut self) -> ResponseCollectorSender<T> {
         self.inner.make_request()
     }
