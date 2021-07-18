@@ -225,7 +225,7 @@ impl Neighbours {
                     response_tx.send(Some(()));
                 });
             } else {
-                while response_collector.count() > 0 {
+                while response_collector.count_pending() > 0 {
                     response_collector.wait(false).await;
                 }
             }

@@ -11,7 +11,7 @@ impl<T> ResponseCollector<T> {
         }
     }
 
-    pub fn count(&self) -> usize {
+    pub fn count_pending(&self) -> usize {
         self.inner.count
     }
 
@@ -43,7 +43,7 @@ impl<T> LimitedResponseCollector<T> {
         }
     }
 
-    pub fn count(&self) -> usize {
+    pub fn count_pending(&self) -> usize {
         self.inner.count
     }
 
