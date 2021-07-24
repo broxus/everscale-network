@@ -47,14 +47,16 @@ impl IncomingTransfer {
     pub fn complete(&mut self) -> &mut ton::rldp::messagepart::Complete {
         match &mut self.complete {
             ton::rldp::MessagePart::Rldp_Complete(message) => message,
-            _ => unreachable!(),
+            // SAFETY: `self.complete` is only initialized in `IncomingTransfer::new`
+            _ => unsafe { std::hint::unreachable_unchecked() },
         }
     }
 
     pub fn confirm(&mut self) -> &mut ton::rldp::messagepart::Confirm {
         match &mut self.confirm {
             ton::rldp::MessagePart::Rldp_Confirm(message) => message,
-            _ => unreachable!(),
+            // SAFETY: `self.confirm` is only initialized in `IncomingTransfer::new`
+            _ => unsafe { std::hint::unreachable_unchecked() },
         }
     }
 

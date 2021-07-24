@@ -1,9 +1,9 @@
+use std::collections::HashMap;
 use std::convert::TryInto;
 use std::sync::Arc;
 
 use aes::cipher::StreamCipher;
 use anyhow::Result;
-use dashmap::DashMap;
 use sha2::Digest;
 
 use super::node_id::*;
@@ -56,7 +56,7 @@ pub fn build_handshake_packet(
 ///
 /// **NOTE: even on failure can modify buffer**
 pub fn parse_handshake_packet(
-    keys: &DashMap<AdnlNodeIdShort, Arc<StoredAdnlNodeKey>>,
+    keys: &HashMap<AdnlNodeIdShort, Arc<StoredAdnlNodeKey>>,
     buffer: &mut PacketView<'_>,
     data_length: Option<usize>,
 ) -> Result<Option<AdnlNodeIdShort>> {
@@ -70,12 +70,12 @@ pub fn parse_handshake_packet(
     };
 
     // Since there are relatively few keys, linear search is optimal
-    for key in keys.iter() {
+    for (key, value) in keys.iter() {
         // Find suitable local node key
-        if key.key() == &buffer[0..32] {
+        if key == &buffer[0..32] {
             // Decrypt data
             let shared_secret = compute_shared_secret(
-                key.value().private_key_part(),
+                value.private_key_part(),
                 buffer[32..64].try_into().unwrap(),
             )?;
 
@@ -92,7 +92,7 @@ pub fn parse_handshake_packet(
 
             // Leave only data in buffer
             buffer.remove_prefix(96);
-            return Ok(Some(*key.key()));
+            return Ok(Some(*key));
         }
     }
 

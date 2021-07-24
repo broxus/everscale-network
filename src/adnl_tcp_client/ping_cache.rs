@@ -25,6 +25,7 @@ impl PingCache {
             seqno,
             barrier,
             cache: Arc::downgrade(self),
+            finished: false,
         };
 
         (seqno, pending_query)
@@ -62,6 +63,7 @@ pub struct PendingPingQuery {
     seqno: i64,
     barrier: Arc<Barrier>,
     cache: Weak<PingCache>,
+    finished: bool,
 }
 
 impl PendingPingQuery {
@@ -71,8 +73,10 @@ impl PendingPingQuery {
         }
     }
 
-    pub async fn wait(self) -> Result<()> {
+    pub async fn wait(mut self) -> Result<()> {
         self.barrier.wait().await;
+        self.finished = true;
+
         let cache = match self.cache.upgrade() {
             Some(cache) => cache,
             None => return Err(PingCacheError::CacheDropped.into()),
@@ -83,6 +87,18 @@ impl PendingPingQuery {
             Some((_, PingQueryState::Timeout)) => Err(PingCacheError::TimeoutReached.into()),
             Some(_) => Err(PingCacheError::InvalidQueryState.into()),
             None => Err(PingCacheError::UnknownId.into()),
+        }
+    }
+}
+
+impl Drop for PendingPingQuery {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+
+        if let Some(cache) = self.cache.upgrade() {
+            cache.queries.remove(&self.seqno);
         }
     }
 }

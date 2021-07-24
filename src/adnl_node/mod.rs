@@ -69,8 +69,8 @@ impl AdnlNode {
         let (sender_queue_tx, sender_queue_rx) = mpsc::unbounded_channel();
 
         let peers = DashMap::new();
-        for key in config.keys().iter() {
-            peers.insert(*key.id(), Default::default());
+        for key in config.keys().keys() {
+            peers.insert(*key, Default::default());
         }
 
         Arc::new(Self {
@@ -768,7 +768,11 @@ impl AdnlNode {
         }
     }
 
-    pub fn add_key(&self, key: ed25519_dalek::SecretKey, tag: usize) -> Result<AdnlNodeIdShort> {
+    pub fn add_key(
+        &mut self,
+        key: ed25519_dalek::SecretKey,
+        tag: usize,
+    ) -> Result<AdnlNodeIdShort> {
         use dashmap::mapref::entry::Entry;
 
         let result = self.config.add_key(key, tag)?;
@@ -779,7 +783,7 @@ impl AdnlNode {
         Ok(result)
     }
 
-    pub fn delete_key(&self, key: &AdnlNodeIdShort, tag: usize) -> Result<bool> {
+    pub fn delete_key(&mut self, key: &AdnlNodeIdShort, tag: usize) -> Result<bool> {
         self.peers.remove(key);
         self.config.delete_key(key, tag)
     }

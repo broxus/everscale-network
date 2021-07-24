@@ -1,14 +1,14 @@
+use std::collections::hash_map::{self, HashMap};
 use std::sync::Arc;
 
 use anyhow::Result;
-use dashmap::DashMap;
 
 use crate::utils::*;
 
 pub struct AdnlNodeConfig {
     ip_address: AdnlAddressUdp,
-    keys: DashMap<AdnlNodeIdShort, Arc<StoredAdnlNodeKey>>,
-    tags: DashMap<usize, AdnlNodeIdShort>,
+    keys: HashMap<AdnlNodeIdShort, Arc<StoredAdnlNodeKey>>,
+    tags: HashMap<usize, AdnlNodeIdShort>,
 }
 
 impl AdnlNodeConfig {
@@ -16,7 +16,7 @@ impl AdnlNodeConfig {
         ip_address: AdnlAddressUdp,
         keys: Vec<(ed25519_dalek::SecretKey, usize)>,
     ) -> Result<Self> {
-        let result = AdnlNodeConfig {
+        let mut result = AdnlNodeConfig {
             ip_address,
             keys: Default::default(),
             tags: Default::default(),
@@ -43,35 +43,39 @@ impl AdnlNodeConfig {
 
     pub fn key_by_tag(&self, tag: usize) -> Result<Arc<StoredAdnlNodeKey>> {
         if let Some(id) = self.tags.get(&tag) {
-            self.key_by_id(id.value())
+            self.key_by_id(id)
         } else {
             Err(AdnlNodeConfigError::KeyTagNotFound(tag).into())
         }
     }
 
-    pub fn keys(&self) -> &DashMap<AdnlNodeIdShort, Arc<StoredAdnlNodeKey>> {
+    pub fn keys(&self) -> &HashMap<AdnlNodeIdShort, Arc<StoredAdnlNodeKey>> {
         &self.keys
     }
 
-    pub fn add_key(&self, key: ed25519_dalek::SecretKey, tag: usize) -> Result<AdnlNodeIdShort> {
-        use dashmap::mapref::entry::Entry;
-
+    pub fn add_key(
+        &mut self,
+        key: ed25519_dalek::SecretKey,
+        tag: usize,
+    ) -> Result<AdnlNodeIdShort> {
         let (full_id, short_id) = key.compute_node_ids()?;
 
         match self.tags.entry(tag) {
-            Entry::Vacant(entry) => {
+            hash_map::Entry::Vacant(entry) => {
                 entry.insert(short_id);
                 match self.keys.entry(short_id) {
-                    Entry::Vacant(entry) => {
+                    hash_map::Entry::Vacant(entry) => {
                         entry.insert(Arc::new(StoredAdnlNodeKey::from_id_and_private_key(
                             short_id, full_id, &key,
                         )));
                         Ok(short_id)
                     }
-                    Entry::Occupied(_) => Err(AdnlNodeConfigError::DuplicatedKey(short_id).into()),
+                    hash_map::Entry::Occupied(_) => {
+                        Err(AdnlNodeConfigError::DuplicatedKey(short_id).into())
+                    }
                 }
             }
-            Entry::Occupied(entry) => {
+            hash_map::Entry::Occupied(entry) => {
                 if entry.get() == &short_id {
                     Ok(short_id)
                 } else {
@@ -81,9 +85,9 @@ impl AdnlNodeConfig {
         }
     }
 
-    pub fn delete_key(&self, key: &AdnlNodeIdShort, tag: usize) -> Result<bool> {
+    pub fn delete_key(&mut self, key: &AdnlNodeIdShort, tag: usize) -> Result<bool> {
         let removed_key = self.keys.remove(key);
-        if let Some((_, ref removed)) = self.tags.remove(&tag) {
+        if let Some(ref removed) = self.tags.remove(&tag) {
             if removed != key {
                 return Err(AdnlNodeConfigError::UnexpectedKey.into());
             }
@@ -112,7 +116,7 @@ mod tests {
 
     #[test]
     fn test_handshake() -> Result<()> {
-        let first_peer_config = AdnlNodeConfig::from_ip_address_and_keys(0.into(), Vec::new())?;
+        let mut first_peer_config = AdnlNodeConfig::from_ip_address_and_keys(0.into(), Vec::new())?;
 
         let first_peer_key = ed25519_dalek::SecretKey::generate(&mut rand::thread_rng());
         let first_peer_id = first_peer_config.add_key(first_peer_key, 1)?;

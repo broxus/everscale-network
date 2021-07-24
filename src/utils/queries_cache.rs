@@ -23,6 +23,7 @@ impl QueriesCache {
             query_id,
             barrier,
             cache: Arc::downgrade(self),
+            finished: false,
         }
     }
 
@@ -62,11 +63,14 @@ pub struct PendingAdnlQuery {
     query_id: QueryId,
     barrier: Arc<Barrier>,
     cache: Weak<QueriesCache>,
+    finished: bool,
 }
 
 impl PendingAdnlQuery {
-    pub async fn wait(self) -> Result<Option<Vec<u8>>> {
+    pub async fn wait(mut self) -> Result<Option<Vec<u8>>> {
         self.barrier.wait().await;
+        self.finished = true;
+
         let cache = match self.cache.upgrade() {
             Some(cache) => cache,
             None => return Err(QueriesCacheError::CacheDropped.into()),
@@ -77,6 +81,18 @@ impl PendingAdnlQuery {
             Some((_, QueryState::Timeout)) => Ok(None),
             Some(_) => Err(QueriesCacheError::InvalidQueryState.into()),
             None => Err(QueriesCacheError::UnknownId.into()),
+        }
+    }
+}
+
+impl Drop for PendingAdnlQuery {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+
+        if let Some(cache) = self.cache.upgrade() {
+            cache.queries.remove(&self.query_id);
         }
     }
 }
