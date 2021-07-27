@@ -22,7 +22,7 @@ impl RldpPeer {
     }
 
     pub async fn end_query(&self) {
-        if self.queries.fetch_sub(1, Ordering::AcqRel) < MAX_QUERIES {
+        if self.queries.fetch_sub(1, Ordering::AcqRel) <= MAX_QUERIES {
             return;
         }
 
