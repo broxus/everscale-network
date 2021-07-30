@@ -2,9 +2,10 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use ton_api::{ton, BoxedSerialize, IntoBoxed, Serializer};
+use nekoton_utils::NoFailure;
 
 use super::node_id::*;
-use super::{deserialize_bundle, serialize, NoFailure};
+use super::{deserialize_bundle, serialize};
 use crate::subscriber::*;
 
 pub fn build_query(

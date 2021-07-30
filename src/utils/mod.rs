@@ -4,6 +4,7 @@ use anyhow::Result;
 use sha2::Digest;
 use ton_api::ton::TLObject;
 use ton_api::{BoxedSerialize, Deserializer, IntoBoxed, Serializer};
+use nekoton_utils::NoFailure;
 
 pub use self::address_list::*;
 pub use self::dht::*;
@@ -143,18 +144,4 @@ pub fn now() -> i32 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i32
-}
-
-pub trait NoFailure {
-    type Output;
-
-    fn convert(self) -> anyhow::Result<Self::Output>;
-}
-
-impl<T> NoFailure for ton_types::Result<T> {
-    type Output = T;
-
-    fn convert(self) -> anyhow::Result<Self::Output> {
-        self.map_err(|e| anyhow::Error::msg(e.to_string()))
-    }
 }
