@@ -27,12 +27,11 @@ tokio = { version = "1.6", features = ["sync", "net", "rt", "time", "io-util"] }
 tokio-io-timeout = "1.1.1"
 x25519-dalek = "1"
 
-ton_types = { git = "https://github.com/tonlabs/ton-labs-types" }
+ton_types = { git = "https://github.com/broxus/ton-labs-types" }
 nekoton-utils = { git = "https://github.com/broxus/nekoton" }
 
 [dependencies.ton_api]
 git = "https://github.com/broxus/ton-labs-tl.git"
-branch = "original"
 package = "ton_api"
 default-features = false
 features = ["ton_api"]
