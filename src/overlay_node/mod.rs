@@ -2,7 +2,6 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 use anyhow::Result;
-use dashmap::DashMap;
 use ton_api::ton::{self, TLObject};
 use ton_api::IntoBoxed;
 
@@ -349,7 +348,9 @@ impl OverlayNode {
     fn get_overlay_shard(
         &self,
         overlay_id: &OverlayIdShort,
-    ) -> Result<dashmap::mapref::one::Ref<OverlayIdShort, Arc<OverlayShard>>> {
+    ) -> Result<
+        dashmap::mapref::one::Ref<OverlayIdShort, Arc<OverlayShard>, BuildHasherDefault<FxHasher>>,
+    > {
         match self.shards.get(overlay_id) {
             Some(shard) => Ok(shard),
             None => Err(OverlayNodeError::UnknownOverlay.into()),

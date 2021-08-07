@@ -1,8 +1,7 @@
-use std::collections::HashMap;
-
-use dashmap::DashSet;
+use crate::utils::DashSet;
 use parking_lot::{RwLock, RwLockReadGuard};
 use rand::seq::SliceRandom;
+use std::collections::HashMap;
 
 use super::node_id::*;
 

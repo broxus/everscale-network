@@ -1,9 +1,6 @@
-use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
-
-use dashmap::DashMap;
-
 use super::channel::ChannelKey;
 use crate::utils::*;
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 
 pub type AdnlPeers = DashMap<AdnlNodeIdShort, AdnlPeer>;
 

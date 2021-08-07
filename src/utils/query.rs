@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use ton_api::{ton, BoxedSerialize, IntoBoxed, Serializer};
 use nekoton_utils::NoFailure;
+use ton_api::{ton, BoxedSerialize, IntoBoxed, Serializer};
 
 use super::node_id::*;
 use super::{deserialize_bundle, serialize};

@@ -2,12 +2,11 @@ use std::hash::Hash;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::atomic::{AtomicI32, Ordering};
 
+use super::now;
+use crate::utils::{BuildHasherDefault, DashSet, FxHasher};
 use anyhow::Result;
-use dashmap::DashSet;
 use ton_api::ton::adnl::Address;
 use ton_api::{ton, IntoBoxed};
-
-use super::now;
 
 pub trait AdnlAddress: Sized {
     fn is_public(&self) -> bool;
@@ -59,7 +58,10 @@ where
         self.addresses.iter().all(|addr| addr.is_public())
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = dashmap::setref::multiple::RefMulti<T>> {
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = dashmap::setref::multiple::RefMulti<T, BuildHasherDefault<FxHasher>>>
+    {
         self.addresses.iter()
     }
 

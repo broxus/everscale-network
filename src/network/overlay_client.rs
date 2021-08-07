@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use dashmap::DashSet;
 use ton_api::ton::TLObject;
 
 use super::neighbour::Neighbour;

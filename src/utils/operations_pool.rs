@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::utils::DashMap;
 use anyhow::Result;
-use dashmap::DashMap;
 use tokio::sync::watch;
 
 pub struct OperationsPool<K, R> {
@@ -21,7 +21,7 @@ where
     pub fn new(name: &'static str) -> Self {
         Self {
             name,
-            operations: DashMap::new(),
+            operations: DashMap::default(),
         }
     }
 

@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use dashmap::DashSet;
 use rand::Rng;
 use ton_api::ton::{self, TLObject};
 

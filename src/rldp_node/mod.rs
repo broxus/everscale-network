@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use dashmap::DashMap;
 use ton_api::ton;
 
 pub use self::decoder::RaptorQDecoder;

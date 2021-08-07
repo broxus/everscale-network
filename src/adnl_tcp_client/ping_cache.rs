@@ -1,8 +1,8 @@
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Weak};
 
+use crate::utils::DashMap;
 use anyhow::Result;
-use dashmap::DashMap;
 use tokio::sync::Barrier;
 use ton_api::ton;
 

@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use anyhow::Result;
 use crossbeam_queue::SegQueue;
-use dashmap::{DashMap, DashSet};
 use sha2::Digest;
 use tokio::sync::mpsc;
 use ton_api::{ton, IntoBoxed};
@@ -56,14 +55,14 @@ impl OverlayShard {
             adnl,
             overlay_id,
             overlay_key,
-            owned_broadcasts: DashMap::new(),
+            owned_broadcasts: DashMap::default(),
             finished_broadcasts: SegQueue::new(),
             finished_broadcast_count: AtomicU32::new(0),
             received_peers: Arc::new(BroadcastReceiver::default()),
             received_broadcasts: Arc::new(BroadcastReceiver::default()),
             received_catchain: Arc::new(BroadcastReceiver::default()),
-            nodes: DashMap::new(),
-            ignored_peers: DashSet::new(),
+            nodes: DashMap::default(),
+            ignored_peers: DashSet::default(),
             known_peers: PeersCache::with_capacity(MAX_OVERLAY_PEERS),
             random_peers: PeersCache::with_capacity(MAX_SHARD_PEERS),
             neighbours: PeersCache::with_capacity(MAX_SHARD_NEIGHBOURS),
