@@ -5,8 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use dashmap::DashMap;
 use tokio::sync::watch;
+
+use super::DashMap;
 
 pub struct OperationsPool<K, R> {
     name: &'static str,
@@ -21,7 +22,7 @@ where
     pub fn new(name: &'static str) -> Self {
         Self {
             name,
-            operations: DashMap::new(),
+            operations: DashMap::default(),
         }
     }
 

@@ -2,9 +2,10 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Weak};
 
 use anyhow::Result;
-use dashmap::DashMap;
 use tokio::sync::Barrier;
 use ton_api::ton;
+
+use crate::utils::DashMap;
 
 #[derive(Default)]
 pub struct PingCache {

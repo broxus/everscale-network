@@ -3,7 +3,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::Result;
 use dashmap::mapref::one::Ref;
-use dashmap::DashMap;
 use sha2::Digest;
 use ton_api::ton;
 

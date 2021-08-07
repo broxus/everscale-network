@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use dashmap::DashMap;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 use ton_api::ton;

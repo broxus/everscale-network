@@ -4,19 +4,19 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use dashmap::DashMap;
 use parking_lot::Mutex;
 use sha2::Digest;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use ton_api::{ton, IntoBoxed};
 
+use crate::subscriber::*;
+use crate::utils::*;
+
 use self::channel::*;
 pub use self::config::*;
 use self::peer::*;
 use self::transfer::*;
-use crate::subscriber::*;
-use crate::utils::*;
 
 mod channel;
 mod config;
@@ -67,8 +67,7 @@ impl AdnlNode {
 
     pub fn with_config(config: AdnlNodeConfig) -> Arc<Self> {
         let (sender_queue_tx, sender_queue_rx) = mpsc::unbounded_channel();
-
-        let peers = DashMap::new();
+        let peers = DashMap::with_capacity_and_hasher(config.keys().len(), Default::default());
         for key in config.keys().keys() {
             peers.insert(*key, Default::default());
         }

@@ -1,11 +1,11 @@
 use std::sync::{Arc, Weak};
 
 use anyhow::Result;
-use dashmap::DashMap;
 use tokio::sync::Barrier;
 use ton_api::ton;
 
 use super::query::*;
+use super::DashMap;
 
 #[derive(Default)]
 pub struct QueriesCache {

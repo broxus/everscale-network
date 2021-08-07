@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use dashmap::DashSet;
 use parking_lot::{RwLock, RwLockReadGuard};
 use rand::seq::SliceRandom;
 
 use super::node_id::*;
+use crate::utils::DashSet;
 
 pub struct PeersCache {
     state: RwLock<PeersCacheState>,

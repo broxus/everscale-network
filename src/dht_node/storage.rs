@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 
 use anyhow::Result;
-use dashmap::DashMap;
 use ton_api::ton;
 
 use super::DHT_KEY_NODES;

@@ -1,10 +1,12 @@
 use std::convert::TryInto;
+use std::hash::BuildHasherDefault;
 
 use anyhow::Result;
+use nekoton_utils::NoFailure;
+pub use rustc_hash::FxHasher;
 use sha2::Digest;
 use ton_api::ton::TLObject;
 use ton_api::{BoxedSerialize, Deserializer, IntoBoxed, Serializer};
-use nekoton_utils::NoFailure;
 
 pub use self::address_list::*;
 pub use self::dht::*;
@@ -35,6 +37,9 @@ mod query;
 mod response_collector;
 mod socket;
 mod updated_at;
+
+pub type DashSet<K> = dashmap::DashSet<K, BuildHasherDefault<FxHasher>>;
+pub type DashMap<K, V> = dashmap::DashMap<K, V, BuildHasherDefault<FxHasher>>;
 
 pub fn gen_packet_offset() -> Vec<u8> {
     use rand::Rng;
