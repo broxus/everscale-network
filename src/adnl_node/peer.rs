@@ -48,16 +48,12 @@ impl AdnlPeer {
         &self.sender_state
     }
 
-    pub fn clone_with_reinit(&self) -> Self {
+    pub fn reset(&mut self) {
         let reinit_date = self.receiver_state.reinit_date();
 
-        Self {
-            id: self.id,
-            ip_address: AtomicU64::from(self.ip_address.load(Ordering::Acquire)),
-            channel_key: ChannelKey::generate(),
-            receiver_state: AdnlPeerState::for_receive_with_reinit_date(reinit_date + 1),
-            sender_state: AdnlPeerState::for_send(),
-        }
+        self.channel_key = ChannelKey::generate();
+        self.receiver_state = AdnlPeerState::for_receive_with_reinit_date(reinit_date + 1);
+        self.sender_state = AdnlPeerState::for_send();
     }
 }
 

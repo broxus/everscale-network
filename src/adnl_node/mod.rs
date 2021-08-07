@@ -506,8 +506,8 @@ impl AdnlNode {
 
         let peers = self.get_peers(local_id)?;
         let peer = if from_channel {
-            if let Some(channel) = self.channels_by_peers.get(&peer_id) {
-                peers.get(channel.peer_id())
+            if self.channels_by_peers.contains_key(&peer_id) {
+                peers.get(&peer_id)
             } else {
                 return Err(AdnlPacketError::UnknownChannel.into());
             }
@@ -522,6 +522,8 @@ impl AdnlNode {
                     Ordering::Equal => {}
                     Ordering::Greater => return Err(AdnlPacketError::DstReinitDateTooNew.into()),
                     Ordering::Less => {
+                        std::mem::drop(peer);
+
                         self.send_message(
                             local_id,
                             &peer_id,
@@ -935,12 +937,9 @@ impl AdnlNode {
         self.channels_to_confirm
             .remove(peer_id)
             .or_else(|| self.channels_by_peers.remove(peer_id))
-            .and_then(|(_, removed)| {
-                let new_peer = peer.clone_with_reinit();
-                *peer = new_peer;
+            .and_then(|(_, removed)| self.channels_by_id.remove(removed.channel_in_id()));
 
-                self.channels_by_id.remove(removed.channel_in_id())
-            });
+        peer.reset();
 
         Ok(())
     }
