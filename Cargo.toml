@@ -22,6 +22,7 @@ rand = "0.7"
 raptorq = { git = "https://github.com/Rexagon/raptorq.git" }
 serde = "1.0"
 sha2 = "0.9"
+smallvec = { version = "1.6.1", features = ["union"] }
 thiserror = "1.0"
 tokio = { version = "1.6", features = ["sync", "net", "rt", "time", "io-util"] }
 tokio-io-timeout = "1.1.1"

@@ -1,4 +1,4 @@
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::net::SocketAddrV4;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -17,6 +17,7 @@ use self::channel::*;
 pub use self::config::*;
 use self::peer::*;
 use self::transfer::*;
+use crate::utils::MessageView;
 
 mod channel;
 mod config;
@@ -238,9 +239,8 @@ impl AdnlNode {
             };
 
         // Parse packet
-        let packet = deserialize(data.as_slice())?
-            .downcast::<ton::adnl::PacketContents>()
-            .map_err(AdnlNodeError::UnknownPacket)?;
+        let packet = PacketContentsView::try_from(data.as_slice())
+            .map_err(|_| AdnlNodeError::InvalidPacket)?;
 
         // Validate packet
         let peer_id = match self.check_packet(&packet, &local_id, peer_id)? {
@@ -251,11 +251,11 @@ impl AdnlNode {
         };
 
         // Process message(s)
-        if let Some(message) = packet.message() {
+        if let Some(message) = packet.message {
             self.process_message(&local_id, &peer_id, message, subscribers)
                 .await?;
-        } else if let Some(messages) = packet.messages() {
-            for message in messages.iter() {
+        } else if let Some(messages) = packet.messages {
+            for message in messages {
                 self.process_message(&local_id, &peer_id, message, subscribers)
                     .await?;
             }
@@ -269,7 +269,7 @@ impl AdnlNode {
         &self,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
-        message: &ton::adnl::Message,
+        message: MessageView<'_>,
         subscribers: &[Arc<dyn Subscriber>],
     ) -> Result<()> {
         use dashmap::mapref::entry::Entry;
@@ -277,12 +277,18 @@ impl AdnlNode {
         const TRANSFER_TIMEOUT: u64 = 3; // Seconds
 
         // Handle split message case
-        let alt_message = if let ton::adnl::Message::Adnl_Message_Part(part) = message {
-            let transfer_id = part.hash.0;
+        let alt_message = if let MessageView::Part {
+            hash,
+            total_size,
+            offset,
+            data,
+        } = message
+        {
+            let transfer_id = *hash;
             let transfer = match self.incoming_transfers.entry(transfer_id) {
                 // Create new transfer state if it was a new incoming transfer
                 Entry::Vacant(entry) => {
-                    let entry = entry.insert(Arc::new(Transfer::new(part.total_size as usize)));
+                    let entry = entry.insert(Arc::new(Transfer::new(total_size as usize)));
                     let transfer = entry.value().clone();
 
                     tokio::spawn({
@@ -317,7 +323,7 @@ impl AdnlNode {
             transfer.timings().refresh();
 
             // Update transfer
-            match transfer.add_part(part.offset as usize, part.data.to_vec(), &transfer_id) {
+            match transfer.add_part(offset as usize, data.to_vec(), &transfer_id) {
                 Ok(Some(message)) => {
                     self.incoming_transfers.remove(&transfer_id);
                     Some(message)
@@ -331,30 +337,36 @@ impl AdnlNode {
         } else {
             None
         };
+        let alt_message = match &alt_message {
+            Some(buffer) => Some(MessageView::try_from(buffer.as_slice())?),
+            None => None,
+        };
 
         // Process message
-        let response: Option<ton::adnl::Message> = match alt_message.as_ref().unwrap_or(message) {
-            ton::adnl::Message::Adnl_Message_Answer(answer) => {
-                self.process_message_answer(answer).await?;
+        let response: Option<ton::adnl::Message> = match alt_message.unwrap_or(message) {
+            MessageView::Answer { query_id, answer } => {
+                self.process_message_answer(query_id, answer).await?;
                 None
             }
-            ton::adnl::Message::Adnl_Message_ConfirmChannel(confirm) => {
-                self.process_message_confirm_channel(local_id, peer_id, confirm)?;
+            MessageView::ConfirmChannel { key, peer_key, .. } => {
+                self.process_message_confirm_channel(local_id, peer_id, key, peer_key)?;
                 None
             }
-            ton::adnl::Message::Adnl_Message_CreateChannel(create) => {
-                let reply = self.process_message_create_channel(local_id, peer_id, create)?;
+            MessageView::CreateChannel { key, date } => {
+                let reply = self.process_message_create_channel(local_id, peer_id, key, date)?;
                 Some(reply.into_boxed())
             }
-            ton::adnl::Message::Adnl_Message_Custom(custom) => {
-                if !process_message_custom(local_id, peer_id, subscribers, custom).await? {
+            MessageView::Custom { data } => {
+                if !process_message_custom(local_id, peer_id, subscribers, data).await? {
                     return Err(AdnlNodeError::NoSubscribersForCustomMessage.into());
                 }
                 None
             }
-            ton::adnl::Message::Adnl_Message_Nop => None,
-            ton::adnl::Message::Adnl_Message_Query(query) => {
-                match process_message_adnl_query(local_id, peer_id, subscribers, query).await? {
+            MessageView::Nop => None,
+            MessageView::Query { query_id, query } => {
+                match process_message_adnl_query(local_id, peer_id, subscribers, query_id, query)
+                    .await?
+                {
                     QueryProcessingResult::Processed(answer) => answer,
                     QueryProcessingResult::Rejected => {
                         return Err(AdnlNodeError::NoSubscribersForQuery.into())
@@ -373,14 +385,8 @@ impl AdnlNode {
         Ok(())
     }
 
-    async fn process_message_answer(
-        &self,
-        answer: &ton::adnl::message::message::Answer,
-    ) -> Result<()> {
-        let queries = &self.queries;
-        let query_id = answer.query_id.0;
-
-        if queries.update_query(query_id, Some(&answer.answer)).await? {
+    async fn process_message_answer(&self, query_id: &QueryId, answer: &[u8]) -> Result<()> {
+        if self.queries.update_query(*query_id, Some(answer)).await? {
             Ok(())
         } else {
             Err(AdnlNodeError::UnknownQueryAnswer.into())
@@ -391,16 +397,17 @@ impl AdnlNode {
         &self,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
-        confirm: &ton::adnl::message::message::ConfirmChannel,
+        peer_channel_public_key: &[u8; 32],
+        peer_key: &[u8; 32],
     ) -> Result<()> {
         // Create new channel
-        let mut local_channel_public_key = Some(confirm.peer_key.0);
+        let mut local_channel_public_key = Some(*peer_key);
 
         let channel = self.create_channel(
             local_id,
             peer_id,
             &mut local_channel_public_key,
-            &confirm.key.0,
+            peer_channel_public_key,
             "confirmation",
         )?;
 
@@ -416,7 +423,8 @@ impl AdnlNode {
         &self,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
-        create: &ton::adnl::message::message::CreateChannel,
+        peer_channel_public_key: &[u8; 32],
+        date: i32,
     ) -> Result<ton::adnl::message::message::ConfirmChannel> {
         // Create new channel
         let mut local_channel_public_key = None;
@@ -425,7 +433,7 @@ impl AdnlNode {
             local_id,
             peer_id,
             &mut local_channel_public_key,
-            &create.key.0,
+            peer_channel_public_key,
             "creation",
         )?;
 
@@ -433,8 +441,8 @@ impl AdnlNode {
         let message = match local_channel_public_key {
             Some(public_key) => ton::adnl::message::message::ConfirmChannel {
                 key: ton::int256(public_key),
-                peer_key: create.key,
-                date: create.date,
+                peer_key: ton::int256(*peer_channel_public_key),
+                date,
             },
             None => return Err(AdnlNodeError::ChannelKeyMismatch.into()),
         };
@@ -461,7 +469,7 @@ impl AdnlNode {
     /// Validates incoming packet. Attempts to extract peer id
     fn check_packet(
         &self,
-        packet: &ton::adnl::PacketContents,
+        packet: &PacketContentsView<'_>,
         local_id: &AdnlNodeIdShort,
         peer_id: Option<AdnlNodeIdShort>,
     ) -> Result<Option<AdnlNodeIdShort>> {
@@ -473,33 +481,33 @@ impl AdnlNode {
 
         // Extract peer id
         let peer_id = if let Some(peer_id) = peer_id {
-            if packet.from().is_some() || packet.from_short().is_some() {
+            if packet.from.is_some() || packet.from_short.is_some() {
                 return Err(AdnlPacketError::ExplicitSourceForChannel.into());
             }
             peer_id
-        } else if let Some(public_key) = packet.from() {
+        } else if let Some(public_key) = packet.from {
             let full_id: AdnlNodeIdFull = public_key.try_into()?;
             let peer_id = full_id.compute_short_id()?;
 
-            if matches!(packet.from_short(), Some(id) if peer_id != id.id.0) {
+            if matches!(packet.from_short, Some(id) if peer_id.as_slice() != id) {
                 return Err(AdnlPacketError::InvalidPeerId.into());
             }
 
-            if let Some(list) = packet.address() {
-                let ip_address = parse_address_list(list)?;
+            if let Some(list) = &packet.address {
+                let ip_address = parse_address_list_view(list)?;
                 self.add_peer(local_id, &peer_id, ip_address, full_id)?;
             }
 
             peer_id
-        } else if let Some(peer_id) = packet.from_short() {
-            AdnlNodeIdShort::new(peer_id.id.0)
+        } else if let Some(peer_id) = packet.from_short {
+            AdnlNodeIdShort::new(*peer_id)
         } else {
             return Err(AdnlPacketError::NoKeyDataInPacket.into());
         };
 
         // Check timings
-        let dst_reinit_date = packet.dst_reinit_date();
-        let reinit_date = packet.reinit_date();
+        let dst_reinit_date = packet.dst_reinit_date;
+        let reinit_date = packet.reinit_date;
         if dst_reinit_date.is_some() != reinit_date.is_some() {
             return Err(AdnlPacketError::ReinitDatesMismatch.into());
         }
@@ -516,10 +524,10 @@ impl AdnlNode {
         }
         .ok_or(AdnlPacketError::UnknownPeer)?;
 
-        if let (Some(&dst_reinit_date), Some(&reinit_date)) = (dst_reinit_date, reinit_date) {
+        if let (Some(dst_reinit_date), Some(reinit_date)) = (dst_reinit_date, reinit_date) {
             if dst_reinit_date != 0 {
                 match dst_reinit_date.cmp(&peer.receiver_state().reinit_date()) {
-                    Ordering::Equal => {}
+                    Ordering::Equal => { /* do nothing */ }
                     Ordering::Greater => return Err(AdnlPacketError::DstReinitDateTooNew.into()),
                     Ordering::Less => {
                         std::mem::drop(peer);
@@ -536,7 +544,7 @@ impl AdnlNode {
 
             let sender_reinit_date = peer.sender_state().reinit_date();
             match reinit_date.cmp(&sender_reinit_date) {
-                Ordering::Equal => {}
+                Ordering::Equal => { /* do nothing */ }
                 Ordering::Greater => {
                     if reinit_date > now() + CLOCK_TOLERANCE {
                         return Err(AdnlPacketError::SrcReinitDateTooNew.into());
@@ -552,13 +560,13 @@ impl AdnlNode {
             }
         }
 
-        if let Some(&seqno) = packet.seqno() {
+        if let Some(seqno) = packet.seqno {
             if !peer.receiver_state().history().deliver_packet(seqno) {
                 return Ok(None);
             }
         }
 
-        if let Some(&confirm_seqno) = packet.confirm_seqno() {
+        if let Some(confirm_seqno) = packet.confirm_seqno {
             let sender_seqno = peer.sender_state().history().seqno();
             if confirm_seqno > sender_seqno {
                 return Err(AdnlPacketError::ConfirmationSeqnoTooNew.into());
@@ -1004,8 +1012,8 @@ type SenderQueueRx = mpsc::UnboundedReceiver<PacketToSend>;
 enum AdnlNodeError {
     #[error("ADNL node is already running")]
     AlreadyRunning,
-    #[error("Unknown ADNL packet format: {:?}", .0)]
-    UnknownPacket(ton::TLObject),
+    #[error("Invalid packet")]
+    InvalidPacket,
     #[error("Local id peers not found")]
     PeersNotFound,
     #[error("Unknown message")]

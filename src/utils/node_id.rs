@@ -6,6 +6,7 @@ use ed25519_dalek::Verifier;
 use rand::Rng;
 use ton_api::{ton, IntoBoxed};
 
+use super::packet_contents::PublicKeyView;
 use super::{hash, serialize, serialize_boxed};
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -68,6 +69,20 @@ impl TryFrom<&ton::PublicKey> for AdnlNodeIdFull {
         match public_key {
             ton::PublicKey::Pub_Ed25519(public_key) => {
                 let public_key = ed25519_dalek::PublicKey::from_bytes(&public_key.key.0).unwrap();
+                Ok(Self::new(public_key))
+            }
+            _ => Err(AdnlNodeIdError::UnsupportedPublicKey.into()),
+        }
+    }
+}
+
+impl<'a> TryFrom<PublicKeyView<'a>> for AdnlNodeIdFull {
+    type Error = anyhow::Error;
+
+    fn try_from(value: PublicKeyView<'a>) -> Result<Self, Self::Error> {
+        match value {
+            PublicKeyView::Ed25519 { key } => {
+                let public_key = ed25519_dalek::PublicKey::from_bytes(key).unwrap();
                 Ok(Self::new(public_key))
             }
             _ => Err(AdnlNodeIdError::UnsupportedPublicKey.into()),

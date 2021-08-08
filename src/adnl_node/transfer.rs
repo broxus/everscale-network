@@ -4,7 +4,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use anyhow::Result;
 use dashmap::mapref::one::Ref;
 use sha2::Digest;
-use ton_api::ton;
 
 use crate::utils::*;
 
@@ -40,7 +39,7 @@ impl Transfer {
         offset: usize,
         data: Vec<u8>,
         transfer_id: &TransferId,
-    ) -> Result<Option<ton::adnl::Message>> {
+    ) -> Result<Option<Vec<u8>>> {
         let length = data.len();
         self.parts.insert(offset, data);
 
@@ -88,13 +87,8 @@ impl Transfer {
                     return Err(TransferError::InvalidHash.into());
                 }
 
-                // Parse message
-                let message = deserialize(&buffer)?
-                    .downcast::<ton::adnl::Message>()
-                    .map_err(|_| TransferError::InvalidMessage)?;
-
                 // Done
-                Ok(Some(message))
+                Ok(Some(buffer))
             }
             std::cmp::Ordering::Greater => Err(TransferError::ReceivedTooMuch.into()),
             std::cmp::Ordering::Less => {
@@ -127,6 +121,4 @@ enum TransferError {
     PartMissing,
     #[error("Invalid transfer data hash")]
     InvalidHash,
-    #[error("Invalid transfer message")]
-    InvalidMessage,
 }

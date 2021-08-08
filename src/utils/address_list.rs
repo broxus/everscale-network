@@ -7,6 +7,7 @@ use ton_api::ton::adnl::Address;
 use ton_api::{ton, IntoBoxed};
 
 use super::{now, DashSet};
+use crate::utils::{AddressListView, AddressView};
 
 pub trait AdnlAddress: Sized {
     fn is_public(&self) -> bool;
@@ -165,6 +166,26 @@ impl std::fmt::Display for AdnlAddressUdp {
             (self.0 >> 16) as u8,
             self.0 as u16
         ))
+    }
+}
+
+pub fn parse_address_list_view(list: &AddressListView<'_>) -> Result<AdnlAddressUdp> {
+    let address = list.address.ok_or(AdnlAddressListError::ListIsEmpty)?;
+
+    let version = now();
+    if (list.version > version) || (list.reinit_date > version) {
+        return Err(AdnlAddressListError::TooNewVersion.into());
+    }
+
+    if list.expire_at != 0 && list.expire_at < version {
+        return Err(AdnlAddressListError::Expired.into());
+    }
+
+    match address {
+        AddressView::Udp { ip, port } => {
+            Ok(AdnlAddressUdp::from_ip_and_port(ip as u32, port as u16))
+        }
+        _ => Err(AdnlAddressListError::UnsupportedAddress.into()),
     }
 }
 

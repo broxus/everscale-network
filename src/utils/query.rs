@@ -38,11 +38,11 @@ pub async fn process_message_custom(
     local_id: &AdnlNodeIdShort,
     peer_id: &AdnlNodeIdShort,
     subscribers: &[Arc<dyn Subscriber>],
-    custom: &ton::adnl::message::message::Custom,
+    data: &[u8],
 ) -> Result<bool> {
     for subscriber in subscribers.iter() {
         if subscriber
-            .try_consume_custom(local_id, peer_id, &custom.data)
+            .try_consume_custom(local_id, peer_id, data)
             .await?
         {
             return Ok(true);
@@ -55,12 +55,13 @@ pub async fn process_message_adnl_query(
     local_id: &AdnlNodeIdShort,
     peer_id: &AdnlNodeIdShort,
     subscribers: &[Arc<dyn Subscriber>],
-    query: &ton::adnl::message::message::Query,
+    query_id: &QueryId,
+    query: &[u8],
 ) -> Result<QueryProcessingResult<ton::adnl::Message>> {
-    match process_query(local_id, peer_id, subscribers, query.query.as_ref()).await? {
+    match process_query(local_id, peer_id, subscribers, query).await? {
         QueryProcessingResult::Processed(answer) => convert_answer(answer, |answer| {
             ton::adnl::message::message::Answer {
-                query_id: query.query_id,
+                query_id: ton::int256(*query_id),
                 answer: ton::bytes(answer),
             }
             .into_boxed()

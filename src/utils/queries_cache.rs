@@ -2,7 +2,6 @@ use std::sync::{Arc, Weak};
 
 use anyhow::Result;
 use tokio::sync::Barrier;
-use ton_api::ton;
 
 use super::query::*;
 use super::DashMap;
@@ -27,11 +26,7 @@ impl QueriesCache {
         }
     }
 
-    pub async fn update_query(
-        &self,
-        query_id: QueryId,
-        answer: Option<&ton::bytes>,
-    ) -> Result<bool> {
+    pub async fn update_query(&self, query_id: QueryId, answer: Option<&[u8]>) -> Result<bool> {
         use dashmap::mapref::entry::Entry;
 
         let old = match self.queries.entry(query_id) {
