@@ -664,7 +664,7 @@ impl AdnlNode {
             }
 
             let data = serialize(&message)?;
-            let hash: [u8; 32] = sha2::Sha256::digest(&data).as_slice().try_into().unwrap();
+            let hash: [u8; 32] = sha2::Sha256::digest(&data).into();
             let mut offset = 0;
 
             if let Some(create_channel_message) = create_channel_message {

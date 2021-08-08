@@ -20,8 +20,7 @@ pub fn build_handshake_packet(
     let temp_public_key = ed25519_dalek::PublicKey::from(&temp_private_key);
 
     // Prepare packet
-    let hash = sha2::Sha256::digest(buffer.as_slice());
-    let checksum: &[u8; 32] = hash.as_slice().try_into().unwrap();
+    let checksum: [u8; 32] = sha2::Sha256::digest(buffer.as_slice()).into();
 
     let length = buffer.len();
     buffer.resize(length + 96, 0);
@@ -29,7 +28,7 @@ pub fn build_handshake_packet(
 
     buffer[..32].copy_from_slice(peer_id.as_slice());
     buffer[32..64].copy_from_slice(temp_public_key.as_bytes());
-    buffer[64..96].copy_from_slice(checksum);
+    buffer[64..96].copy_from_slice(&checksum);
 
     // Encrypt packet data
     let temp_private_key_part = ed25519_dalek::ExpandedSecretKey::from(&temp_private_key)
@@ -39,7 +38,7 @@ pub fn build_handshake_packet(
 
     let shared_secret =
         compute_shared_secret(&temp_private_key_part, peer_id_full.public_key().as_bytes())?;
-    build_packet_cipher(&shared_secret, checksum).apply_keystream(&mut buffer[96..]);
+    build_packet_cipher(&shared_secret, &checksum).apply_keystream(&mut buffer[96..]);
 
     // Done
     Ok(())

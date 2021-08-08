@@ -89,8 +89,7 @@ pub fn hash<T: IntoBoxed>(object: T) -> Result<[u8; 32]> {
 
 /// Calculates hash of TL object
 pub fn hash_boxed<T: BoxedSerialize>(object: &T) -> Result<[u8; 32]> {
-    let buf = sha2::Sha256::digest(&serialize(object)?);
-    Ok(buf.as_slice().try_into().unwrap())
+    Ok(sha2::Sha256::digest(&serialize(object)?).into())
 }
 
 pub fn serialize<T: BoxedSerialize>(object: &T) -> Result<Vec<u8>> {

@@ -1,4 +1,4 @@
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryFrom;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -453,7 +453,7 @@ impl OverlayShard {
     fn create_broadcast(&self, data: &[u8]) -> Option<BroadcastId> {
         use dashmap::mapref::entry::Entry;
 
-        let broadcast_id = sha2::Sha256::digest(data).as_slice().try_into().unwrap();
+        let broadcast_id = sha2::Sha256::digest(data).into();
 
         match self.owned_broadcasts.entry(broadcast_id) {
             Entry::Vacant(entry) => {
@@ -674,7 +674,7 @@ fn make_broadcast_to_sign(
 ) -> Result<Vec<u8>> {
     let broadcast_id = ton::overlay::broadcast::id::Id {
         src: ton::int256(source.map(|id| *id.as_slice()).unwrap_or_default()),
-        data_hash: ton::int256(sha2::Sha256::digest(data).as_slice().try_into().unwrap()),
+        data_hash: ton::int256(sha2::Sha256::digest(data).into()),
         flags: BROADCAST_FLAG_ANY_SENDER,
     };
     let broadcast_hash = hash(broadcast_id)?;
@@ -706,7 +706,7 @@ fn make_fec_part_to_sign(
 
     let part_id = ton::overlay::broadcast_fec::partid::PartId {
         broadcast_hash: ton::int256(broadcast_hash),
-        data_hash: ton::int256(sha2::Sha256::digest(part).as_slice().try_into().unwrap()),
+        data_hash: ton::int256(sha2::Sha256::digest(part).into()),
         seqno,
     };
     let part_hash = hash(part_id)?;

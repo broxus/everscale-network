@@ -92,7 +92,7 @@ impl AdnlChannel {
     }
 
     pub fn encrypt(&self, buffer: &mut Vec<u8>) -> Result<()> {
-        let checksum: [u8; 32] = sha2::Sha256::digest(buffer.as_slice()).try_into().unwrap();
+        let checksum: [u8; 32] = sha2::Sha256::digest(buffer.as_slice()).into();
 
         let len = buffer.len();
         buffer.resize(len + 64, 0);
