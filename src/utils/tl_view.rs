@@ -1,6 +1,13 @@
-use std::convert::TryFrom;
-
 use smallvec::SmallVec;
+
+pub fn deserialize_view<'a, T>(packet: &'a [u8]) -> anyhow::Result<T>
+where
+    T: ReadFromPacket<'a>,
+{
+    let mut offset = 0;
+    let view = T::read_from(packet, &mut offset)?;
+    Ok(view)
+}
 
 #[derive(Debug, Clone)]
 pub struct PacketContentsView<'a> {
@@ -16,16 +23,6 @@ pub struct PacketContentsView<'a> {
     pub reinit_date: Option<i32>,
     pub dst_reinit_date: Option<i32>,
     pub signature: Option<&'a [u8]>,
-}
-
-impl<'a> TryFrom<&'a [u8]> for PacketContentsView<'a> {
-    type Error = anyhow::Error;
-
-    fn try_from(packet: &'a [u8]) -> Result<Self, Self::Error> {
-        let mut offset = 0;
-        let view = Self::read_from(packet, &mut offset)?;
-        Ok(view)
-    }
 }
 
 impl<'a> ReadFromPacket<'a> for PacketContentsView<'a> {
@@ -75,6 +72,134 @@ impl<'a> ReadFromPacket<'a> for PacketContentsView<'a> {
             dst_reinit_date,
             signature,
         })
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum RldpMessagePartView<'a> {
+    MessagePart {
+        transfer_id: HashRef<'a>,
+        fec_type: FecTypeView,
+        part: i32,
+        total_size: i64,
+        seqno: i32,
+        data: &'a [u8],
+    },
+    Confirm {
+        transfer_id: HashRef<'a>,
+        part: i32,
+        seqno: i32,
+    },
+    Complete {
+        transfer_id: HashRef<'a>,
+        part: i32,
+    },
+}
+
+impl<'a> ReadFromPacket<'a> for RldpMessagePartView<'a> {
+    fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
+        match u32::read_from(packet, offset)? {
+            0x185c22cc => Ok(Self::MessagePart {
+                transfer_id: read_fixed_bytes(packet, offset)?,
+                fec_type: FecTypeView::read_from(packet, offset)?,
+                part: i32::read_from(packet, offset)?,
+                total_size: i64::read_from(packet, offset)?,
+                seqno: i32::read_from(packet, offset)?,
+                data: read_bytes(packet, offset)?,
+            }),
+            0xf582dc58 => Ok(Self::Confirm {
+                transfer_id: read_fixed_bytes(packet, offset)?,
+                part: i32::read_from(packet, offset)?,
+                seqno: i32::read_from(packet, offset)?,
+            }),
+            0xbc0cb2bf => Ok(Self::Complete {
+                transfer_id: read_fixed_bytes(packet, offset)?,
+                part: i32::read_from(packet, offset)?,
+            }),
+            _ => Err(PacketContentsError::UnknownConstructor),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum FecTypeView {
+    RaptorQ {
+        data_size: i32,
+        symbol_size: i32,
+        symbols_count: i32,
+    },
+    Online {
+        data_size: i32,
+        symbol_size: i32,
+        symbols_count: i32,
+    },
+    RoundRobin {
+        data_size: i32,
+        symbol_size: i32,
+        symbols_count: i32,
+    },
+}
+
+impl<'a> ReadFromPacket<'a> for FecTypeView {
+    fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
+        match u32::read_from(packet, offset)? {
+            0x8b93a7e0 => Ok(Self::RaptorQ {
+                data_size: i32::read_from(packet, offset)?,
+                symbol_size: i32::read_from(packet, offset)?,
+                symbols_count: i32::read_from(packet, offset)?,
+            }),
+            0x0127660c => Ok(Self::Online {
+                data_size: i32::read_from(packet, offset)?,
+                symbol_size: i32::read_from(packet, offset)?,
+                symbols_count: i32::read_from(packet, offset)?,
+            }),
+            0x32f528e4 => Ok(Self::RoundRobin {
+                data_size: i32::read_from(packet, offset)?,
+                symbol_size: i32::read_from(packet, offset)?,
+                symbols_count: i32::read_from(packet, offset)?,
+            }),
+            _ => Err(PacketContentsError::UnknownConstructor),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum RldpMessageView<'a> {
+    Message {
+        id: HashRef<'a>,
+        data: &'a [u8],
+    },
+    Answer {
+        query_id: HashRef<'a>,
+        data: &'a [u8],
+    },
+    Query {
+        query_id: HashRef<'a>,
+        max_answer_size: i64,
+        timeout: i32,
+        data: &'a [u8],
+    },
+}
+
+impl<'a> ReadFromPacket<'a> for RldpMessageView<'a> {
+    fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
+        match u32::read_from(packet, offset)? {
+            0x7d1bcd1e => Ok(Self::Message {
+                id: read_fixed_bytes(packet, offset)?,
+                data: read_bytes(packet, offset)?,
+            }),
+            0xa3fc5c03 => Ok(Self::Answer {
+                query_id: read_fixed_bytes(packet, offset)?,
+                data: read_bytes(packet, offset)?,
+            }),
+            0x8a794d69 => Ok(Self::Query {
+                query_id: read_fixed_bytes(packet, offset)?,
+                max_answer_size: i64::read_from(packet, offset)?,
+                timeout: i32::read_from(packet, offset)?,
+                data: read_bytes(packet, offset)?,
+            }),
+            _ => Err(PacketContentsError::UnknownConstructor),
+        }
     }
 }
 
@@ -138,16 +263,6 @@ pub enum MessageView<'a> {
     Reinit {
         date: i32,
     },
-}
-
-impl<'a> TryFrom<&'a [u8]> for MessageView<'a> {
-    type Error = anyhow::Error;
-
-    fn try_from(packet: &'a [u8]) -> Result<Self, Self::Error> {
-        let mut offset = 0;
-        let view = Self::read_from(packet, &mut offset)?;
-        Ok(view)
-    }
 }
 
 impl<'a> ReadFromPacket<'a> for MessageView<'a> {
@@ -328,7 +443,7 @@ impl<'a> ReadFromPacket<'a> for &'a [u8] {
     }
 }
 
-trait ReadFromPacket<'a>: Sized {
+pub trait ReadFromPacket<'a>: Sized {
     fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self>;
 }
 
@@ -394,7 +509,7 @@ type HashRef<'a> = &'a [u8; 32];
 type PacketContentsResult<T> = Result<T, PacketContentsError>;
 
 #[derive(thiserror::Error, Debug)]
-enum PacketContentsError {
+pub enum PacketContentsError {
     #[error("Unexpected packet EOF")]
     UnexpectedEof,
     #[error("Unknown constructor")]

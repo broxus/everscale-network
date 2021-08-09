@@ -53,19 +53,14 @@ impl RldpNode {
         peer.end_query().await;
 
         match result? {
-            (Some(answer), roundtrip) => {
-                match deserialize(answer.as_slice())?.downcast::<ton::rldp::Message>() {
-                    Ok(ton::rldp::Message::Rldp_Answer(answer))
-                        if answer.query_id.0 == query_id =>
-                    {
-                        Ok((Some(answer.data.to_vec()), roundtrip))
-                    }
-                    Ok(ton::rldp::Message::Rldp_Answer(_)) => {
-                        Err(RldpNodeError::QueryIdMismatch.into())
-                    }
-                    _ => Err(RldpNodeError::UnexpectedAnswer.into()),
-                }
-            }
+            (Some(answer), roundtrip) => match deserialize_view(answer.as_slice()) {
+                Ok(RldpMessageView::Answer {
+                    query_id: answer_id,
+                    data,
+                }) if answer_id == &query_id => Ok((Some(data.to_vec()), roundtrip)),
+                Ok(RldpMessageView::Answer { .. }) => Err(RldpNodeError::QueryIdMismatch.into()),
+                _ => Err(RldpNodeError::UnexpectedAnswer.into()),
+            },
             (None, roundtrip) => Ok((None, roundtrip)),
         }
     }
@@ -79,12 +74,9 @@ impl Subscriber for RldpNode {
         peer_id: &AdnlNodeIdShort,
         data: &[u8],
     ) -> Result<bool> {
-        let message = match deserialize(data) {
-            Ok(message) => match message.downcast::<ton::rldp::MessagePart>() {
-                Ok(message) => message,
-                _ => return Ok(false),
-            },
-            _ => return Ok(false),
+        let message = match deserialize_view(data) {
+            Ok(message) => message,
+            Err(_) => return Ok(false),
         };
 
         self.transfers
@@ -93,6 +85,14 @@ impl Subscriber for RldpNode {
 
         Ok(true)
     }
+}
+
+pub struct MessagePart {
+    fec_type: Option<ton::fec::type_::RaptorQ>,
+    part: i32,
+    total_size: i64,
+    seqno: i32,
+    data: Vec<u8>,
 }
 
 #[derive(thiserror::Error, Debug)]

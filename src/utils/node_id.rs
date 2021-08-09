@@ -6,7 +6,7 @@ use ed25519_dalek::Verifier;
 use rand::Rng;
 use ton_api::{ton, IntoBoxed};
 
-use super::packet_contents::PublicKeyView;
+use super::tl_view::PublicKeyView;
 use super::{hash, serialize, serialize_boxed};
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]

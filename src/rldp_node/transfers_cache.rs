@@ -8,8 +8,10 @@ use ton_api::ton;
 
 use super::incoming_transfer::*;
 use super::outgoing_transfer::*;
+use super::MessagePart;
 use crate::adnl_node::AdnlNode;
 use crate::subscriber::*;
+use crate::utils::RldpMessagePartView;
 use crate::utils::*;
 
 #[derive(Clone)]
@@ -146,17 +148,30 @@ impl TransfersCache {
         &self,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
-        message: ton::rldp::MessagePart,
+        message: RldpMessagePartView<'_>,
     ) -> Result<()> {
         match message {
-            ton::rldp::MessagePart::Rldp_MessagePart(message_part) => loop {
+            RldpMessagePartView::MessagePart {
+                transfer_id,
+                fec_type,
+                part,
+                total_size,
+                seqno,
+                data,
+            } => loop {
                 // Trying to get existing transfer
-                match self.transfers.get(&message_part.transfer_id.0) {
+                match self.transfers.get(transfer_id) {
                     // If transfer exists
                     Some(item) => match item.value() {
                         // Forward message part on `incoming` state
                         RldpTransfer::Incoming(parts_tx) => {
-                            let _ = parts_tx.send(message_part);
+                            let _ = parts_tx.send(MessagePart {
+                                fec_type: fec_type.into(),
+                                part,
+                                total_size,
+                                seqno,
+                                data: data.to_vec(),
+                            });
                             break;
                         }
                         // Blindly confirm receiving in case of other states
@@ -165,16 +180,16 @@ impl TransfersCache {
 
                             // Send confirm message
                             let reply = serialize_boxed(ton::rldp::messagepart::Confirm {
-                                transfer_id: message_part.transfer_id,
-                                part: message_part.part,
-                                seqno: message_part.seqno,
+                                transfer_id: ton::int256(*transfer_id),
+                                part,
+                                seqno,
                             })?;
                             self.adnl.send_custom_message(local_id, peer_id, &reply)?;
 
                             // Send complete message
                             let reply = serialize_boxed(ton::rldp::messagepart::Complete {
-                                transfer_id: message_part.transfer_id,
-                                part: message_part.part,
+                                transfer_id: ton::int256(*transfer_id),
+                                part,
                             })?;
                             self.adnl.send_custom_message(local_id, peer_id, &reply)?;
 
@@ -184,12 +199,18 @@ impl TransfersCache {
                     },
                     // If transfer doesn't exist (it is a query from other node)
                     None => match self
-                        .create_answer_handler(local_id, peer_id, message_part.transfer_id.0)
+                        .create_answer_handler(local_id, peer_id, *transfer_id)
                         .await?
                     {
                         // Forward message part on `incoming` state (for newly created transfer)
                         Some(parts_tx) => {
-                            let _ = parts_tx.send(message_part);
+                            let _ = parts_tx.send(MessagePart {
+                                fec_type: fec_type.into(),
+                                part,
+                                total_size,
+                                seqno,
+                                data: data.to_vec(),
+                            });
                             break;
                         }
                         // In case of intermediate state - retry
@@ -197,19 +218,23 @@ impl TransfersCache {
                     },
                 }
             },
-            ton::rldp::MessagePart::Rldp_Confirm(confirm) => {
-                if let Some(transfer) = self.transfers.get(&confirm.transfer_id.0) {
+            RldpMessagePartView::Confirm {
+                transfer_id,
+                part,
+                seqno,
+            } => {
+                if let Some(transfer) = self.transfers.get(transfer_id) {
                     if let RldpTransfer::Outgoing(state) = transfer.value() {
-                        if state.part() == confirm.part as u32 {
-                            state.set_seqno_in(confirm.seqno as u32);
+                        if state.part() == part as u32 {
+                            state.set_seqno_in(seqno as u32);
                         }
                     }
                 }
             }
-            ton::rldp::MessagePart::Rldp_Complete(complete) => {
-                if let Some(transfer) = self.transfers.get(&complete.transfer_id.0) {
+            RldpMessagePartView::Complete { transfer_id, part } => {
+                if let Some(transfer) = self.transfers.get(transfer_id) {
                     if let RldpTransfer::Outgoing(state) = transfer.value() {
-                        state.set_part(complete.part as u32 + 1);
+                        state.set_part(part as u32 + 1);
                     }
                 }
             }
@@ -308,7 +333,7 @@ async fn receive_loop(
     // For each incoming message part
     while let Some(message) = incoming_context.parts_rx.recv().await {
         // Trying to process its data
-        match incoming_context.transfer.process_chunk(*message) {
+        match incoming_context.transfer.process_chunk(message) {
             // If some data was successfully processed
             Ok(Some(reply)) => {
                 // Send `complete` or `confirm` message as reply
@@ -507,8 +532,25 @@ struct IncomingContext {
     transfer_id: TransferId,
 }
 
-type MessagePartsTx = mpsc::UnboundedSender<Box<ton::rldp::messagepart::MessagePart>>;
-type MessagePartsRx = mpsc::UnboundedReceiver<Box<ton::rldp::messagepart::MessagePart>>;
+impl From<FecTypeView> for Option<ton::fec::type_::RaptorQ> {
+    fn from(ty: FecTypeView) -> Self {
+        match ty {
+            FecTypeView::RaptorQ {
+                data_size,
+                symbol_size,
+                symbols_count,
+            } => Some(ton::fec::type_::RaptorQ {
+                data_size,
+                symbol_size,
+                symbols_count,
+            }),
+            _ => None,
+        }
+    }
+}
+
+type MessagePartsTx = mpsc::UnboundedSender<MessagePart>;
+type MessagePartsRx = mpsc::UnboundedReceiver<MessagePart>;
 
 pub type TransferId = [u8; 32];
 

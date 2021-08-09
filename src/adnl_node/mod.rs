@@ -1,4 +1,4 @@
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryInto;
 use std::net::SocketAddrV4;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -239,8 +239,7 @@ impl AdnlNode {
             };
 
         // Parse packet
-        let packet = PacketContentsView::try_from(data.as_slice())
-            .map_err(|_| AdnlNodeError::InvalidPacket)?;
+        let packet = deserialize_view(data.as_slice()).map_err(|_| AdnlNodeError::InvalidPacket)?;
 
         // Validate packet
         let peer_id = match self.check_packet(&packet, &local_id, peer_id)? {
@@ -338,7 +337,7 @@ impl AdnlNode {
             None
         };
         let alt_message = match &alt_message {
-            Some(buffer) => Some(MessageView::try_from(buffer.as_slice())?),
+            Some(buffer) => Some(deserialize_view(buffer.as_slice())?),
             None => None,
         };
 

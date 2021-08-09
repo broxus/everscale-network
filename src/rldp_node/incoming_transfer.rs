@@ -5,7 +5,7 @@ use anyhow::Result;
 use ton_api::{ton, IntoBoxed};
 
 use super::decoder::*;
-use super::TransferId;
+use super::{MessagePart, TransferId};
 use crate::utils::*;
 
 pub struct IncomingTransfer {
@@ -72,14 +72,11 @@ impl IncomingTransfer {
         self.data
     }
 
-    pub fn process_chunk(
-        &mut self,
-        message: ton::rldp::messagepart::MessagePart,
-    ) -> Result<Option<&[u8]>> {
+    pub fn process_chunk(&mut self, message: MessagePart) -> Result<Option<&[u8]>> {
         // Check FEC type
         let fec_type = match message.fec_type {
-            ton::fec::Type::Fec_RaptorQ(fec_type) => fec_type,
-            _ => return Err(IncomingTransferError::UnsupportedFecType.into()),
+            Some(fec_type) => fec_type,
+            None => return Err(IncomingTransferError::UnsupportedFecType.into()),
         };
 
         // Initialize `total_size` on first message
@@ -99,13 +96,13 @@ impl IncomingTransfer {
         // Check message part
         let decoder = match (message.part as u32).cmp(&self.part) {
             std::cmp::Ordering::Equal => match &mut self.decoder {
-                Some(decoder) if decoder.params() != fec_type.as_ref() => {
+                Some(decoder) if decoder.params() != &fec_type => {
                     return Err(IncomingTransferError::PacketParametersMismatch.into())
                 }
                 Some(decoder) => decoder,
                 None => self
                     .decoder
-                    .get_or_insert_with(|| RaptorQDecoder::with_params(*fec_type)),
+                    .get_or_insert_with(|| RaptorQDecoder::with_params(fec_type)),
             },
             std::cmp::Ordering::Less => {
                 self.complete().part = message.part;
