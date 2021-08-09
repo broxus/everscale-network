@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::convert::TryFrom;
 
 use anyhow::Result;
@@ -112,7 +111,7 @@ fn make_overlay_nodes_value(
         Some(nodes) => nodes
             .into_iter()
             .map(|item| (item.id.clone(), item))
-            .collect::<HashMap<_, _>>(),
+            .collect::<FxHashMap<_, _>>(),
         None => Default::default(),
     };
 

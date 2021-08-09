@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::convert::TryInto;
 use std::sync::Arc;
 
@@ -8,6 +7,7 @@ use sha2::Digest;
 
 use super::node_id::*;
 use super::packet_view::*;
+use super::FxHashMap;
 use super::{build_packet_cipher, compute_shared_secret};
 
 pub fn build_handshake_packet(
@@ -55,7 +55,7 @@ pub fn build_handshake_packet(
 ///
 /// **NOTE: even on failure can modify buffer**
 pub fn parse_handshake_packet(
-    keys: &HashMap<AdnlNodeIdShort, Arc<StoredAdnlNodeKey>>,
+    keys: &FxHashMap<AdnlNodeIdShort, Arc<StoredAdnlNodeKey>>,
     buffer: &mut PacketView<'_>,
     data_length: Option<usize>,
 ) -> Result<Option<AdnlNodeIdShort>> {

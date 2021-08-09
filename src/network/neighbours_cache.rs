@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -67,7 +66,7 @@ impl NeighboursCache {
 
 pub struct NeighboursCacheState {
     next: usize,
-    values: HashMap<AdnlNodeIdShort, Arc<Neighbour>>,
+    values: FxHashMap<AdnlNodeIdShort, Arc<Neighbour>>,
     indices: Vec<AdnlNodeIdShort>,
 }
 

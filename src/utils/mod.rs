@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::hash::BuildHasherDefault;
 
@@ -42,6 +43,9 @@ mod updated_at;
 
 pub type FxDashSet<K> = dashmap::DashSet<K, BuildHasherDefault<FxHasher>>;
 pub type FxDashMap<K, V> = dashmap::DashMap<K, V, BuildHasherDefault<FxHasher>>;
+
+pub type FxHashSet<K> = HashSet<K, BuildHasherDefault<FxHasher>>;
+pub type FxHashMap<K, V> = HashMap<K, V, BuildHasherDefault<FxHasher>>;
 
 pub fn gen_packet_offset() -> Vec<u8> {
     use rand::Rng;

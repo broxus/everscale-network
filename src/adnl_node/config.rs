@@ -1,4 +1,4 @@
-use std::collections::hash_map::{self, HashMap};
+use std::collections::hash_map;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -7,8 +7,8 @@ use crate::utils::*;
 
 pub struct AdnlNodeConfig {
     ip_address: AdnlAddressUdp,
-    keys: HashMap<AdnlNodeIdShort, Arc<StoredAdnlNodeKey>>,
-    tags: HashMap<usize, AdnlNodeIdShort>,
+    keys: FxHashMap<AdnlNodeIdShort, Arc<StoredAdnlNodeKey>>,
+    tags: FxHashMap<usize, AdnlNodeIdShort>,
 }
 
 impl AdnlNodeConfig {
@@ -49,7 +49,7 @@ impl AdnlNodeConfig {
         }
     }
 
-    pub fn keys(&self) -> &HashMap<AdnlNodeIdShort, Arc<StoredAdnlNodeKey>> {
+    pub fn keys(&self) -> &FxHashMap<AdnlNodeIdShort, Arc<StoredAdnlNodeKey>> {
         &self.keys
     }
 

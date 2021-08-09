@@ -1,10 +1,8 @@
-use std::collections::HashMap;
-
 use parking_lot::{RwLock, RwLockReadGuard};
 use rand::seq::SliceRandom;
 
 use super::node_id::*;
-use crate::utils::FxDashSet;
+use crate::utils::{FxDashSet, FxHashMap};
 
 pub struct PeersCache {
     state: RwLock<PeersCacheState>,
@@ -188,7 +186,7 @@ impl<'a> IntoIterator for &'a PeersCache {
 
 struct PeersCacheState {
     version: u64,
-    cache: HashMap<AdnlNodeIdShort, u32>,
+    cache: FxHashMap<AdnlNodeIdShort, u32>,
     index: Vec<AdnlNodeIdShort>,
     capacity: u32,
     upper: u32,
