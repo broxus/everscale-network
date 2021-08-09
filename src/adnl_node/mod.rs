@@ -29,17 +29,17 @@ pub struct AdnlNode {
     config: AdnlNodeConfig,
 
     /// Known peers for each local node id
-    peers: DashMap<AdnlNodeIdShort, Arc<AdnlPeers>>,
+    peers: FxDashMap<AdnlNodeIdShort, Arc<AdnlPeers>>,
 
     /// Channels table used to fast search on incoming packets
-    channels_by_id: DashMap<AdnlChannelId, Arc<AdnlChannel>>,
+    channels_by_id: FxDashMap<AdnlChannelId, Arc<AdnlChannel>>,
     /// Channels table used to fast search when sending messages
-    channels_by_peers: DashMap<AdnlNodeIdShort, Arc<AdnlChannel>>,
+    channels_by_peers: FxDashMap<AdnlNodeIdShort, Arc<AdnlChannel>>,
     /// Channels that were created on this node but waiting for confirmation
-    channels_to_confirm: DashMap<AdnlNodeIdShort, Arc<AdnlChannel>>,
+    channels_to_confirm: FxDashMap<AdnlNodeIdShort, Arc<AdnlChannel>>,
 
     /// Pending transfers of large messages that were split
-    incoming_transfers: Arc<DashMap<TransferId, Arc<Transfer>>>,
+    incoming_transfers: Arc<FxDashMap<TransferId, Arc<Transfer>>>,
 
     /// Pending queries
     queries: Arc<QueriesCache>,
@@ -68,7 +68,7 @@ impl AdnlNode {
 
     pub fn with_config(config: AdnlNodeConfig) -> Arc<Self> {
         let (sender_queue_tx, sender_queue_rx) = mpsc::unbounded_channel();
-        let peers = DashMap::with_capacity_and_hasher(config.keys().len(), Default::default());
+        let peers = FxDashMap::with_capacity_and_hasher(config.keys().len(), Default::default());
         for key in config.keys().keys() {
             peers.insert(*key, Default::default());
         }

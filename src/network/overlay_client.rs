@@ -97,7 +97,7 @@ impl OverlayClient {
         query: Q,
         attempts: Option<u32>,
         timeout: Option<u64>,
-        active_peers: Option<&Arc<DashSet<AdnlNodeIdShort>>>,
+        active_peers: Option<&Arc<FxDashSet<AdnlNodeIdShort>>>,
     ) -> Result<(A, Arc<Neighbour>)>
     where
         Q: ton_api::AnyBoxedSerialize,

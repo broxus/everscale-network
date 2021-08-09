@@ -3,11 +3,11 @@ use ton_api::ton;
 use crate::utils::*;
 
 pub struct Buckets {
-    buckets: Vec<DashMap<AdnlNodeIdShort, ton::dht::node::Node>>,
+    buckets: Vec<FxDashMap<AdnlNodeIdShort, ton::dht::node::Node>>,
 }
 
 impl Buckets {
-    pub fn iter(&self) -> std::slice::Iter<DashMap<AdnlNodeIdShort, ton::dht::node::Node>> {
+    pub fn iter(&self) -> std::slice::Iter<FxDashMap<AdnlNodeIdShort, ton::dht::node::Node>> {
         self.buckets.iter()
     }
 
@@ -94,8 +94,8 @@ impl Buckets {
 }
 
 impl<'a> IntoIterator for &'a Buckets {
-    type Item = &'a DashMap<AdnlNodeIdShort, ton::dht::node::Node>;
-    type IntoIter = std::slice::Iter<'a, DashMap<AdnlNodeIdShort, ton::dht::node::Node>>;
+    type Item = &'a FxDashMap<AdnlNodeIdShort, ton::dht::node::Node>;
+    type IntoIter = std::slice::Iter<'a, FxDashMap<AdnlNodeIdShort, ton::dht::node::Node>>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()

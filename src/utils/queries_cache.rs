@@ -4,11 +4,11 @@ use anyhow::Result;
 use tokio::sync::Barrier;
 
 use super::query::*;
-use super::DashMap;
+use super::FxDashMap;
 
 #[derive(Default)]
 pub struct QueriesCache {
-    queries: DashMap<QueryId, QueryState>,
+    queries: FxDashMap<QueryId, QueryState>,
 }
 
 impl QueriesCache {

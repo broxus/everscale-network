@@ -17,7 +17,7 @@ use crate::utils::*;
 #[derive(Clone)]
 pub struct TransfersCache {
     adnl: Arc<AdnlNode>,
-    transfers: Arc<DashMap<TransferId, RldpTransfer>>,
+    transfers: Arc<FxDashMap<TransferId, RldpTransfer>>,
     subscribers: Arc<Vec<Arc<dyn Subscriber>>>,
 }
 
@@ -433,7 +433,7 @@ async fn send_loop(
 
 async fn answer_loop(
     incoming_context: &mut IncomingContext,
-    transfers: Arc<DashMap<TransferId, RldpTransfer>>,
+    transfers: Arc<FxDashMap<TransferId, RldpTransfer>>,
     subscribers: Arc<Vec<Arc<dyn Subscriber>>>,
 ) -> Result<Option<TransferId>> {
     // Deserialize incoming query

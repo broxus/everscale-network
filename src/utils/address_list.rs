@@ -6,7 +6,7 @@ use anyhow::Result;
 use ton_api::ton::adnl::Address;
 use ton_api::{ton, IntoBoxed};
 
-use super::{now, DashSet};
+use super::{now, FxDashSet};
 use crate::utils::{AddressListView, AddressView};
 
 pub trait AdnlAddress: Sized {
@@ -20,7 +20,7 @@ pub struct AdnlAddressList<T> {
     reinit_date: AtomicI32,
     expire_at: AtomicI32,
     priority: AtomicI32,
-    addresses: DashSet<T>,
+    addresses: FxDashSet<T>,
 }
 
 impl<T> AdnlAddressList<T>

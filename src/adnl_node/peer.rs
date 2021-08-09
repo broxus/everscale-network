@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use super::channel::ChannelKey;
 use crate::utils::*;
 
-pub type AdnlPeers = DashMap<AdnlNodeIdShort, AdnlPeer>;
+pub type AdnlPeers = FxDashMap<AdnlNodeIdShort, AdnlPeer>;
 
 pub struct AdnlPeer {
     id: AdnlNodeIdFull,

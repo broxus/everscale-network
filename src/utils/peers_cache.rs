@@ -4,7 +4,7 @@ use parking_lot::{RwLock, RwLockReadGuard};
 use rand::seq::SliceRandom;
 
 use super::node_id::*;
-use crate::utils::DashSet;
+use crate::utils::FxDashSet;
 
 pub struct PeersCache {
     state: RwLock<PeersCacheState>,
@@ -73,7 +73,7 @@ impl PeersCache {
         &self,
         other: &PeersCache,
         amount: usize,
-        except: Option<&DashSet<AdnlNodeIdShort>>,
+        except: Option<&FxDashSet<AdnlNodeIdShort>>,
     ) {
         let selected_amount = match except {
             Some(peers) => amount + peers.len(),

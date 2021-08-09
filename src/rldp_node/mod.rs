@@ -19,7 +19,7 @@ mod peer;
 mod transfers_cache;
 
 pub struct RldpNode {
-    peers: DashMap<AdnlNodeIdShort, Arc<RldpPeer>>,
+    peers: FxDashMap<AdnlNodeIdShort, Arc<RldpPeer>>,
     transfers: TransfersCache,
 }
 

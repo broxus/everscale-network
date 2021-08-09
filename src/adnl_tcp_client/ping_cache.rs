@@ -5,12 +5,12 @@ use anyhow::Result;
 use tokio::sync::Barrier;
 use ton_api::ton;
 
-use crate::utils::DashMap;
+use crate::utils::FxDashMap;
 
 #[derive(Default)]
 pub struct PingCache {
     seqno: AtomicI64,
-    queries: DashMap<i64, PingQueryState>,
+    queries: FxDashMap<i64, PingQueryState>,
 }
 
 impl PingCache {

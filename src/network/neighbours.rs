@@ -21,7 +21,7 @@ pub struct Neighbours {
     overlay_id: OverlayIdShort,
 
     cache: Arc<NeighboursCache>,
-    overlay_peers: DashSet<AdnlNodeIdShort>,
+    overlay_peers: FxDashSet<AdnlNodeIdShort>,
 
     failed_attempts: AtomicU64,
     all_attempts: AtomicU64,

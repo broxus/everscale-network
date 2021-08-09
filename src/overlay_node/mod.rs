@@ -18,8 +18,8 @@ mod overlay_shard;
 pub struct OverlayNode {
     adnl: Arc<AdnlNode>,
     node_key: Arc<StoredAdnlNodeKey>,
-    shards: DashMap<OverlayIdShort, Arc<OverlayShard>>,
-    subscribers: DashMap<OverlayIdShort, Arc<dyn OverlaySubscriber>>,
+    shards: FxDashMap<OverlayIdShort, Arc<OverlayShard>>,
+    subscribers: FxDashMap<OverlayIdShort, Arc<dyn OverlaySubscriber>>,
     zero_state_file_hash: [u8; 32],
 }
 

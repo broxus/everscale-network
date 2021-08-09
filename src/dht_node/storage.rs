@@ -9,7 +9,7 @@ use crate::utils::*;
 
 #[derive(Default)]
 pub struct Storage {
-    storage: DashMap<StorageKey, ton::dht::value::Value>,
+    storage: FxDashMap<StorageKey, ton::dht::value::Value>,
 }
 
 impl Storage {

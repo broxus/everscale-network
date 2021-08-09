@@ -40,8 +40,8 @@ mod socket;
 mod tl_view;
 mod updated_at;
 
-pub type DashSet<K> = dashmap::DashSet<K, BuildHasherDefault<FxHasher>>;
-pub type DashMap<K, V> = dashmap::DashMap<K, V, BuildHasherDefault<FxHasher>>;
+pub type FxDashSet<K> = dashmap::DashSet<K, BuildHasherDefault<FxHasher>>;
+pub type FxDashMap<K, V> = dashmap::DashMap<K, V, BuildHasherDefault<FxHasher>>;
 
 pub fn gen_packet_offset() -> Vec<u8> {
     use rand::Rng;

@@ -11,7 +11,7 @@ pub type TransferId = [u8; 32];
 
 pub struct Transfer {
     /// Data parts labeled with offset
-    parts: DashMap<usize, Vec<u8>>,
+    parts: FxDashMap<usize, Vec<u8>>,
     /// Received data length
     received_len: AtomicUsize,
     /// Total data length
