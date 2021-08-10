@@ -1,6 +1,6 @@
 use smallvec::SmallVec;
 
-pub fn deserialize_view<'a, T>(packet: &'a [u8]) -> anyhow::Result<T>
+pub fn deserialize_view<'a, T>(packet: &'a [u8]) -> PacketContentsResult<T>
 where
     T: ReadFromPacket<'a>,
 {
