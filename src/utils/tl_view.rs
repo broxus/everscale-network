@@ -76,6 +76,358 @@ impl<'a> ReadFromPacket<'a> for PacketContentsView<'a> {
 }
 
 #[derive(Debug, Copy, Clone)]
+pub struct PublicOverlayQueryBundleView<'a> {
+    pub message: OverlayMessageView<'a>,
+    pub broadcast: OverlayBroadcastView<'a>,
+}
+
+impl<'a> ReadFromPacket<'a> for PublicOverlayQueryBundleView<'a> {
+    fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
+        Ok(Self {
+            message: OverlayMessageView::read_from(packet, offset)?,
+            broadcast: OverlayBroadcastView::read_from(packet, offset)?,
+        })
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct OverlayMessageView<'a> {
+    pub overlay: HashRef<'a>,
+}
+
+impl<'a> ReadFromPacket<'a> for OverlayMessageView<'a> {
+    fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
+        match u32::read_from(packet, offset)? {
+            0x75252420 => Ok(Self {
+                overlay: read_fixed_bytes(packet, offset)?,
+            }),
+            _ => Err(PacketContentsError::UnknownConstructor),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum OverlayBroadcastView<'a> {
+    Broadcast(OverlayBroadcastViewBroadcast<'a>),
+    BroadcastFec(OverlayBroadcastViewBroadcastFec<'a>),
+    BroadcastFecShort {
+        src: PublicKeyView<'a>,
+        certificate: CertificateView<'a>,
+        broadcast_hash: HashRef<'a>,
+        part_data_hash: HashRef<'a>,
+        seqno: i32,
+        signature: &'a [u8],
+    },
+    BroadcastNotFound,
+    FecCompleted {
+        hash: HashRef<'a>,
+    },
+    FecReceived {
+        hash: HashRef<'a>,
+    },
+    Unicast {
+        data: &'a [u8],
+    },
+}
+
+impl<'a> ReadFromPacket<'a> for OverlayBroadcastView<'a> {
+    fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
+        match u32::read_from(packet, offset)? {
+            0xb15a2b6b => Ok(Self::Broadcast(OverlayBroadcastViewBroadcast::read_from(
+                packet, offset,
+            )?)),
+            0xbad7c36a => Ok(Self::BroadcastFec(
+                OverlayBroadcastViewBroadcastFec::read_from(packet, offset)?,
+            )),
+            0xf1881342 => Ok(Self::BroadcastFecShort {
+                src: PublicKeyView::read_from(packet, offset)?,
+                certificate: CertificateView::read_from(packet, offset)?,
+                broadcast_hash: read_fixed_bytes(packet, offset)?,
+                part_data_hash: read_fixed_bytes(packet, offset)?,
+                seqno: i32::read_from(packet, offset)?,
+                signature: read_bytes(packet, offset)?,
+            }),
+            0x95863624 => Ok(Self::BroadcastNotFound),
+            0x09d76914 => Ok(Self::FecCompleted {
+                hash: read_fixed_bytes(packet, offset)?,
+            }),
+            0xd55c14ec => Ok(Self::FecReceived {
+                hash: read_fixed_bytes(packet, offset)?,
+            }),
+            0x33534e24 => Ok(Self::Unicast {
+                data: read_bytes(packet, offset)?,
+            }),
+            _ => Err(PacketContentsError::UnknownConstructor),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct OverlayBroadcastViewBroadcast<'a> {
+    pub src: PublicKeyView<'a>,
+    pub certificate: CertificateView<'a>,
+    pub flags: i32,
+    pub data: &'a [u8],
+    pub date: i32,
+    pub signature: &'a [u8],
+}
+
+impl<'a> ReadFromPacket<'a> for OverlayBroadcastViewBroadcast<'a> {
+    fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
+        Ok(Self {
+            src: PublicKeyView::read_from(packet, offset)?,
+            certificate: CertificateView::read_from(packet, offset)?,
+            flags: i32::read_from(packet, offset)?,
+            data: read_bytes(packet, offset)?,
+            date: i32::read_from(packet, offset)?,
+            signature: read_bytes(packet, offset)?,
+        })
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct OverlayBroadcastViewBroadcastFec<'a> {
+    pub src: PublicKeyView<'a>,
+    pub certificate: CertificateView<'a>,
+    pub data_hash: HashRef<'a>,
+    pub data_size: i32,
+    pub flags: i32,
+    pub data: &'a [u8],
+    pub seqno: i32,
+    pub fec: FecTypeView,
+    pub date: i32,
+    pub signature: &'a [u8],
+}
+
+impl<'a> ReadFromPacket<'a> for OverlayBroadcastViewBroadcastFec<'a> {
+    fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
+        Ok(Self {
+            src: PublicKeyView::read_from(packet, offset)?,
+            certificate: CertificateView::read_from(packet, offset)?,
+            data_hash: read_fixed_bytes(packet, offset)?,
+            data_size: i32::read_from(packet, offset)?,
+            flags: i32::read_from(packet, offset)?,
+            data: read_bytes(packet, offset)?,
+            seqno: i32::read_from(packet, offset)?,
+            fec: FecTypeView::read_from(packet, offset)?,
+            date: i32::read_from(packet, offset)?,
+            signature: read_bytes(packet, offset)?,
+        })
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum CertificateView<'a> {
+    Certificate {
+        issued_by: PublicKeyView<'a>,
+        expire_at: i32,
+        max_size: i32,
+        signature: &'a [u8],
+    },
+    EmptyCertificate,
+}
+
+impl<'a> ReadFromPacket<'a> for CertificateView<'a> {
+    fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
+        match u32::read_from(packet, offset)? {
+            0xe09ed731 => Ok(Self::Certificate {
+                issued_by: PublicKeyView::read_from(packet, offset)?,
+                expire_at: i32::read_from(packet, offset)?,
+                max_size: i32::read_from(packet, offset)?,
+                signature: read_bytes(packet, offset)?,
+            }),
+            0x32dabccf => Ok(Self::EmptyCertificate),
+            _ => Err(PacketContentsError::UnknownConstructor),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CatchainUpdateView<'a> {
+    pub block: CatchainBlockView<'a>,
+}
+
+impl<'a> ReadFromPacket<'a> for CatchainUpdateView<'a> {
+    fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
+        match u32::read_from(packet, offset)? {
+            0x236758c4 => Ok(Self {
+                block: CatchainBlockView::read_from(packet, offset)?,
+            }),
+            _ => Err(PacketContentsError::UnknownConstructor),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CatchainBlockView<'a> {
+    pub incarnation: HashRef<'a>,
+    pub src: i32,
+    pub height: i32,
+    pub data: CatchainBlockDataView<'a>,
+    pub signature: &'a [u8],
+}
+
+impl<'a> ReadFromPacket<'a> for CatchainBlockView<'a> {
+    fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
+        Ok(Self {
+            incarnation: read_fixed_bytes(packet, offset)?,
+            src: i32::read_from(packet, offset)?,
+            height: i32::read_from(packet, offset)?,
+            data: CatchainBlockDataView::read_from(packet, offset)?,
+            signature: read_bytes(packet, offset)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CatchainBlockDataView<'a> {
+    pub prev: CatchainBlockDepView<'a>,
+    // TODO: determine optimal size on stack
+    pub deps: SmallVec<[CatchainBlockDepView<'a>; 4]>,
+}
+
+impl<'a> ReadFromPacket<'a> for CatchainBlockDataView<'a> {
+    fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
+        Ok(Self {
+            prev: CatchainBlockDepView::read_from(packet, offset)?,
+            deps: ReadFromPacket::read_from(packet, offset)?,
+        })
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct CatchainBlockDepView<'a> {
+    pub src: i32,
+    pub height: i32,
+    pub data_hash: HashRef<'a>,
+    pub signature: &'a [u8],
+}
+
+impl<'a> ReadFromPacket<'a> for CatchainBlockDepView<'a> {
+    fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
+        Ok(Self {
+            src: i32::read_from(packet, offset)?,
+            height: i32::read_from(packet, offset)?,
+            data_hash: read_fixed_bytes(packet, offset)?,
+            signature: read_bytes(packet, offset)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ValidatorSessionBlockUpdateView<'a> {
+    pub ts: i64,
+    // TODO: determine optimal size on stack
+    pub actions: SmallVec<[ValidatorSessionRoundMessageView<'a>; 4]>,
+    pub state: i32,
+}
+
+impl<'a> ReadFromPacket<'a> for ValidatorSessionBlockUpdateView<'a> {
+    fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
+        match u32::read_from(packet, offset)? {
+            0x9283ce37 => Ok(Self {
+                ts: i64::read_from(packet, offset)?,
+                actions: ReadFromPacket::read_from(packet, offset)?,
+                state: i32::read_from(packet, offset)?,
+            }),
+            _ => Err(PacketContentsError::UnknownConstructor),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum ValidatorSessionRoundMessageView<'a> {
+    ApprovedBlock {
+        round: i32,
+        candidate: HashRef<'a>,
+        signature: &'a [u8],
+    },
+    Commit {
+        round: i32,
+        candidate: HashRef<'a>,
+        signature: &'a [u8],
+    },
+    Empty {
+        round: i32,
+        attempt: i32,
+    },
+    Precommit {
+        round: i32,
+        attempt: i32,
+        candidate: HashRef<'a>,
+    },
+    RejectedBlock {
+        round: i32,
+        candidate: HashRef<'a>,
+        reason: &'a [u8],
+    },
+    SubmittedBlock {
+        round: i32,
+        root_hash: HashRef<'a>,
+        file_hash: HashRef<'a>,
+        collated_data_file_hash: HashRef<'a>,
+    },
+    Vote {
+        round: i32,
+        attempt: i32,
+        candidate: HashRef<'a>,
+    },
+    VoteFor {
+        round: i32,
+        attempt: i32,
+        candidate: HashRef<'a>,
+    },
+}
+
+impl<'a> ReadFromPacket<'a> for ValidatorSessionRoundMessageView<'a> {
+    fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
+        match u32::read_from(packet, offset)? {
+            0x04a5b581 => Ok(Self::ApprovedBlock {
+                round: i32::read_from(packet, offset)?,
+                candidate: read_fixed_bytes(packet, offset)?,
+                signature: read_bytes(packet, offset)?,
+            }),
+            0xac129ef5 => Ok(Self::Commit {
+                round: i32::read_from(packet, offset)?,
+                candidate: read_fixed_bytes(packet, offset)?,
+                signature: read_bytes(packet, offset)?,
+            }),
+            0x4a201fa9 => Ok(Self::Empty {
+                round: i32::read_from(packet, offset)?,
+                attempt: i32::read_from(packet, offset)?,
+            }),
+            0xa854b552 => Ok(Self::Precommit {
+                round: i32::read_from(packet, offset)?,
+                attempt: i32::read_from(packet, offset)?,
+                candidate: read_fixed_bytes(packet, offset)?,
+            }),
+            0x95884e6b => Ok(Self::RejectedBlock {
+                round: i32::read_from(packet, offset)?,
+                candidate: read_fixed_bytes(packet, offset)?,
+                reason: read_bytes(packet, offset)?,
+            }),
+            0x127624b6 => Ok(Self::SubmittedBlock {
+                round: i32::read_from(packet, offset)?,
+                root_hash: read_fixed_bytes(packet, offset)?,
+                file_hash: read_fixed_bytes(packet, offset)?,
+                collated_data_file_hash: read_fixed_bytes(packet, offset)?,
+            }),
+            0x9a3251c7 => Ok(Self::Vote {
+                round: i32::read_from(packet, offset)?,
+                attempt: i32::read_from(packet, offset)?,
+                candidate: read_fixed_bytes(packet, offset)?,
+            }),
+            0x61f0fe2f => Ok(Self::VoteFor {
+                round: i32::read_from(packet, offset)?,
+                attempt: i32::read_from(packet, offset)?,
+                candidate: read_fixed_bytes(packet, offset)?,
+            }),
+            _ => Err(PacketContentsError::UnknownConstructor),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
 pub enum RldpMessagePartView<'a> {
     MessagePart {
         transfer_id: HashRef<'a>,

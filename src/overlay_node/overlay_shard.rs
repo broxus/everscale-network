@@ -1,4 +1,4 @@
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -212,6 +212,7 @@ impl OverlayShard {
         self.received_catchain.pop().await
     }
 
+    #[allow(dead_code)]
     pub fn push_catchain(&self, update: CatchainUpdate) {
         self.received_catchain.push(update);
     }
@@ -220,14 +221,14 @@ impl OverlayShard {
         self: &Arc<Self>,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
-        broadcast: ton::overlay::broadcast::Broadcast,
+        broadcast: OverlayBroadcastViewBroadcast<'_>,
         raw_data: &[u8],
     ) -> Result<()> {
         if self.is_broadcast_outdated(broadcast.date) {
             return Ok(());
         }
 
-        let node_id = AdnlNodeIdFull::try_from(&broadcast.src)?;
+        let node_id = AdnlNodeIdFull::try_from(broadcast.src)?;
         let node_peer_id = node_id.compute_short_id()?;
         let source = match broadcast.flags {
             flags if flags & BROADCAST_FLAG_ANY_SENDER == 0 => Some(node_peer_id),
@@ -235,17 +236,17 @@ impl OverlayShard {
         };
 
         let broadcast_to_sign =
-            make_broadcast_to_sign(&broadcast.data, broadcast.date, source.as_ref())?;
+            make_broadcast_to_sign(broadcast.data, broadcast.date, source.as_ref())?;
         let broadcast_id = match self.create_broadcast(&broadcast_to_sign) {
             Some(broadcast_id) => broadcast_id,
             None => return Ok(()),
         };
 
-        node_id.verify(&broadcast_to_sign, &broadcast.signature)?;
+        node_id.verify(&broadcast_to_sign, broadcast.signature)?;
 
         self.received_broadcasts.push(IncomingBroadcastInfo {
             packets: 1,
-            data: broadcast.data.0,
+            data: broadcast.data.to_vec(),
             from: node_peer_id,
         });
 
@@ -260,7 +261,7 @@ impl OverlayShard {
         self: &Arc<Self>,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
-        broadcast: ton::overlay::broadcast::BroadcastFec,
+        broadcast: OverlayBroadcastViewBroadcastFec<'_>,
         raw_data: &[u8],
     ) -> Result<()> {
         use dashmap::mapref::entry::Entry;
@@ -269,13 +270,32 @@ impl OverlayShard {
             return Ok(());
         }
 
-        let broadcast_id = broadcast.data_hash.0;
-        let node_id = AdnlNodeIdFull::try_from(&broadcast.src)?;
+        let broadcast_id = *broadcast.data_hash;
+        let node_id = AdnlNodeIdFull::try_from(broadcast.src)?;
         let source = node_id.compute_short_id()?;
+
+        let fec_type = match broadcast.fec {
+            FecTypeView::RaptorQ {
+                data_size,
+                symbol_size,
+                symbols_count,
+            } => ton::fec::type_::RaptorQ {
+                data_size,
+                symbol_size,
+                symbols_count,
+            },
+            _ => return Err(OverlayShardError::UnsupportedFecType.into()),
+        };
+
+        let signature = match broadcast.signature.len() {
+            64 => broadcast.signature.try_into().unwrap(),
+            _ => return Err(OverlayShardError::UnsupportedSignature.into()),
+        };
 
         let transfer = match self.owned_broadcasts.entry(broadcast_id) {
             Entry::Vacant(entry) => {
-                let incoming_transfer = self.create_incoming_fec_transfer(&broadcast)?;
+                let incoming_transfer =
+                    self.create_incoming_fec_transfer(fec_type.clone(), broadcast_id, source)?;
                 entry
                     .insert(Arc::new(OwnedBroadcast::Incoming(incoming_transfer)))
                     .clone()
@@ -298,7 +318,17 @@ impl OverlayShard {
         }
 
         if !transfer.completed.load(Ordering::Acquire) {
-            transfer.broadcast_tx.send(broadcast)?;
+            transfer.broadcast_tx.send(BroadcastFec {
+                node_id,
+                data_hash: broadcast_id,
+                data_size: broadcast.data_size,
+                flags: broadcast.flags,
+                data: broadcast.data.to_vec(),
+                seqno: broadcast.seqno,
+                fec_type,
+                date: broadcast.date,
+                signature,
+            })?;
         }
 
         let neighbours = self.neighbours.get_random_peers(5, Some(peer_id));
@@ -466,19 +496,12 @@ impl OverlayShard {
 
     fn create_incoming_fec_transfer(
         self: &Arc<Self>,
-        broadcast: &ton::overlay::broadcast::BroadcastFec,
+        fec_type: ton::fec::type_::RaptorQ,
+        broadcast_id: BroadcastId,
+        peer_id: AdnlNodeIdShort,
     ) -> Result<IncomingFecTransfer> {
-        let fec_type = match &broadcast.fec {
-            ton::fec::Type::Fec_RaptorQ(fec_type) => fec_type,
-            _ => return Err(OverlayShardError::UnsupportedFecType.into()),
-        };
-
         let (broadcast_tx, mut broadcast_rx) = mpsc::unbounded_channel();
-        let mut decoder = RaptorQDecoder::with_params(fec_type.as_ref().clone());
-
-        let broadcast_id = broadcast.data_hash.0;
-        let node_id = AdnlNodeIdFull::try_from(&broadcast.src)?;
-        let peer_id = node_id.compute_short_id()?;
+        let mut decoder = RaptorQDecoder::with_params(fec_type);
 
         tokio::spawn({
             let overlay_shard = self.clone();
@@ -487,7 +510,7 @@ impl OverlayShard {
                 let mut packets = 0;
                 while let Some(broadcast) = broadcast_rx.recv().await {
                     packets += 1;
-                    match process_fec_broadcast(&mut decoder, &broadcast) {
+                    match process_fec_broadcast(&mut decoder, broadcast) {
                         Ok(Some(data)) => {
                             overlay_shard
                                 .received_broadcasts
@@ -625,33 +648,29 @@ impl OverlayShard {
 
 fn process_fec_broadcast(
     decoder: &mut RaptorQDecoder,
-    broadcast: &ton::overlay::broadcast::BroadcastFec,
+    broadcast: BroadcastFec,
 ) -> Result<Option<Vec<u8>>> {
-    let fec_type = match &broadcast.fec {
-        ton::fec::Type::Fec_RaptorQ(fec_type) => fec_type,
-        _ => return Err(OverlayShardError::UnsupportedFecType.into()),
-    };
-
-    let broadcast_id = &broadcast.data_hash.0;
-    let node_id = AdnlNodeIdFull::try_from(&broadcast.src)?;
+    let broadcast_id = &broadcast.data_hash;
 
     let broadcast_to_sign = make_fec_part_to_sign(
         broadcast_id,
         broadcast.data_size,
         broadcast.date,
         broadcast.flags,
-        fec_type,
+        &broadcast.fec_type,
         &broadcast.data,
         broadcast.seqno,
         if broadcast.flags & BROADCAST_FLAG_ANY_SENDER == 0 {
-            Some(node_id.compute_short_id()?)
+            Some(broadcast.node_id.compute_short_id()?)
         } else {
             None
         },
     )?;
-    node_id.verify(&broadcast_to_sign, &broadcast.signature)?;
+    broadcast
+        .node_id
+        .verify(&broadcast_to_sign, &broadcast.signature)?;
 
-    match decoder.decode(broadcast.seqno as u32, &broadcast.data) {
+    match decoder.decode(broadcast.seqno as u32, broadcast.data) {
         Some(result) if result.len() != broadcast.data_size as usize => {
             Err(OverlayShardError::DataSizeMismatch.into())
         }
@@ -763,7 +782,20 @@ enum OwnedBroadcast {
     Incoming(IncomingFecTransfer),
 }
 
-type BroadcastFecTx = mpsc::UnboundedSender<ton::overlay::broadcast::BroadcastFec>;
+#[derive(Debug)]
+struct BroadcastFec {
+    node_id: AdnlNodeIdFull,
+    data_hash: BroadcastId,
+    data_size: i32,
+    flags: i32,
+    data: Vec<u8>,
+    seqno: i32,
+    fec_type: ton::fec::type_::RaptorQ,
+    date: i32,
+    signature: [u8; 64],
+}
+
+type BroadcastFecTx = mpsc::UnboundedSender<BroadcastFec>;
 
 type BroadcastId = [u8; 32];
 
@@ -771,6 +803,8 @@ type BroadcastId = [u8; 32];
 enum OverlayShardError {
     #[error("Unsupported fec type")]
     UnsupportedFecType,
+    #[error("Unsupported signature")]
+    UnsupportedSignature,
     #[error("Data size mismatch")]
     DataSizeMismatch,
     #[error("Data hash mismatch")]

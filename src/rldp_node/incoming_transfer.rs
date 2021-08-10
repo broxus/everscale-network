@@ -113,7 +113,7 @@ impl IncomingTransfer {
         };
 
         // Decode message data
-        match decoder.decode(message.seqno as u32, &message.data) {
+        match decoder.decode(message.seqno as u32, message.data) {
             Some(data) if data.len() + self.data.len() > total_size => {
                 Err(IncomingTransferError::TooBigTransferSize.into())
             }

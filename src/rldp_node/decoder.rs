@@ -18,8 +18,8 @@ impl RaptorQDecoder {
         }
     }
 
-    pub fn decode(&mut self, seqno: u32, data: &[u8]) -> Option<Vec<u8>> {
-        let packet = raptorq::EncodingPacket::new(raptorq::PayloadId::new(0, seqno), data.to_vec());
+    pub fn decode(&mut self, seqno: u32, data: Vec<u8>) -> Option<Vec<u8>> {
+        let packet = raptorq::EncodingPacket::new(raptorq::PayloadId::new(0, seqno), data);
         self.seqno = seqno;
         self.engine.decode(packet)
     }

@@ -434,70 +434,59 @@ impl Subscriber for OverlayNode {
         peer_id: &AdnlNodeIdShort,
         data: &[u8],
     ) -> Result<bool> {
-        let mut bundle = deserialize_bundle(data)?;
-        let bundle_type = match bundle.len() {
-            2 => QueryBundleType::Public,
-            3 => QueryBundleType::Private,
-            _ => return Ok(false),
+        let bundle = match deserialize_view::<PublicOverlayQueryBundleView>(data) {
+            Ok(bundle) => bundle,
+            Err(_) => return Ok(false),
         };
 
-        let overlay_id = match bundle.remove(0).downcast::<ton::overlay::Message>() {
-            Ok(message) => message.into(),
-            Err(e) => {
-                log::debug!("Unsupported overlay message: {:?}", e);
-                return Ok(false);
-            }
-        };
-
+        let overlay_id = OverlayIdShort::from(*bundle.message.overlay);
         let shard = self.get_overlay_shard(&overlay_id)?.clone();
 
-        match bundle_type {
-            QueryBundleType::Public => {
-                match bundle.remove(0).downcast::<ton::overlay::Broadcast>() {
-                    Ok(ton::overlay::Broadcast::Overlay_Broadcast(broadcast)) => {
-                        shard
-                            .receive_broadcast(local_id, peer_id, *broadcast, data)
-                            .await?;
-                        Ok(true)
-                    }
-                    Ok(ton::overlay::Broadcast::Overlay_BroadcastFec(broadcast)) => {
-                        shard
-                            .receive_fec_broadcast(local_id, peer_id, *broadcast, data)
-                            .await?;
-                        Ok(true)
-                    }
-                    Ok(_) => Err(OverlayNodeError::UnsupportedOverlayBroadcastMessage.into()),
-                    Err(_) => Err(OverlayNodeError::UnsupportedOverlayMessage.into()),
-                }
-            }
-            QueryBundleType::Private => {
-                // Extract messages
-                let catchain_update = match bundle.remove(0).downcast::<ton::catchain::Update>() {
-                    Ok(ton::catchain::Update::Catchain_BlockUpdate(message)) => *message,
-                    _ => return Err(OverlayNodeError::UnsupportedPrivateOverlayMessage.into()),
-                };
-
-                let validator_session_update = match bundle
-                    .remove(0)
-                    .downcast::<ton::validator_session::BlockUpdate>(
-                ) {
-                    Ok(ton::validator_session::BlockUpdate::ValidatorSession_BlockUpdate(
-                        message,
-                    )) => *message,
-                    _ => return Err(OverlayNodeError::UnsupportedPrivateOverlayMessage.into()),
-                };
-
-                // Notify waiters
-                shard.push_catchain(CatchainUpdate {
-                    peer_id: *peer_id,
-                    catchain_update,
-                    validator_session_update,
-                });
-
-                // Done
+        match bundle.broadcast {
+            OverlayBroadcastView::Broadcast(broadcast) => {
+                shard
+                    .receive_broadcast(local_id, peer_id, broadcast, data)
+                    .await?;
                 Ok(true)
             }
+            OverlayBroadcastView::BroadcastFec(broadcast) => {
+                shard
+                    .receive_fec_broadcast(local_id, peer_id, broadcast, data)
+                    .await?;
+                Ok(true)
+            }
+            _ => Err(OverlayNodeError::UnsupportedOverlayBroadcastMessage.into()),
         }
+
+        /* UNUSED UNTIL VALIDATOR LOGIC WILL BE NEEDED
+
+        // Extract messages
+        let catchain_update = match bundle.remove(0).downcast::<ton::catchain::Update>() {
+            Ok(ton::catchain::Update::Catchain_BlockUpdate(message)) => *message,
+            _ => return Err(OverlayNodeError::UnsupportedPrivateOverlayMessage.into()),
+        };
+
+        let validator_session_update = match bundle
+            .remove(0)
+            .downcast::<ton::validator_session::BlockUpdate>(
+        ) {
+            Ok(ton::validator_session::BlockUpdate::ValidatorSession_BlockUpdate(
+                message,
+            )) => *message,
+            _ => return Err(OverlayNodeError::UnsupportedPrivateOverlayMessage.into()),
+        };
+
+        // Notify waiters
+        shard.push_catchain(CatchainUpdate {
+            peer_id: *peer_id,
+            catchain_update,
+            validator_session_update,
+        });
+
+        // Done
+        Ok(true)
+
+        */
     }
 
     async fn try_consume_query_bundle(
@@ -549,17 +538,8 @@ const MAX_RANDOM_PEERS: usize = 4;
 
 pub const MAX_OVERLAY_PEERS: usize = 65536;
 
-enum QueryBundleType {
-    Public,
-    Private,
-}
-
 #[derive(thiserror::Error, Debug)]
 enum OverlayNodeError {
-    #[error("Unsupported private overlay message")]
-    UnsupportedPrivateOverlayMessage,
-    #[error("Unsupported overlay message")]
-    UnsupportedOverlayMessage,
     #[error("Unsupported overlay broadcast message")]
     UnsupportedOverlayBroadcastMessage,
     #[error("Unknown overlay")]
