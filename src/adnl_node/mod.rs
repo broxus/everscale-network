@@ -559,11 +559,11 @@ impl AdnlNode {
             }
         }
 
-        if let Some(seqno) = packet.seqno {
-            if !peer.receiver_state().history().deliver_packet(seqno) {
-                return Ok(None);
-            }
-        }
+        // if let Some(seqno) = packet.seqno {
+        //     if !peer.receiver_state().history().deliver_packet(seqno) {
+        //         return Ok(None);
+        //     }
+        // }
 
         if let Some(confirm_seqno) = packet.confirm_seqno {
             let sender_seqno = peer.sender_state().history().seqno();

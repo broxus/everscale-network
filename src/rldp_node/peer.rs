@@ -37,4 +37,4 @@ impl RldpPeer {
     }
 }
 
-const MAX_QUERIES: u32 = 3;
+const MAX_QUERIES: u32 = 8;
