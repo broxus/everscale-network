@@ -16,6 +16,7 @@ mod adnl_tcp_client;
 mod dht_node;
 mod network;
 mod overlay_node;
+pub mod protocol;
 mod rldp_node;
 mod subscriber;
 pub mod utils;

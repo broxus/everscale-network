@@ -6,52 +6,49 @@ use ton_api::ton::{self, TLObject};
 use super::address_list::*;
 use super::node_id::*;
 use super::now;
-use ton_api::IntoBoxed;
+use crate::protocol::*;
 
 pub const DHT_VALUE_TIMEOUT: i32 = 3600; // Seconds
 
-pub fn sign_dht_value(
-    key: &StoredAdnlNodeKey,
-    name: &str,
-    value: &[u8],
-) -> Result<ton::dht::value::Value> {
-    let value = ton::dht::value::Value {
+pub fn sign_dht_value<'a, V>(
+    key: &'a StoredAdnlNodeKey,
+    name: &'a str,
+    value: &'a V,
+) -> Result<DhtValueView<'a, V, [u8; 64]>>
+where
+    V: WriteToPacket,
+{
+    let mut value = DhtValueView {
         key: sign_dht_key_description(key, name)?,
-        value: ton::bytes(value.to_vec()),
+        value: IntermediateBytes(value),
         ttl: now() + DHT_VALUE_TIMEOUT,
         signature: Default::default(),
     };
-    key.sign_boxed(value, |value, signature| {
-        let mut value = value.only();
-        value.signature = signature;
-        value
-    })
+    value.signature = key.sign_writeable(value.wrap())?;
+    Ok(value)
 }
 
-pub fn sign_dht_key_description(
-    key: &StoredAdnlNodeKey,
-    name: &str,
-) -> Result<ton::dht::keydescription::KeyDescription> {
-    let key_description = ton::dht::keydescription::KeyDescription {
+pub fn sign_dht_key_description<'a>(
+    key: &'a StoredAdnlNodeKey,
+    name: &'a str,
+) -> Result<DhtKeyDescriptionView<'a, [u8; 64]>> {
+    let mut key_description = DhtKeyDescriptionView {
         key: make_dht_key(key.id(), name),
-        id: key.full_id().as_tl().into_boxed(),
-        update_rule: ton::dht::UpdateRule::Dht_UpdateRule_Signature,
+        id: key.full_id().as_tl(),
+        update_rule: DhtUpdateRuleView::Signature,
         signature: Default::default(),
     };
-    key.sign_boxed(key_description, |key, signature| {
-        let mut key = key.only();
-        key.signature = signature;
-        key
-    })
+    key_description.signature = key.sign_writeable(key_description.wrap())?;
+    Ok(key_description)
 }
 
-pub fn make_dht_key<T>(id: &T, name: &str) -> ton::dht::key::Key
+pub fn make_dht_key<'a, T>(id: &'a T, name: &'a str) -> DhtKeyView<'a>
 where
     T: AsRef<[u8; 32]>,
 {
-    ton::dht::key::Key {
-        id: ton::int256(*id.as_ref()),
-        name: ton::bytes(name.as_bytes().to_vec()),
+    DhtKeyView {
+        id: id.as_ref(),
+        name: name.as_bytes(),
         idx: 0,
     }
 }

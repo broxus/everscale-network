@@ -3,17 +3,21 @@ use std::convert::TryFrom;
 use anyhow::Result;
 use ton_api::ton;
 
-use super::{hash, serialize, serialize_boxed};
+use super::{hash, serialize_boxed};
+use crate::protocol::*;
 use crate::utils::AdnlNodeIdFull;
 
-pub fn verify_node(overlay_id: &OverlayIdShort, node: &ton::overlay::node::Node) -> Result<()> {
+pub fn verify_node(
+    overlay_id: &OverlayIdShort,
+    node: &OverlayNodeView<'_, &[u8; 64]>,
+) -> Result<()> {
     if node.overlay.0 != overlay_id.0 {
         return Err(OverlayError::OverlayIdMismatch.into());
     }
 
     let node_id = AdnlNodeIdFull::try_from(&node.id)?;
 
-    let node_to_sign = serialize_boxed(ton::overlay::node::tosign::ToSign {
+    let node_to_sign = serialize_boxed(OverlayNodeToSign {
         id: node_id.compute_short_id()?.as_tl(),
         overlay: node.overlay,
         version: node.version,
@@ -27,24 +31,17 @@ pub fn verify_node(overlay_id: &OverlayIdShort, node: &ton::overlay::node::Node)
 pub fn compute_overlay_id(
     workchain: i32,
     _shard: i64,
-    zero_state_file_hash: FileHash,
+    zero_state_file_hash: &FileHash,
 ) -> Result<OverlayIdFull> {
-    let overlay = ton::ton_node::shardpublicoverlayid::ShardPublicOverlayId {
-        workchain,
-        shard: 1i64 << 63, // WHY?!!
-        zero_state_file_hash: ton::int256(zero_state_file_hash),
-    };
-    hash(overlay).map(OverlayIdFull)
-}
-
-pub fn compute_private_overlay_short_id(
-    first_block: &ton::catchain::FirstBlock,
-) -> Result<PrivateOverlayIdShort> {
-    let first_block = serialize(first_block)?;
-    let overlay_id = ton::pub_::publickey::Overlay {
-        name: first_block.into(),
-    };
-    hash(overlay_id).map(PrivateOverlayIdShort)
+    hash(
+        ShardPublicOverlayIdView {
+            workchain,
+            shard: 1i64 << 63, // WHY?!!
+            zero_state_file_hash,
+        }
+        .wrap(),
+    )
+    .map(OverlayIdFull)
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -56,10 +53,7 @@ impl OverlayIdFull {
     }
 
     pub fn compute_short_id(&self) -> Result<OverlayIdShort> {
-        let overlay = ton::pub_::publickey::Overlay {
-            name: ton::bytes(self.0.to_vec()),
-        };
-        hash(overlay).map(OverlayIdShort)
+        hash(PublicKeyView::Overlay { name: &self.0 }).map(OverlayIdShort)
     }
 }
 
@@ -96,9 +90,9 @@ impl From<&OverlayIdShort> for [u8; 32] {
     }
 }
 
-impl From<ton::overlay::Message> for OverlayIdShort {
-    fn from(message: ton::overlay::Message) -> Self {
-        Self(message.only().overlay.0)
+impl From<OverlayMessageView<'_>> for OverlayIdShort {
+    fn from(message: OverlayMessageView<'_>) -> Self {
+        Self(*message.overlay)
     }
 }
 

@@ -3,8 +3,8 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::atomic::{AtomicI32, Ordering};
 
 use anyhow::Result;
+use ton_api::ton;
 use ton_api::ton::adnl::Address;
-use ton_api::{ton, IntoBoxed};
 
 use super::{now, FxDashSet};
 use crate::utils::{AddressListView, AddressView};
@@ -12,7 +12,7 @@ use crate::utils::{AddressListView, AddressView};
 pub trait AdnlAddress: Sized {
     fn is_public(&self) -> bool;
     fn serialized_size(&self) -> usize;
-    fn as_tl(&self) -> ton::adnl::Address;
+    fn as_tl(&self) -> AddressView;
 }
 
 pub struct AdnlAddressList<T> {
@@ -78,21 +78,6 @@ where
     pub fn is_empty(&self) -> bool {
         self.addresses.is_empty()
     }
-
-    pub fn as_tl(&self) -> ton::adnl::addresslist::AddressList {
-        ton::adnl::addresslist::AddressList {
-            addrs: self
-                .addresses
-                .iter()
-                .map(|item| item.key().as_tl())
-                .collect::<Vec<_>>()
-                .into(),
-            version: self.version(),
-            reinit_date: self.reinit_date(),
-            priority: self.priority(),
-            expire_at: self.expire_at(),
-        }
-    }
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
@@ -147,12 +132,11 @@ impl AdnlAddress for AdnlAddressUdp {
         12
     }
 
-    fn as_tl(&self) -> Address {
-        ton::adnl::address::address::Udp {
+    fn as_tl(&self) -> AddressView {
+        AddressView::Udp {
             ip: (self.0 >> 16) as i32,
             port: self.0 as u16 as i32,
         }
-        .into_boxed()
     }
 }
 

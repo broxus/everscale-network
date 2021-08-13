@@ -93,7 +93,7 @@ impl OverlayNode {
         &self,
         overlay_id: &OverlayIdShort,
         ip_address: AdnlAddressUdp,
-        node: &ton::overlay::node::Node,
+        node: &OverlayNodeView<'_, [u8; 64]>,
     ) -> Result<Option<AdnlNodeIdShort>> {
         let shard = self.get_overlay_shard(overlay_id)?;
         if shard.is_private() {

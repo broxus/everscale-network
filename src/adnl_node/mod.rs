@@ -762,13 +762,10 @@ impl AdnlNode {
         self.config.ip_address()
     }
 
-    pub fn build_address_list(
-        &self,
-        expire_at: Option<i32>,
-    ) -> ton::adnl::addresslist::AddressList {
+    pub fn build_address_list(&self, expire_at: Option<i32>) -> AddressListView {
         let now = now();
-        ton::adnl::addresslist::AddressList {
-            addrs: vec![self.config.ip_address().as_tl()].into(),
+        AddressListView {
+            address: Some(self.config.ip_address().as_tl()),
             version: now,
             reinit_date: self.start_time,
             priority: 0,

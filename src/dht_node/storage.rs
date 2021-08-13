@@ -43,11 +43,14 @@ impl Storage {
         })
     }
 
-    pub fn insert_overlay_nodes(
+    pub fn insert_overlay_nodes<'a, V>(
         &self,
         key: StorageKey,
-        value: ton::dht::value::Value,
-    ) -> Result<bool> {
+        value: DhtValueView<'a, V, &'a [u8; 64]>,
+    ) -> Result<bool>
+    where
+        V: ReadFromPacket<'a>,
+    {
         use dashmap::mapref::entry::Entry;
 
         if !value.signature.is_empty() || !value.key.signature.is_empty() {
@@ -55,7 +58,7 @@ impl Storage {
         }
 
         let overlay_id = match value.key.id {
-            ton::PublicKey::Pub_Overlay(_) => OverlayIdShort::from(hash_boxed(&value.key.id)?),
+            PublicKeyView::Overlay { .. } => OverlayIdShort::from(hash(&value.key.id)?),
             _ => return Err(StorageError::InvalidKeyDescription.into()),
         };
 

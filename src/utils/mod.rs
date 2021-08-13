@@ -9,6 +9,8 @@ use sha2::Digest;
 use ton_api::ton::TLObject;
 use ton_api::{BoxedSerialize, Deserializer, IntoBoxed, Serializer};
 
+pub use crate::protocol::*;
+
 pub use self::address_list::*;
 pub use self::dht::*;
 pub use self::handshake::*;
@@ -22,7 +24,6 @@ pub use self::queries_cache::*;
 pub use self::query::*;
 pub use self::response_collector::*;
 pub use self::socket::*;
-pub use self::tl_view::*;
 pub use self::updated_at::*;
 
 mod address_list;
@@ -38,7 +39,6 @@ mod queries_cache;
 mod query;
 mod response_collector;
 mod socket;
-mod tl_view;
 mod updated_at;
 
 pub type FxDashSet<K> = dashmap::DashSet<K, BuildHasherDefault<FxHasher>>;
@@ -87,13 +87,10 @@ pub fn compute_shared_secret(
 #[error("Bad public key data")]
 struct BadPublicKeyData;
 
-pub fn hash<T: IntoBoxed>(object: T) -> Result<[u8; 32]> {
-    hash_boxed(&object.into_boxed())
-}
-
-/// Calculates hash of TL object
-pub fn hash_boxed<T: BoxedSerialize>(object: &T) -> Result<[u8; 32]> {
-    Ok(sha2::Sha256::digest(&serialize(object)?).into())
+pub fn hash<T: WriteToPacket>(object: T) -> Result<[u8; 32]> {
+    let mut h = sha2::Sha256::new();
+    object.write_to(&mut h)?;
+    Ok(h.finalize().into())
 }
 
 pub fn serialize<T: BoxedSerialize>(object: &T) -> Result<Vec<u8>> {

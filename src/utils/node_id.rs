@@ -1,13 +1,15 @@
 use std::convert::{TryFrom, TryInto};
 
 use anyhow::Result;
+use curve25519_dalek::scalar::Scalar;
 use ed25519_dalek::ed25519::signature::Signature;
 use ed25519_dalek::Verifier;
 use rand::Rng;
-use ton_api::{ton, IntoBoxed};
+use sha2::Sha512;
+use ton_api::ton;
 
-use super::tl_view::PublicKeyView;
-use super::{hash, serialize, serialize_boxed};
+use super::{hash, serialize_boxed};
+use crate::protocol::*;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct AdnlNodeIdFull(ed25519_dalek::PublicKey);
@@ -21,9 +23,9 @@ impl AdnlNodeIdFull {
         &self.0
     }
 
-    pub fn as_tl(&self) -> ton::pub_::publickey::Ed25519 {
-        ton::pub_::publickey::Ed25519 {
-            key: ton::int256(self.0.to_bytes()),
+    pub fn as_tl(&self) -> PublicKeyView {
+        PublicKeyView::Ed25519 {
+            key: self.0.as_bytes(),
         }
     }
 
@@ -35,8 +37,8 @@ impl AdnlNodeIdFull {
 
     pub fn verify_boxed<T, F>(&self, data: &T, extractor: F) -> Result<()>
     where
-        T: IntoBoxed + Clone,
-        F: FnOnce(&mut T) -> &mut ton::bytes,
+        T: BoxedConstructor,
+        F: FnOnce(&T) -> &[u8],
     {
         let mut data = data.clone();
         let signature = std::mem::take(&mut extractor(&mut data).0);
@@ -45,8 +47,7 @@ impl AdnlNodeIdFull {
     }
 
     pub fn compute_short_id(&self) -> Result<AdnlNodeIdShort> {
-        let hash = hash(self.as_tl())?;
-        Ok(AdnlNodeIdShort::new(hash))
+        Ok(AdnlNodeIdShort(hash(self.as_tl())?))
     }
 }
 
@@ -188,8 +189,8 @@ enum AdnlNodeIdError {
 pub struct StoredAdnlNodeKey {
     short_id: AdnlNodeIdShort,
     full_id: AdnlNodeIdFull,
-    private_key: ed25519_dalek::ExpandedSecretKey,
-    private_key_part: [u8; 32],
+    private_key_part: curve25519_dalek::scalar::Scalar,
+    private_key_nonce: [u8; 32],
 }
 
 impl StoredAdnlNodeKey {
@@ -198,14 +199,26 @@ impl StoredAdnlNodeKey {
         full_id: AdnlNodeIdFull,
         private_key: &ed25519_dalek::SecretKey,
     ) -> Self {
-        let private_key = ed25519_dalek::ExpandedSecretKey::from(private_key);
-        let private_key_part = private_key.to_bytes()[0..32].try_into().unwrap();
+        use sha2::Digest;
+
+        let mut h: Sha512 = Sha512::default();
+
+        h.update(private_key.as_bytes());
+        let h = h.finalize();
+
+        let mut private_key_part: [u8; 32] = h.as_slice()[..32].try_into().unwrap();
+        private_key_part[0] &= 248;
+        private_key_part[31] &= 63;
+        private_key_part[31] |= 64;
+
+        let private_key_part = curve25519_dalek::scalar::Scalar::from_bits(private_key_part);
+        let private_key_nonce = h.as_slice()[32..].try_into().unwrap();
 
         Self {
             short_id,
             full_id,
-            private_key,
             private_key_part,
+            private_key_nonce,
         }
     }
 
@@ -217,28 +230,46 @@ impl StoredAdnlNodeKey {
         &self.full_id
     }
 
-    pub fn private_key(&self) -> &ed25519_dalek::ExpandedSecretKey {
-        &self.private_key
-    }
-
     pub fn private_key_part(&self) -> &[u8; 32] {
-        &self.private_key_part
+        self.private_key_part.as_bytes()
     }
 
-    pub fn sign(&self, data: &[u8]) -> ed25519_dalek::Signature {
-        self.private_key.sign(data, self.full_id.public_key())
+    pub fn sign(&self, data: &[u8]) -> Result<[u8; 64]> {
+        self.sign_writeable(RawPacketData(data))
     }
 
-    pub fn sign_boxed<T, F, R>(&self, data: T, inserter: F) -> Result<R>
+    #[allow(non_snake_case)]
+    pub fn sign_writeable<T>(&self, data: T) -> Result<[u8; 64]>
     where
-        T: IntoBoxed,
-        F: FnOnce(T::Boxed, ton::bytes) -> R,
+        T: WriteToPacket,
     {
-        let data = data.into_boxed();
-        let mut buffer = serialize(&data)?;
-        let signature = self.sign(&buffer);
-        buffer.truncate(0);
-        buffer.extend_from_slice(signature.as_ref());
-        Ok(inserter(data, ton::bytes(buffer)))
+        use curve25519_dalek::constants;
+        use curve25519_dalek::edwards::*;
+        use sha2::Digest;
+
+        let mut h: Sha512 = Sha512::new();
+        let R: CompressedEdwardsY;
+        let r: Scalar;
+        let s: Scalar;
+        let k: Scalar;
+
+        h.update(&self.private_key_nonce);
+        data.write_to(&mut h)?;
+
+        r = Scalar::from_hash(h);
+        R = (&r * &constants::ED25519_BASEPOINT_TABLE).compress();
+
+        h = Sha512::new();
+        h.update(R.as_bytes());
+        h.update(self.full_id.public_key());
+        data.write_to(&mut h)?;
+
+        k = Scalar::from_hash(h);
+        s = &(&k * &self.private_key_part) + &r;
+
+        let mut signature_bytes = [0u8; ed25519_dalek::SIGNATURE_LENGTH];
+        signature_bytes[..32].copy_from_slice(&R.as_bytes()[..]);
+        signature_bytes[32..].copy_from_slice(&s.as_bytes()[..]);
+        Ok(signature_bytes)
     }
 }
