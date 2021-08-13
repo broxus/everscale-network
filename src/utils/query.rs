@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use nekoton_utils::NoFailure;
 use ton_api::{ton, BoxedSerialize, IntoBoxed, Serializer};
 
 use super::node_id::*;
@@ -18,7 +17,7 @@ pub fn build_query(
     let query = match prefix {
         Some(prefix) => {
             let mut prefix = prefix.to_vec();
-            Serializer::new(&mut prefix).write_boxed(query).convert()?;
+            Serializer::new(&mut prefix).write_boxed(query)?;
             prefix
         }
         None => serialize(query)?,

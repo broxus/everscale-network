@@ -3,7 +3,6 @@ use std::convert::TryInto;
 use std::hash::BuildHasherDefault;
 
 use anyhow::Result;
-use nekoton_utils::NoFailure;
 pub use rustc_hash::FxHasher;
 use sha2::Digest;
 use ton_api::ton::TLObject;
@@ -98,7 +97,7 @@ pub fn hash_boxed<T: BoxedSerialize>(object: &T) -> Result<[u8; 32]> {
 
 pub fn serialize<T: BoxedSerialize>(object: &T) -> Result<Vec<u8>> {
     let mut ret = Vec::new();
-    Serializer::new(&mut ret).write_boxed(object).convert()?;
+    Serializer::new(&mut ret).write_boxed(object)?;
     Ok(ret)
 }
 
@@ -111,7 +110,7 @@ pub fn serialize_append<T>(buffer: &mut Vec<u8>, object: &T) -> Result<()>
 where
     T: BoxedSerialize,
 {
-    Serializer::new(buffer).write_boxed(object).convert()
+    Serializer::new(buffer).write_boxed(object)
 }
 
 pub fn serialize_inplace<T>(buffer: &mut Vec<u8>, object: &T) -> Result<()>
@@ -125,9 +124,7 @@ where
 /// Deserializes TL object from bytes
 pub fn deserialize(bytes: &[u8]) -> Result<TLObject> {
     let mut reader = bytes;
-    Deserializer::new(&mut reader)
-        .read_boxed::<TLObject>()
-        .convert()
+    Deserializer::new(&mut reader).read_boxed::<TLObject>()
 }
 
 /// Deserializes a bundle of TL objects from bytes
@@ -139,7 +136,7 @@ pub fn deserialize_bundle(mut bytes: &[u8]) -> Result<Vec<TLObject>> {
             Ok(object) => result.push(object),
             Err(error) => {
                 if result.is_empty() {
-                    return Err(error).convert();
+                    return Err(error);
                 } else {
                     break;
                 }
