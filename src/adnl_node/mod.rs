@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use parking_lot::Mutex;
 use sha2::Digest;
+use smallvec::SmallVec;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use ton_api::{ton, IntoBoxed};
@@ -996,9 +997,9 @@ enum MessageSigner<'a> {
     Random(&'a AdnlNodeIdFull),
 }
 
-enum MessageToSend {
-    Single(ton::adnl::Message),
-    Multiple(Vec<ton::adnl::Message>),
+enum MessageToSend<'a> {
+    Single(MessageView<'a>),
+    Multiple(SmallVec<[MessageView<'a>; 4]>),
 }
 
 type SenderQueueTx = mpsc::UnboundedSender<PacketToSend>;

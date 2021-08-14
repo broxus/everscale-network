@@ -9,6 +9,19 @@ pub struct OverlayNodeToSign<'a> {
     pub version: i32,
 }
 
+impl BoxedConstructor for OverlayNodeToSign<'_> {
+    const ID: u32 = ID_OVERLAY_NODE_TO_SIGN;
+}
+
+impl UpdateSignatureHasher for BoxedWrapper<&OverlayNodeToSign<'_>> {
+    fn update_hasher<H>(&self, hasher: &mut H) -> std::io::Result<()>
+    where
+        H: Write,
+    {
+        self.write_to(hasher)
+    }
+}
+
 impl<'a> ReadFromPacket<'a> for OverlayNodeToSign<'a> {
     fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
         Ok(Self {
@@ -33,3 +46,5 @@ impl WriteToPacket for OverlayNodeToSign<'_> {
         self.version.write_to(packet)
     }
 }
+
+const ID_OVERLAY_NODE_TO_SIGN: u32 = 0x03d8a8e1;

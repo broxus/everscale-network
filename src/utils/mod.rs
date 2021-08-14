@@ -3,13 +3,12 @@ use std::convert::TryInto;
 use std::hash::BuildHasherDefault;
 
 use anyhow::Result;
-use nekoton_utils::NoFailure;
 pub use rustc_hash::FxHasher;
 use sha2::Digest;
 use ton_api::ton::TLObject;
 use ton_api::{BoxedSerialize, Deserializer, IntoBoxed, Serializer};
 
-pub use crate::protocol::*;
+pub use crate::proto::*;
 
 pub use self::address_list::*;
 pub use self::dht::*;
@@ -87,7 +86,10 @@ pub fn compute_shared_secret(
 #[error("Bad public key data")]
 struct BadPublicKeyData;
 
-pub fn hash<T: WriteToPacket>(object: T) -> Result<[u8; 32]> {
+pub fn hash<T>(object: T) -> Result<[u8; 32]>
+where
+    T: Boxed + WriteToPacket,
+{
     let mut h = sha2::Sha256::new();
     object.write_to(&mut h)?;
     Ok(h.finalize().into())
@@ -95,7 +97,7 @@ pub fn hash<T: WriteToPacket>(object: T) -> Result<[u8; 32]> {
 
 pub fn serialize<T: BoxedSerialize>(object: &T) -> Result<Vec<u8>> {
     let mut ret = Vec::new();
-    Serializer::new(&mut ret).write_boxed(object).convert()?;
+    Serializer::new(&mut ret).write_boxed(object)?;
     Ok(ret)
 }
 
@@ -108,7 +110,7 @@ pub fn serialize_append<T>(buffer: &mut Vec<u8>, object: &T) -> Result<()>
 where
     T: BoxedSerialize,
 {
-    Serializer::new(buffer).write_boxed(object).convert()
+    Serializer::new(buffer).write_boxed(object)
 }
 
 pub fn serialize_inplace<T>(buffer: &mut Vec<u8>, object: &T) -> Result<()>
@@ -122,9 +124,7 @@ where
 /// Deserializes TL object from bytes
 pub fn deserialize(bytes: &[u8]) -> Result<TLObject> {
     let mut reader = bytes;
-    Deserializer::new(&mut reader)
-        .read_boxed::<TLObject>()
-        .convert()
+    Deserializer::new(&mut reader).read_boxed::<TLObject>()
 }
 
 /// Deserializes a bundle of TL objects from bytes
@@ -136,7 +136,7 @@ pub fn deserialize_bundle(mut bytes: &[u8]) -> Result<Vec<TLObject>> {
             Ok(object) => result.push(object),
             Err(error) => {
                 if result.is_empty() {
-                    return Err(error).convert();
+                    return Err(error);
                 } else {
                     break;
                 }

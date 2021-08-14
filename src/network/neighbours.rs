@@ -107,7 +107,7 @@ impl Neighbours {
                         let mut new_peers = Vec::new();
 
                         for peer in peers.into_iter() {
-                            match AdnlNodeIdFull::try_from(&peer.id)
+                            match AdnlNodeIdFull::try_from(peer.id.as_view())
                                 .and_then(|full_id| full_id.compute_short_id())
                             {
                                 Ok(peer_id) => {

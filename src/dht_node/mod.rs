@@ -128,7 +128,7 @@ impl DhtNode {
 
             let cache = PeersCache::with_capacity(MAX_OVERLAY_PEERS);
             while let Some(node) = nodes.pop() {
-                let peer_full_id = AdnlNodeIdFull::try_from(&node.id)?;
+                let peer_full_id = AdnlNodeIdFull::try_from(node.id)?;
                 let peer_id = peer_full_id.compute_short_id()?;
                 if !cache.put(peer_id) {
                     continue;
@@ -448,7 +448,7 @@ impl DhtNode {
 
     async fn find_value<F>(
         self: &Arc<Self>,
-        key: ton::dht::key::Key,
+        key: DhtKeyView<'_>,
         check: F,
         all: bool,
         external_iter: &mut Option<ExternalDhtIter>,
@@ -456,7 +456,7 @@ impl DhtNode {
     where
         F: Fn(&TLObject) -> bool + Copy + Send + 'static,
     {
-        let key_id = hash(key)?;
+        let key_id = hash(key.wrap())?;
         let iter = external_iter.get_or_insert_with(|| ExternalDhtIter::with_key_id(self, key_id));
         if iter.key_id != key_id {
             return Err(DhtNodeError::KeyMismatch.into());

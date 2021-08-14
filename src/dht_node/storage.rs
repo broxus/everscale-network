@@ -19,16 +19,20 @@ impl Storage {
         }
     }
 
-    pub fn insert_signed_value(
+    pub fn insert_signed_value<V, S>(
         &self,
         key: StorageKey,
-        value: ton::dht::value::Value,
-    ) -> Result<bool> {
+        value: DhtValueView<'_, V, S>,
+    ) -> Result<bool>
+    where
+        V: AsOwned,
+        S: DataSignature,
+    {
         use dashmap::mapref::entry::Entry;
 
-        let full_id = AdnlNodeIdFull::try_from(&value.key.id)?;
-        full_id.verify_boxed(&value.key, |k| &mut k.signature)?;
-        full_id.verify_boxed(&value, |v| &mut v.signature)?;
+        let full_id = AdnlNodeIdFull::try_from(value.key.id)?;
+        full_id.verify(&value.key, &value.key.signature)?;
+        full_id.verify(&value, &value.signature)?;
 
         Ok(match self.storage.entry(key) {
             Entry::Occupied(entry) if entry.get().ttl < value.ttl => {

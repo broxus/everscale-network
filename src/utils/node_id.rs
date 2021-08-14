@@ -1,26 +1,22 @@
+use std::borrow::Borrow;
 use std::convert::{TryFrom, TryInto};
 
 use anyhow::Result;
+use curve25519_dalek::edwards::{CompressedEdwardsY, EdwardsPoint};
 use curve25519_dalek::scalar::Scalar;
-use ed25519_dalek::ed25519::signature::Signature;
-use ed25519_dalek::Verifier;
 use rand::Rng;
 use sha2::Sha512;
 use ton_api::ton;
 
-use super::{hash, serialize_boxed};
-use crate::protocol::*;
+use super::hash;
+use crate::proto::*;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub struct AdnlNodeIdFull(ed25519_dalek::PublicKey);
+pub struct AdnlNodeIdFull(PublicKeyHelper);
 
 impl AdnlNodeIdFull {
-    pub fn new(public_key: ed25519_dalek::PublicKey) -> Self {
-        Self(public_key)
-    }
-
-    pub fn public_key(&self) -> &ed25519_dalek::PublicKey {
-        &self.0
+    pub fn public_key(&self) -> &[u8; 32] {
+        self.0.as_bytes()
     }
 
     pub fn as_tl(&self) -> PublicKeyView {
@@ -29,21 +25,32 @@ impl AdnlNodeIdFull {
         }
     }
 
-    pub fn verify(&self, message: &[u8], other_signature: &[u8]) -> Result<()> {
-        let other_signature = ed25519_dalek::Signature::from_bytes(other_signature)?;
-        self.0.verify(message, &other_signature)?;
-        Ok(())
-    }
-
-    pub fn verify_boxed<T, F>(&self, data: &T, extractor: F) -> Result<()>
+    #[allow(non_snake_case)]
+    pub fn verify<T, V, S>(&self, message: T, signature: S) -> Result<()>
     where
-        T: BoxedConstructor,
-        F: FnOnce(&T) -> &[u8],
+        T: Borrow<V>,
+        V: UpdateSignatureHasher,
+        S: AsRef<[u8]>,
     {
-        let mut data = data.clone();
-        let signature = std::mem::take(&mut extractor(&mut data).0);
-        let buffer = serialize_boxed(data)?;
-        self.verify(&buffer, &signature)
+        use sha2::Digest;
+
+        let signature = SignatureHelper::from_bytes(signature.as_ref())?;
+
+        let mut h: Sha512 = Sha512::new();
+        let minus_A: EdwardsPoint = -self.0.point;
+
+        h.update(signature.R.as_bytes());
+        h.update(self.0.compressed.as_bytes());
+        message.borrow().update_hasher(&mut h)?;
+
+        let k = Scalar::from_hash(h);
+        let R = EdwardsPoint::vartime_double_scalar_mul_basepoint(&k, &minus_A, &signature.s);
+
+        if R.compress() == signature.R {
+            Ok(())
+        } else {
+            Err(AdnlNodeIdError::InvalidSignature.into())
+        }
     }
 
     pub fn compute_short_id(&self) -> Result<AdnlNodeIdShort> {
@@ -53,27 +60,7 @@ impl AdnlNodeIdFull {
 
 impl std::fmt::Display for AdnlNodeIdFull {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str(&hex::encode(&self.0))
-    }
-}
-
-impl From<ed25519_dalek::PublicKey> for AdnlNodeIdFull {
-    fn from(key: ed25519_dalek::PublicKey) -> Self {
-        Self::new(key)
-    }
-}
-
-impl TryFrom<&ton::PublicKey> for AdnlNodeIdFull {
-    type Error = anyhow::Error;
-
-    fn try_from(public_key: &ton::PublicKey) -> Result<Self> {
-        match public_key {
-            ton::PublicKey::Pub_Ed25519(public_key) => {
-                let public_key = ed25519_dalek::PublicKey::from_bytes(&public_key.key.0).unwrap();
-                Ok(Self::new(public_key))
-            }
-            _ => Err(AdnlNodeIdError::UnsupportedPublicKey.into()),
-        }
+        f.write_str(&hex::encode(self.0.as_bytes()))
     }
 }
 
@@ -82,10 +69,7 @@ impl<'a> TryFrom<PublicKeyView<'a>> for AdnlNodeIdFull {
 
     fn try_from(value: PublicKeyView<'a>) -> Result<Self, Self::Error> {
         match value {
-            PublicKeyView::Ed25519 { key } => {
-                let public_key = ed25519_dalek::PublicKey::from_bytes(key).unwrap();
-                Ok(Self::new(public_key))
-            }
+            PublicKeyView::Ed25519 { key } => Ok(Self(PublicKeyHelper::try_from(*key)?)),
             _ => Err(AdnlNodeIdError::UnsupportedPublicKey.into()),
         }
     }
@@ -114,12 +98,6 @@ impl AdnlNodeIdShort {
             }
         }
         true
-    }
-
-    pub fn as_tl(&self) -> ton::adnl::id::short::Short {
-        ton::adnl::id::short::Short {
-            id: ton::int256(self.0),
-        }
     }
 }
 
@@ -165,8 +143,8 @@ pub trait ComputeNodeIds {
 
 impl ComputeNodeIds for ed25519_dalek::SecretKey {
     fn compute_node_ids(&self) -> Result<(AdnlNodeIdFull, AdnlNodeIdShort)> {
-        let public_key = ed25519_dalek::PublicKey::from(self);
-        let full_id = AdnlNodeIdFull::new(public_key);
+        let public_key = PublicKeyHelper::from_secret_key(self);
+        let full_id = AdnlNodeIdFull(public_key);
         let short_id = full_id.compute_short_id()?;
         Ok((full_id, short_id))
     }
@@ -174,16 +152,10 @@ impl ComputeNodeIds for ed25519_dalek::SecretKey {
 
 impl ComputeNodeIds for ed25519_dalek::PublicKey {
     fn compute_node_ids(&self) -> Result<(AdnlNodeIdFull, AdnlNodeIdShort)> {
-        let full_id = AdnlNodeIdFull::new(*self);
+        let full_id = AdnlNodeIdFull(PublicKeyHelper::try_from(self.to_bytes())?);
         let short_id = full_id.compute_short_id()?;
         Ok((full_id, short_id))
     }
-}
-
-#[derive(thiserror::Error, Debug)]
-enum AdnlNodeIdError {
-    #[error("Unsupported public key")]
-    UnsupportedPublicKey,
 }
 
 pub struct StoredAdnlNodeKey {
@@ -234,42 +206,132 @@ impl StoredAdnlNodeKey {
         self.private_key_part.as_bytes()
     }
 
-    pub fn sign(&self, data: &[u8]) -> Result<[u8; 64]> {
-        self.sign_writeable(RawPacketData(data))
-    }
-
     #[allow(non_snake_case)]
-    pub fn sign_writeable<T>(&self, data: T) -> Result<[u8; 64]>
+    pub fn sign<T>(&self, data: T) -> Result<[u8; 64]>
     where
-        T: WriteToPacket,
+        T: UpdateSignatureHasher,
     {
         use curve25519_dalek::constants;
-        use curve25519_dalek::edwards::*;
         use sha2::Digest;
 
         let mut h: Sha512 = Sha512::new();
-        let R: CompressedEdwardsY;
-        let r: Scalar;
-        let s: Scalar;
-        let k: Scalar;
-
         h.update(&self.private_key_nonce);
-        data.write_to(&mut h)?;
+        data.update_hasher(&mut h)?;
 
-        r = Scalar::from_hash(h);
-        R = (&r * &constants::ED25519_BASEPOINT_TABLE).compress();
+        let r = Scalar::from_hash(h);
+        let R = (&r * &constants::ED25519_BASEPOINT_TABLE).compress();
 
         h = Sha512::new();
         h.update(R.as_bytes());
         h.update(self.full_id.public_key());
-        data.write_to(&mut h)?;
+        data.update_hasher(&mut h)?;
 
-        k = Scalar::from_hash(h);
-        s = &(&k * &self.private_key_part) + &r;
+        let k = Scalar::from_hash(h);
+        let s = &(&k * &self.private_key_part) + &r;
 
         let mut signature_bytes = [0u8; ed25519_dalek::SIGNATURE_LENGTH];
         signature_bytes[..32].copy_from_slice(&R.as_bytes()[..]);
         signature_bytes[32..].copy_from_slice(&s.as_bytes()[..]);
         Ok(signature_bytes)
     }
+}
+
+#[allow(non_snake_case)]
+struct SignatureHelper {
+    R: CompressedEdwardsY,
+    s: Scalar,
+}
+
+impl SignatureHelper {
+    #[inline]
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, AdnlNodeIdError> {
+        if bytes.len() != ed25519_dalek::SIGNATURE_LENGTH {
+            return Err(AdnlNodeIdError::InvalidSignature);
+        }
+
+        let lower: [u8; 32] = bytes[..32].try_into().unwrap();
+        let upper: [u8; 32] = bytes[32..].try_into().unwrap();
+
+        let s = check_scalar(upper)?;
+
+        Ok(Self {
+            R: CompressedEdwardsY(lower),
+            s,
+        })
+    }
+}
+
+fn check_scalar(bytes: [u8; 32]) -> Result<Scalar, AdnlNodeIdError> {
+    if bytes[31] & 240 == 0 {
+        return Ok(Scalar::from_bits(bytes));
+    }
+    Scalar::from_canonical_bytes(bytes).ok_or(AdnlNodeIdError::InvalidSignature)
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+struct PublicKeyHelper {
+    compressed: CompressedEdwardsY,
+    point: EdwardsPoint,
+}
+
+impl PublicKeyHelper {
+    #[inline]
+    fn from_bytes(bytes: &[u8]) -> Result<Self, AdnlNodeIdError> {
+        if bytes.len() != ed25519_dalek::PUBLIC_KEY_LENGTH {
+            return Err(AdnlNodeIdError::InvalidPublicKey);
+        }
+
+        let bytes: [u8; 32] = bytes[..32].try_into().unwrap();
+        bytes.try_into()
+    }
+
+    fn from_secret_key(secret_key: &ed25519_dalek::SecretKey) -> Self {
+        use sha2::Digest;
+
+        let mut h: Sha512 = Sha512::new();
+        h.update(secret_key.as_bytes());
+        let hash = h.finalize();
+
+        let mut digest: [u8; 32] = hash.as_slice()[..32].try_into().unwrap();
+        Self::from_bits(&mut digest)
+    }
+
+    fn from_bits(bits: &mut [u8; 32]) -> Self {
+        bits[0] &= 248;
+        bits[31] &= 127;
+        bits[31] |= 64;
+
+        let point =
+            &Scalar::from_bits(*bits) * &curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+        let compressed = point.compress();
+
+        PublicKeyHelper { compressed, point }
+    }
+
+    fn as_bytes(&self) -> &[u8; 32] {
+        self.compressed.as_bytes()
+    }
+}
+
+impl TryFrom<[u8; 32]> for PublicKeyHelper {
+    type Error = AdnlNodeIdError;
+
+    fn try_from(bytes: [u8; 32]) -> Result<Self, Self::Error> {
+        let compressed = CompressedEdwardsY(bytes);
+        let point = compressed
+            .decompress()
+            .ok_or(AdnlNodeIdError::InvalidPublicKey)?;
+
+        Ok(Self { compressed, point })
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+enum AdnlNodeIdError {
+    #[error("Unsupported public key")]
+    UnsupportedPublicKey,
+    #[error("Invalid public key")]
+    InvalidPublicKey,
+    #[error("Invalid signature")]
+    InvalidSignature,
 }

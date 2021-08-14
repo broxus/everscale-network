@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use ton_api::ton::{self, TLObject};
-use ton_api::IntoBoxed;
 
 use self::overlay_shard::*;
 use crate::adnl_node::*;
@@ -264,7 +263,7 @@ impl OverlayNode {
         overlay_id: &OverlayIdShort,
         peer_id: &AdnlNodeIdShort,
         timeout: Option<u64>,
-    ) -> Result<Option<Vec<ton::overlay::node::Node>>> {
+    ) -> Result<Option<Vec<OwnedOverlayNode>>> {
         let shard = self.get_overlay_shard(overlay_id)?.clone();
 
         let query = TLObject::new(ton::rpc::overlay::GetRandomPeers {
@@ -403,25 +402,27 @@ impl OverlayNode {
         })
     }
 
-    fn sign_local_node(&self, shard: &OverlayShard) -> Result<ton::overlay::node::Node> {
+    fn sign_local_node(&self, shard: &OverlayShard) -> Result<OwnedOverlayNode> {
         let key = match shard.overlay_key() {
             Some(overlay_key) => overlay_key,
             None => &self.node_key,
         };
         let version = now();
 
-        let signature = serialize_boxed(ton::overlay::node::tosign::ToSign {
-            id: key.id().as_tl(),
-            overlay: ton::int256(shard.id().into()),
-            version,
-        })?;
-        let signature = key.sign(&signature);
+        let signature = key.sign(
+            OverlayNodeToSign {
+                id: key.id().as_slice(),
+                overlay: shard.id().as_slice(),
+                version,
+            }
+            .wrap(),
+        )?;
 
-        Ok(ton::overlay::node::Node {
-            id: key.full_id().as_tl().into_boxed(),
-            overlay: ton::int256(shard.id().into()),
+        Ok(OwnedOverlayNode {
+            id: key.full_id().as_tl().as_owned(),
+            overlay: *shard.id().as_slice(),
             version,
-            signature: ton::bytes(signature.to_bytes().to_vec()),
+            signature,
         })
     }
 }
@@ -434,15 +435,16 @@ impl Subscriber for OverlayNode {
         peer_id: &AdnlNodeIdShort,
         data: &[u8],
     ) -> Result<bool> {
-        let bundle = match deserialize_view::<PublicOverlayQueryBundleView>(data) {
-            Ok(bundle) => bundle,
-            Err(_) => return Ok(false),
-        };
+        let (message, broadcast) =
+            match deserialize_view::<(OverlayMessageView, OverlayBroadcastView)>(data) {
+                Ok(bundle) => bundle,
+                Err(_) => return Ok(false),
+            };
 
-        let overlay_id = OverlayIdShort::from(*bundle.message.overlay);
+        let overlay_id = OverlayIdShort::from(*message.overlay);
         let shard = self.get_overlay_shard(&overlay_id)?.clone();
 
-        match bundle.broadcast {
+        match broadcast {
             OverlayBroadcastView::Broadcast(broadcast) => {
                 shard
                     .receive_broadcast(local_id, peer_id, broadcast, data)
@@ -457,36 +459,6 @@ impl Subscriber for OverlayNode {
             }
             _ => Err(OverlayNodeError::UnsupportedOverlayBroadcastMessage.into()),
         }
-
-        /* UNUSED UNTIL VALIDATOR LOGIC WILL BE NEEDED
-
-        // Extract messages
-        let catchain_update = match bundle.remove(0).downcast::<ton::catchain::Update>() {
-            Ok(ton::catchain::Update::Catchain_BlockUpdate(message)) => *message,
-            _ => return Err(OverlayNodeError::UnsupportedPrivateOverlayMessage.into()),
-        };
-
-        let validator_session_update = match bundle
-            .remove(0)
-            .downcast::<ton::validator_session::BlockUpdate>(
-        ) {
-            Ok(ton::validator_session::BlockUpdate::ValidatorSession_BlockUpdate(
-                message,
-            )) => *message,
-            _ => return Err(OverlayNodeError::UnsupportedPrivateOverlayMessage.into()),
-        };
-
-        // Notify waiters
-        shard.push_catchain(CatchainUpdate {
-            peer_id: *peer_id,
-            catchain_update,
-            validator_session_update,
-        });
-
-        // Done
-        Ok(true)
-
-        */
     }
 
     async fn try_consume_query_bundle(

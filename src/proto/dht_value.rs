@@ -1,8 +1,17 @@
-use std::borrow::Borrow;
 use std::io::Write;
+
+use smallvec::SmallVec;
 
 use super::prelude::*;
 use super::public_key::*;
+
+#[derive(Debug, Clone)]
+pub struct OwnedDhtValue<V> {
+    pub key: OwnedDhtKeyDescription,
+    pub value: IntermediateBytes<V>,
+    pub ttl: i32,
+    pub signature: OwnedSignature,
+}
 
 #[derive(Debug, Clone)]
 pub struct DhtValueView<'a, V, S> {
@@ -12,19 +21,57 @@ pub struct DhtValueView<'a, V, S> {
     pub signature: S,
 }
 
-impl<V, S> BoxedConstructor for DhtValueView<'_, V, S> {
-    const ID: u32 = 0x90ad27cb;
+impl<V, S> AsOwned for DhtValueView<'_, V, S>
+where
+    V: AsOwned,
+    S: DataSignature + AsOwned<Owned = OwnedSignature>,
+{
+    type Owned = OwnedDhtValue<V::Owned>;
+
+    fn as_owned(&self) -> Self::Owned {
+        Self::Owned {
+            key: self.key.as_owned(),
+            value: self.value.as_owned(),
+            ttl: self.ttl,
+            signature: self.signature.as_owned(),
+        }
+    }
+}
+
+impl<V, S> BoxedConstructor for DhtValueView<'_, V, S>
+where
+    V: WriteToPacket,
+    S: DataSignature + WriteToPacket,
+{
+    const ID: u32 = ID_DHT_VALUE;
+}
+
+impl<V, S> UpdateSignatureHasher for BoxedWrapper<&DhtValueView<'_, V, S>>
+where
+    V: WriteToPacket,
+    S: WriteToPacket + DataSignature,
+{
+    fn update_hasher<H>(&self, hasher: &mut H) -> std::io::Result<()>
+    where
+        H: Write,
+    {
+        DhtValueView::<V, S>::ID.write_to(hasher)?;
+        self.0.key.write_to(hasher)?;
+        self.0.value.write_to(hasher)?;
+        self.0.ttl.write_to(hasher)?;
+        write_bytes(&[], hasher)
+    }
 }
 
 impl<'a, V, S> ReadFromPacket<'a> for DhtValueView<'a, V, S>
 where
     V: ReadFromPacket<'a>,
-    S: ReadFromPacket<'a>,
+    S: ReadFromPacket<'a> + DataSignature,
 {
     fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
         Ok(Self {
             key: DhtKeyDescriptionView::read_from(packet, offset)?,
-            value: V::read_from(packet, offset)?,
+            value: IntermediateBytes::read_from(packet, offset)?,
             ttl: i32::read_from(packet, offset)?,
             signature: S::read_from(packet, offset)?,
         })
@@ -34,7 +81,7 @@ where
 impl<V, S> WriteToPacket for DhtValueView<'_, V, S>
 where
     V: WriteToPacket,
-    S: WriteToPacket,
+    S: WriteToPacket + DataSignature,
 {
     fn max_size_hint(&self) -> usize {
         self.key.max_size_hint()
@@ -54,6 +101,16 @@ where
     }
 }
 
+const ID_DHT_VALUE: u32 = 0x90ad27cb;
+
+#[derive(Debug, Clone)]
+pub struct OwnedDhtKeyDescription {
+    pub key: OwnedDhtKey,
+    pub id: OwnedPublicKey,
+    pub update_rule: DhtUpdateRuleView,
+    pub signature: OwnedSignature,
+}
+
 #[derive(Debug, Clone)]
 pub struct DhtKeyDescriptionView<'a, S> {
     pub key: DhtKeyView<'a>,
@@ -62,26 +119,48 @@ pub struct DhtKeyDescriptionView<'a, S> {
     pub signature: S,
 }
 
-impl<S> BoxedConstructor for DhtKeyDescriptionView<'_, S> {
-    const ID: u32 = 0x281d4e05;
+impl<S> AsOwned for DhtKeyDescriptionView<'_, S>
+where
+    S: DataSignature + AsOwned<Owned = OwnedSignature>,
+{
+    type Owned = OwnedDhtKeyDescription;
+
+    fn as_owned(&self) -> Self::Owned {
+        Self::Owned {
+            key: self.key.as_owned(),
+            id: self.id.as_owned(),
+            update_rule: self.update_rule,
+            signature: self.signature.as_owned(),
+        }
+    }
 }
 
-impl<T, S> UpdateSignatureHasher for BoxedWrapper<T, DhtKeyDescriptionView<'_, S>>
+impl<S> BoxedConstructor for DhtKeyDescriptionView<'_, S>
 where
-    T: Borrow<DhtKeyDescriptionView<'_, S>>,
+    S: WriteToPacket + DataSignature,
+{
+    const ID: u32 = ID_DHT_KEY_DESCRIPTION;
+}
+
+impl<S> UpdateSignatureHasher for BoxedWrapper<&DhtKeyDescriptionView<'_, S>>
+where
+    S: WriteToPacket + DataSignature,
 {
     fn update_hasher<H>(&self, hasher: &mut H) -> std::io::Result<()>
     where
         H: Write,
     {
-        Self
-        self.inner().id.write_to()
+        DhtKeyDescriptionView::<S>::ID.write_to(hasher)?;
+        self.0.key.write_to(hasher)?;
+        self.0.id.write_to(hasher)?;
+        self.0.update_rule.write_to(hasher)?;
+        write_bytes(&[], hasher)
     }
 }
 
 impl<'a, S> ReadFromPacket<'a> for DhtKeyDescriptionView<'a, S>
 where
-    S: ReadFromPacket<'a>,
+    S: ReadFromPacket<'a> + DataSignature,
 {
     fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
         Ok(Self {
@@ -115,6 +194,9 @@ where
     }
 }
 
+const ID_DHT_KEY_DESCRIPTION: u32 = 0x281d4e05;
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum DhtUpdateRuleView {
     Anybody,
     OverlayNodes,
@@ -124,9 +206,9 @@ pub enum DhtUpdateRuleView {
 impl<'a> ReadFromPacket<'a> for DhtUpdateRuleView {
     fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
         match u32::read_from(packet, offset)? {
-            0x61578e14 => Ok(Self::Anybody),
-            0x26779383 => Ok(Self::OverlayNodes),
-            0xcc9f31f7 => Ok(Self::Signature),
+            ID_DHT_UPDATE_RULE_ANYBODY => Ok(Self::Anybody),
+            ID_DHT_UPDATE_RULE_OVERLAY_NODES => Ok(Self::OverlayNodes),
+            ID_DHT_UPDATE_RULE_SIGNATURE => Ok(Self::Signature),
             _ => Err(PacketContentsError::UnknownConstructor),
         }
     }
@@ -142,11 +224,22 @@ impl WriteToPacket for DhtUpdateRuleView {
         T: Write,
     {
         match self {
-            Self::Anybody => 0x61578e14u32.write_to(packet),
-            Self::OverlayNodes => 0x26779383u32.write_to(packet),
-            Self::Signature => 0xcc9f31f7.write_to(packet),
+            Self::Anybody => ID_DHT_UPDATE_RULE_ANYBODY.write_to(packet),
+            Self::OverlayNodes => ID_DHT_UPDATE_RULE_OVERLAY_NODES.write_to(packet),
+            Self::Signature => ID_DHT_UPDATE_RULE_SIGNATURE.write_to(packet),
         }
     }
+}
+
+const ID_DHT_UPDATE_RULE_ANYBODY: u32 = 0x61578e14;
+const ID_DHT_UPDATE_RULE_OVERLAY_NODES: u32 = 0x26779383;
+const ID_DHT_UPDATE_RULE_SIGNATURE: u32 = 0xcc9f31f7;
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct OwnedDhtKey {
+    pub id: [u8; 32],
+    pub name: SmallVec<[u8; 16]>,
+    pub idx: i32,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -154,6 +247,22 @@ pub struct DhtKeyView<'a> {
     pub id: HashRef<'a>,
     pub name: &'a [u8],
     pub idx: i32,
+}
+
+impl AsOwned for DhtKeyView<'_> {
+    type Owned = OwnedDhtKey;
+
+    fn as_owned(&self) -> Self::Owned {
+        Self::Owned {
+            id: *self.id,
+            name: self.name.into(),
+            idx: self.idx,
+        }
+    }
+}
+
+impl BoxedConstructor for DhtKeyView<'_> {
+    const ID: u32 = ID_DHT_KEY;
 }
 
 impl<'a> ReadFromPacket<'a> for DhtKeyView<'a> {
@@ -180,3 +289,5 @@ impl WriteToPacket for DhtKeyView<'_> {
         self.idx.write_to(packet)
     }
 }
+
+const ID_DHT_KEY: u32 = 0xf667de8f;

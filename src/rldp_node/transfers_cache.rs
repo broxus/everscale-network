@@ -532,10 +532,10 @@ struct IncomingContext {
     transfer_id: TransferId,
 }
 
-impl From<FecTypeView> for Option<ton::fec::type_::RaptorQ> {
-    fn from(ty: FecTypeView) -> Self {
+impl From<FecType> for Option<ton::fec::type_::RaptorQ> {
+    fn from(ty: FecType) -> Self {
         match ty {
-            FecTypeView::RaptorQ {
+            FecType::RaptorQ {
                 data_size,
                 symbol_size,
                 symbols_count,

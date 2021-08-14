@@ -4,7 +4,6 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use aes::cipher::StreamCipher;
 use anyhow::Result;
 use sha2::Digest;
-use ton_api::ton;
 
 use crate::utils::*;
 
@@ -113,7 +112,7 @@ struct ChannelSide {
 impl ChannelSide {
     fn from_secret(secret: [u8; 32]) -> Result<Self> {
         Ok(Self {
-            id: compute_channel_id(secret)?,
+            id: compute_channel_id(&secret)?,
             secret,
         })
     }
@@ -148,10 +147,8 @@ impl ChannelKey {
 
 pub type AdnlChannelId = [u8; 32];
 
-fn compute_channel_id(secret: [u8; 32]) -> Result<AdnlChannelId> {
-    hash(ton::pub_::publickey::Aes {
-        key: ton::int256(secret),
-    })
+fn compute_channel_id(secret: &[u8; 32]) -> Result<AdnlChannelId> {
+    hash(PublicKeyView::Aes { key: secret })
 }
 
 fn process_channel_data(buffer: &mut [u8], secret: &[u8; 32]) {

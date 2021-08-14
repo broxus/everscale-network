@@ -3,29 +3,30 @@ use std::convert::TryFrom;
 use anyhow::Result;
 use ton_api::ton;
 
-use super::{hash, serialize_boxed};
-use crate::protocol::*;
+use super::hash;
+use crate::proto::*;
 use crate::utils::AdnlNodeIdFull;
 
-pub fn verify_node(
-    overlay_id: &OverlayIdShort,
-    node: &OverlayNodeView<'_, &[u8; 64]>,
-) -> Result<()> {
-    if node.overlay.0 != overlay_id.0 {
+pub fn verify_node<S>(overlay_id: &OverlayIdShort, node: &OverlayNodeView<'_, S>) -> Result<()>
+where
+    S: DataSignature,
+{
+    if node.overlay != overlay_id.as_slice() {
         return Err(OverlayError::OverlayIdMismatch.into());
     }
 
-    let node_id = AdnlNodeIdFull::try_from(&node.id)?;
+    let node_id = AdnlNodeIdFull::try_from(node.id)?;
+    let short_id = node_id.compute_short_id()?;
 
-    let node_to_sign = serialize_boxed(OverlayNodeToSign {
-        id: node_id.compute_short_id()?.as_tl(),
-        overlay: node.overlay,
-        version: node.version,
-    })?;
-
-    node_id.verify(&node_to_sign, &node.signature)?;
-
-    Ok(())
+    node_id.verify(
+        OverlayNodeToSign {
+            id: short_id.as_slice(),
+            overlay: node.overlay,
+            version: node.version,
+        }
+        .wrap(),
+        &node.signature,
+    )
 }
 
 pub fn compute_overlay_id(
@@ -53,7 +54,7 @@ impl OverlayIdFull {
     }
 
     pub fn compute_short_id(&self) -> Result<OverlayIdShort> {
-        hash(PublicKeyView::Overlay { name: &self.0 }).map(OverlayIdShort)
+        hash(&PublicKeyView::Overlay { name: &self.0 }).map(OverlayIdShort)
     }
 }
 

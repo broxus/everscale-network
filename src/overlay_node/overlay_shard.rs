@@ -178,7 +178,7 @@ impl OverlayShard {
         dst.randomly_fill_from(&self.known_peers, amount, Some(&self.ignored_peers));
     }
 
-    pub fn write_random_peers(&self, amount: usize, nodes: &mut Vec<ton::overlay::node::Node>) {
+    pub fn write_random_peers(&self, amount: usize, nodes: &mut Vec<OwnedOverlayNode>) {
         let peers = PeersCache::with_capacity(amount);
         peers.randomly_fill_from(&self.random_peers, amount, None);
         for peer_id in &peers {
@@ -188,11 +188,11 @@ impl OverlayShard {
         }
     }
 
-    pub fn query_prefix(&self) -> &Vec<u8> {
+    pub fn query_prefix(&self) -> &[u8] {
         &self.query_prefix
     }
 
-    pub fn message_prefix(&self) -> &Vec<u8> {
+    pub fn message_prefix(&self) -> &[u8] {
         &self.message_prefix
     }
 
@@ -200,11 +200,11 @@ impl OverlayShard {
         self.received_broadcasts.pop().await
     }
 
-    pub async fn wait_for_peers(&self) -> Vec<ton::overlay::node::Node> {
+    pub async fn wait_for_peers(&self) -> Vec<OwnedOverlayNode> {
         self.received_peers.pop().await
     }
 
-    pub fn push_peers(&self, peers: Vec<ton::overlay::node::Node>) {
+    pub fn push_peers(&self, peers: Vec<OwnedOverlayNode>) {
         self.received_peers.push(peers);
     }
 
@@ -275,7 +275,7 @@ impl OverlayShard {
         let source = node_id.compute_short_id()?;
 
         let fec_type = match broadcast.fec {
-            FecTypeView::RaptorQ {
+            FecType::RaptorQ {
                 data_size,
                 symbol_size,
                 symbols_count,
