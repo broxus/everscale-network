@@ -1,6 +1,7 @@
 use std::io::Write;
 
 use bitflags::bitflags;
+use rand::RngCore;
 use smallvec::SmallVec;
 
 use super::address_list::*;
@@ -39,6 +40,15 @@ struct Flags:u32
         const RECV_PRIORITY_ADDR_LIST_VERSION = 0x0200;
         const REINIT_DATE = 0x0400;
         const SIGNATURE = 0x0800;
+    }
+}
+
+impl Flags {
+    #[inline]
+    fn set_name<T>(&mut self, flag: Flags, to_set: &Option<T>) {
+        if to_set.is_some() {
+            self.toggle(flag)
+        }
     }
 }
 
@@ -116,72 +126,40 @@ impl<'a> WriteToPacket for PacketContentsView<'a> {
     {
         packet.write(&CONSTRUCTOR.to_le_bytes())?;
         let mut flag = Flags::empty();
-        if self.from.is_some() {
-            flag.toggle(Flags::FROM);
-        }
-        if self.from_short.is_some() {
-            flag.toggle(Flags::FROM_SHORT);
-        }
-        if self.message.is_some() {
-            flag.toggle(Flags::MESSAGE)
-        }
-        if self.messages.is_some() {
-            flag.toggle(Flags::MESSAGES)
-        }
-        if self.address.is_some() {
-            flag.toggle(Flags::ADDRESS)
-        }
-        if self.seqno.is_some() {
-            flag.toggle(Flags::SEQNO)
-        }
-        if self.confirm_seqno.is_some() {
-            flag.toggle(Flags::CONFIRM_SEQNO)
-        }
-        if self.recv_addr_list_version.is_some() {
-            flag.toggle(Flags::RECV_ADDR_LIST_VERSION)
-        }
-        if self.reinit_date.is_some() {
-            flag.toggle(Flags::REINIT_DATE)
-        }
-        if self.signature.is_some() {
-            flag.toggle(Flags::SIGNATURE)
-        }
+
+        flag.set_name(Flags::FROM, &self.from);
+        flag.set_name(Flags::FROM_SHORT, &self.from_short);
+        flag.set_name(Flags::MESSAGE, &self.message);
+        flag.set_name(Flags::MESSAGES, &self.messages);
+        flag.set_name(Flags::ADDRESS, &self.address);
+        flag.set_name(Flags::SEQNO, &self.seqno);
+        flag.set_name(Flags::CONFIRM_SEQNO, &self.confirm_seqno);
+        flag.set_name(Flags::RECV_ADDR_LIST_VERSION, &self.recv_addr_list_version);
+        flag.set_name(
+            Flags::RECV_PRIORITY_ADDR_LIST_VERSION,
+            &self.recv_priority_addr_list_version,
+        );
+        flag.set_name(Flags::REINIT_DATE, &self.reinit_date);
+        flag.set_name(Flags::SIGNATURE, &self.signature);
 
         flag.bits.write_to(packet);
+        self.from.write_to(packet)?;
+        self.from_short.write_to(packet)?;
+        self.message.write_to(packet)?;
 
-        if let Some(a) = self.from {
-            a.write_to(packet)?
-        }
-        if let Some(a) = self.from_short {
-            a.write_to(packet)?
-        }
-        if let Some(a) = self.message {
-            a.write_to(packet)?
-        }
         if let Some(a) = &self.messages {
             a.write_to(packet)?
         }
-        if let Some(a) = self.address {
-            a.write_to(packet)?
-        }
-        if let Some(a) = self.seqno {
-            a.write_to(packet)?
-        }
-        if let Some(a) = self.confirm_seqno {
-            a.write_to(packet)?
-        }
-        if let Some(a) = self.recv_addr_list_version {
-            a.write_to(packet)?
-        }
-        if let Some(a) = self.reinit_date {
-            a.write_to(packet)?
-        }
-        if let Some(a) = self.dst_reinit_date {
-            a.write_to(packet)?
-        }
-        if let Some(a) = self.signature {
-            a.write_to(packet)?
-        }
+        self.address.write_to(packet)?;
+        self.seqno.write_to(packet)?;
+        self.confirm_seqno.write_to(packet)?;
+        self.recv_addr_list_version.write_to(packet)?;
+        self.reinit_date.write_to(packet)?;
+        self.dst_reinit_date.write_to(packet)?;
+        self.signature.write_to(packet)?;
+        let mut bytes = [0; 16];
+        rand::thread_rng().fill_bytes(&mut bytes);
+        bytes.write_to(packet)?;
         Ok(())
     }
 }
