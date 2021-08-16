@@ -38,4 +38,4 @@ default-features = false
 features = ["ton_api"]
 
 [features]
-"sha-native" = ["sha2/asm", "ed25519-dalek/asm", "ton_types/asm"]
+asm = ["sha2/asm", "ed25519-dalek/asm", "ton_types/asm"]
