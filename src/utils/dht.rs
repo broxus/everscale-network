@@ -13,10 +13,10 @@ pub const DHT_VALUE_TIMEOUT: i32 = 3600; // Seconds
 pub fn sign_dht_value<'a, V>(
     key: &'a StoredAdnlNodeKey,
     name: &'a str,
-    value: &'a V,
-) -> Result<DhtValueView<'a, &'a V, OwnedSignature>>
+    value: V,
+) -> Result<DhtValueView<'a, V, OwnedSignature>>
 where
-    V: WriteToPacket,
+    V: WriteToPacket + Boxed + 'a,
 {
     let mut value = DhtValueView {
         key: sign_dht_key_description(key, name)?,

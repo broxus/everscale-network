@@ -8,6 +8,7 @@ pub use self::encoder::RaptorQEncoder;
 use self::peer::*;
 use self::transfers_cache::*;
 use crate::adnl_node::AdnlNode;
+use crate::proto::*;
 use crate::subscriber::*;
 use crate::utils::*;
 

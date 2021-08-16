@@ -7,7 +7,7 @@ use ton_api::ton;
 use ton_api::ton::adnl::Address;
 
 use super::{now, FxDashSet};
-use crate::utils::{AddressListView, AddressView};
+use crate::proto::*;
 
 pub trait AdnlAddress: Sized {
     fn is_public(&self) -> bool;

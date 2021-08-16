@@ -1,7 +1,64 @@
 use std::io::Write;
 
+use smallvec::SmallVec;
+
 use super::prelude::*;
 use super::public_key::*;
+
+#[derive(Debug, Clone)]
+pub struct OwnedOverlayNodes {
+    pub nodes: Vec<OwnedOverlayNode>,
+}
+
+impl BoxedConstructor for OwnedOverlayNodes {
+    const ID: u32 = ID_OVERLAY_NODES;
+}
+
+impl<'a> ReadFromPacket<'a> for OwnedOverlayNodes {
+    fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
+        Ok(Self {
+            nodes: ReadFromPacket::read_from(packet, offset)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct OverlayNodesView<'a, S> {
+    pub nodes: SmallVec<[OverlayNodeView<'a, S>; 16]>,
+}
+
+impl<S> BoxedConstructor for OverlayNodesView<'_, S> {
+    const ID: u32 = ID_OVERLAY_NODES;
+}
+
+impl<'a, S> ReadFromPacket<'a> for OverlayNodesView<'a, S>
+where
+    S: DataSignature + ReadFromPacket<'a>,
+{
+    fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
+        Ok(Self {
+            nodes: ReadFromPacket::read_from(packet, offset)?,
+        })
+    }
+}
+
+impl<S> WriteToPacket for OverlayNodesView<'_, S>
+where
+    S: WriteToPacket + DataSignature,
+{
+    fn max_size_hint(&self) -> usize {
+        self.nodes.max_size_hint()
+    }
+
+    fn write_to<T>(&self, packet: &mut T) -> std::io::Result<()>
+    where
+        T: Write,
+    {
+        self.nodes.write_to(packet)
+    }
+}
+
+const ID_OVERLAY_NODES: u32 = 0xe487290e;
 
 #[derive(Debug, Clone)]
 pub struct OwnedOverlayNode {
@@ -9,6 +66,24 @@ pub struct OwnedOverlayNode {
     pub overlay: [u8; 32],
     pub version: i32,
     pub signature: OwnedSignature,
+}
+
+impl OwnedOverlayNode {
+    pub fn as_view(&self) -> OverlayNodeView<SignatureRef> {
+        OverlayNodeView {
+            id: self.id.as_view(),
+            overlay: &self.overlay,
+            version: self.version,
+            signature: &self.signature,
+        }
+    }
+}
+
+impl<'a> ReadFromPacket<'a> for OwnedOverlayNode {
+    fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
+        let node = OverlayNodeView::<'a, SignatureRef>::read_from(packet, offset)?;
+        Ok(node.as_owned())
+    }
 }
 
 #[derive(Debug, Copy, Clone)]

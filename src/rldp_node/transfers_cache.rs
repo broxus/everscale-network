@@ -10,8 +10,8 @@ use super::incoming_transfer::*;
 use super::outgoing_transfer::*;
 use super::MessagePart;
 use crate::adnl_node::AdnlNode;
+use crate::proto::*;
 use crate::subscriber::*;
-use crate::utils::RldpMessagePartView;
 use crate::utils::*;
 
 #[derive(Clone)]

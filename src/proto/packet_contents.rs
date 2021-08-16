@@ -9,24 +9,23 @@ use super::prelude::*;
 use super::public_key::*;
 
 #[derive(Debug, Clone)]
-pub struct PacketContentsView<'a> {
+pub struct PacketContentsView<'a, T> {
     pub from: Option<PublicKeyView<'a>>,
     pub from_short: Option<HashRef<'a>>,
-    pub message: Option<MessageView<'a>>,
-    pub messages: Option<SmallVec<[MessageView<'a>; 4]>>,
+    pub message: Option<MessageView<'a, T>>,
+    pub messages: Option<SmallVec<[MessageView<'a, T>; 4]>>,
     pub address: Option<AddressListView<'a>>,
     pub seqno: Option<i64>,
     pub confirm_seqno: Option<i64>,
     pub recv_addr_list_version: Option<i32>,
-    pub recv_priority_addr_list_version: Option<i32>,
     pub reinit_date: Option<i32>,
     pub dst_reinit_date: Option<i32>,
     pub signature: Option<&'a [u8]>,
 }
 
-impl Boxed for PacketContentsView<'_> {}
+impl<T> Boxed for PacketContentsView<'_, T> {}
 
-impl<'a> ReadFromPacket<'a> for PacketContentsView<'a> {
+impl<'a> ReadFromPacket<'a> for PacketContentsView<'a, RawBytes<'a>> {
     fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
         let constructor = u32::read_from(packet, offset)?;
         if constructor != ID_PACKET_CONTENTS {
@@ -51,11 +50,11 @@ impl<'a> ReadFromPacket<'a> for PacketContentsView<'a> {
 
         let recv_addr_list_version =
             read_optional(packet, offset, flags.contains(HAS_RECV_ADDR_LIST_VERSION))?;
-        let recv_priority_addr_list_version = read_optional(
+        read_optional::<i32>(
             packet,
             offset,
             flags.contains(HAS_RECV_PRIORITY_ADDR_LIST_VERSION),
-        )?;
+        )?; // skip `recv_priority_addr_list_version`
 
         let reinit_date = read_optional(packet, offset, flags.contains(HAS_REINIT_DATE))?;
         let dst_reinit_date = read_optional(packet, offset, flags.contains(HAS_REINIT_DATE))?;
@@ -73,7 +72,6 @@ impl<'a> ReadFromPacket<'a> for PacketContentsView<'a> {
             seqno,
             confirm_seqno,
             recv_addr_list_version,
-            recv_priority_addr_list_version,
             reinit_date,
             dst_reinit_date,
             signature,
@@ -81,7 +79,10 @@ impl<'a> ReadFromPacket<'a> for PacketContentsView<'a> {
     }
 }
 
-impl<'a> WriteToPacket for PacketContentsView<'a> {
+impl<'a, T> WriteToPacket for PacketContentsView<'a, T>
+where
+    T: WriteToPacket,
+{
     fn max_size_hint(&self) -> usize {
         4 + RAND_LEN
             + 4 // flags
@@ -93,16 +94,15 @@ impl<'a> WriteToPacket for PacketContentsView<'a> {
             + self.seqno.max_size_hint()
             + self.confirm_seqno.max_size_hint()
             + self.recv_addr_list_version.max_size_hint()
-            + self.recv_priority_addr_list_version.max_size_hint()
             + self.reinit_date.max_size_hint()
             + self.dst_reinit_date.max_size_hint()
             + self.signature.max_size_hint()
             + RAND_LEN
     }
 
-    fn write_to<T>(&self, packet: &mut T) -> std::io::Result<()>
+    fn write_to<P>(&self, packet: &mut P) -> std::io::Result<()>
     where
-        T: Write,
+        P: Write,
     {
         // prepare rand buffer
         let mut rng = rand::thread_rng();
@@ -118,10 +118,6 @@ impl<'a> WriteToPacket for PacketContentsView<'a> {
         flags.update(HAS_SEQNO, &self.seqno);
         flags.update(HAS_CONFIRM_SEQNO, &self.confirm_seqno);
         flags.update(HAS_RECV_ADDR_LIST_VERSION, &self.recv_addr_list_version);
-        flags.update(
-            HAS_RECV_PRIORITY_ADDR_LIST_VERSION,
-            &self.recv_priority_addr_list_version,
-        );
         flags.update(HAS_REINIT_DATE, &self.reinit_date);
         flags.update(HAS_SIGNATURE, &self.signature);
 
@@ -141,7 +137,6 @@ impl<'a> WriteToPacket for PacketContentsView<'a> {
         self.seqno.write_to(packet)?;
         self.confirm_seqno.write_to(packet)?;
         self.recv_addr_list_version.write_to(packet)?;
-        self.recv_priority_addr_list_version.write_to(packet)?;
         self.reinit_date.write_to(packet)?;
         self.dst_reinit_date.write_to(packet)?;
         self.signature.write_to(packet)?;

@@ -9,26 +9,33 @@ use super::node_id::*;
 use super::packet_view::*;
 use super::FxHashMap;
 use super::{build_packet_cipher, compute_shared_secret};
+use crate::proto::*;
 
-pub fn build_handshake_packet(
+pub fn build_handshake_packet<T>(
     peer_id: &AdnlNodeIdShort,
     peer_id_full: &AdnlNodeIdFull,
-    buffer: &mut Vec<u8>,
-) -> Result<()> {
+    data: T,
+) -> Result<Vec<u8>>
+where
+    T: WriteToPacket,
+{
     // Create temp local key
     let temp_private_key = ed25519_dalek::SecretKey::generate(&mut rand::thread_rng());
     let temp_public_key = ed25519_dalek::PublicKey::from(&temp_private_key);
 
-    // Prepare packet
-    let checksum: [u8; 32] = sha2::Sha256::digest(buffer.as_slice()).into();
+    // Create buffer
+    let len = data.max_size_hint();
+    let mut result = Vec::with_capacity(96 + len);
 
-    let length = buffer.len();
-    buffer.resize(length + 96, 0);
-    buffer.copy_within(..length, 96);
+    // Fill packet header and data
+    result.extend_from_slice(peer_id.as_slice());
+    result.extend_from_slice(temp_public_key.as_bytes());
+    result.resize(96, 0); // empty checksum
+    data.write_to(&mut result)?;
 
-    buffer[..32].copy_from_slice(peer_id.as_slice());
-    buffer[32..64].copy_from_slice(temp_public_key.as_bytes());
-    buffer[64..96].copy_from_slice(&checksum);
+    // Fill packet checksum
+    let checksum: [u8; 32] = sha2::Sha256::digest(&result[96..]).into();
+    result[64..96].copy_from_slice(&checksum);
 
     // Encrypt packet data
     let temp_private_key_part = ed25519_dalek::ExpandedSecretKey::from(&temp_private_key)
@@ -37,10 +44,10 @@ pub fn build_handshake_packet(
         .unwrap();
 
     let shared_secret = compute_shared_secret(&temp_private_key_part, peer_id_full.public_key())?;
-    build_packet_cipher(&shared_secret, &checksum).apply_keystream(&mut buffer[96..]);
+    build_packet_cipher(&shared_secret, &checksum).apply_keystream(&mut result[96..]);
 
     // Done
-    Ok(())
+    Ok(result)
 }
 
 /// Attempts to decode the buffer as an ADNL handshake packet. On a successful nonempty result,

@@ -26,10 +26,9 @@ impl AdnlNodeIdFull {
     }
 
     #[allow(non_snake_case)]
-    pub fn verify<T, V, S>(&self, message: T, signature: S) -> Result<()>
+    pub fn verify<T, S>(&self, message: T, signature: S) -> Result<()>
     where
-        T: Borrow<V>,
-        V: UpdateSignatureHasher,
+        T: UpdateSignatureHasher,
         S: AsRef<[u8]>,
     {
         use sha2::Digest;

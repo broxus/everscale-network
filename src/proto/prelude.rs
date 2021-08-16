@@ -1,5 +1,6 @@
 use std::io::Write;
 
+use either::Either;
 use smallvec::SmallVec;
 
 /// Tries to decode TL data
@@ -65,11 +66,15 @@ where
 }
 
 /// Marks bare type with the appropriate constructor id  
-pub trait BoxedConstructor {
+pub trait BoxedConstructor: Sized {
     const ID: u32;
 
     /// Wraps bare type reference into `BoxedWrapper`
     fn wrap(&self) -> BoxedWrapper<&Self> {
+        BoxedWrapper(self)
+    }
+
+    fn into_wrapped(self) -> BoxedWrapper<Self> {
         BoxedWrapper(self)
     }
 }
@@ -102,6 +107,26 @@ where
 /// Helper type which is used to represent field value as bytes
 #[derive(Debug, Clone)]
 pub struct IntermediateBytes<T>(pub T);
+
+impl<T> IntermediateBytes<T>
+where
+    T: AsRef<[u8]>,
+{
+    pub fn as_slice(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+}
+
+impl<T> IntermediateBytes<T>
+where
+    T: WriteToPacket,
+{
+    pub fn as_owned_raw_bytes(&self) -> std::io::Result<IntermediateBytes<OwnedRawBytes>> {
+        serialize_view(&self.0)
+            .map(OwnedRawBytes)
+            .map(IntermediateBytes)
+    }
+}
 
 impl<T> AsOwned for IntermediateBytes<T>
 where
@@ -152,9 +177,48 @@ where
     }
 }
 
+/// Owned version of `RawBytes`
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct OwnedRawBytes(pub Vec<u8>);
+
+impl AsRef<[u8]> for OwnedRawBytes {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl WriteToPacket for OwnedRawBytes {
+    #[inline]
+    fn max_size_hint(&self) -> usize {
+        self.0.len()
+    }
+
+    #[inline]
+    fn write_to<T>(&self, packet: &mut T) -> std::io::Result<()>
+    where
+        T: Write,
+    {
+        packet.write_all(self.0.as_slice())
+    }
+}
+
 /// Helper type which reads remaining packet as is
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct RawBytes<'a>(pub &'a [u8]);
+
+impl AsRef<[u8]> for RawBytes<'_> {
+    fn as_ref(&self) -> &[u8] {
+        self.0
+    }
+}
+
+impl AsOwned for RawBytes<'_> {
+    type Owned = OwnedRawBytes;
+
+    fn as_owned(&self) -> Self::Owned {
+        OwnedRawBytes(self.0.to_vec())
+    }
+}
 
 impl<'a> ReadFromPacket<'a> for RawBytes<'a> {
     fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
@@ -166,10 +230,12 @@ impl<'a> ReadFromPacket<'a> for RawBytes<'a> {
 }
 
 impl WriteToPacket for RawBytes<'_> {
+    #[inline]
     fn max_size_hint(&self) -> usize {
         self.0.len()
     }
 
+    #[inline]
     fn write_to<T>(&self, packet: &mut T) -> std::io::Result<()>
     where
         T: Write,
@@ -188,6 +254,14 @@ impl<'a> ReadFromPacket<'a> for &'a [u8] {
     #[inline]
     fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
         read_bytes(packet, offset)
+    }
+}
+
+/// `ton::bytes` - 1 or 4 bytes of `len`, then `len` bytes of data (aligned to 4)
+impl<'a> ReadFromPacket<'a> for Vec<u8> {
+    #[inline]
+    fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
+        Ok(read_bytes(packet, offset)?.to_vec())
     }
 }
 
@@ -223,6 +297,21 @@ where
     }
 }
 
+/// `ton::vector` - 4 bytes of `len`, then `len` items
+impl<'a, T> ReadFromPacket<'a> for Vec<T>
+where
+    T: ReadFromPacket<'a>,
+{
+    fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
+        let len = i32::read_from(packet, offset)?;
+        let mut items = Vec::with_capacity(len as usize);
+        for _ in 0..len {
+            items.push(ReadFromPacket::read_from(packet, offset)?);
+        }
+        Ok(items)
+    }
+}
+
 /// Specifies how this type can be written to the packet
 pub trait WriteToPacket {
     /// Max required number of bytes
@@ -249,6 +338,29 @@ where
     }
 }
 
+impl<T1, T2> WriteToPacket for Either<T1, T2>
+where
+    T1: WriteToPacket,
+    T2: WriteToPacket,
+{
+    fn max_size_hint(&self) -> usize {
+        match self {
+            Self::Left(l) => l.max_size_hint(),
+            Self::Right(r) => r.max_size_hint(),
+        }
+    }
+
+    fn write_to<T>(&self, packet: &mut T) -> std::io::Result<()>
+    where
+        T: Write,
+    {
+        match self {
+            Self::Left(l) => l.write_to(packet),
+            Self::Right(r) => r.write_to(packet),
+        }
+    }
+}
+
 /// `ton::bytes` - 1 or 4 bytes of `len`, then `len` bytes of data (aligned to 4)
 impl<'a> WriteToPacket for &'a [u8] {
     #[inline]
@@ -262,6 +374,22 @@ impl<'a> WriteToPacket for &'a [u8] {
         T: Write,
     {
         write_bytes(self, packet)
+    }
+}
+
+/// `ton::bytes` - 1 or 4 bytes of `len`, then `len` bytes of data (aligned to 4)
+impl<'a> WriteToPacket for Vec<u8> {
+    #[inline]
+    fn max_size_hint(&self) -> usize {
+        bytes_max_size_hint(self.len())
+    }
+
+    #[inline]
+    fn write_to<T>(&self, packet: &mut T) -> std::io::Result<()>
+    where
+        T: Write,
+    {
+        write_bytes(self.as_slice(), packet)
     }
 }
 
@@ -281,11 +409,9 @@ impl<'a, const N: usize> WriteToPacket for [u8; N] {
     }
 }
 
-/// `ton::vector` - 4 bytes of `len`, then `len` items
-impl<T, const N: usize> WriteToPacket for SmallVec<[T; N]>
+impl<T> WriteToPacket for &'_ [T]
 where
-    [T; N]: smallvec::Array,
-    <[T; N] as smallvec::Array>::Item: WriteToPacket,
+    T: WriteToPacket,
 {
     #[inline]
     fn max_size_hint(&self) -> usize {
@@ -298,10 +424,49 @@ where
         P: Write,
     {
         (self.len() as i32).write_to(packet)?;
-        for item in self {
+        for item in self.iter() {
             item.write_to(packet)?;
         }
         Ok(())
+    }
+}
+
+/// `ton::vector` - 4 bytes of `len`, then `len` items
+impl<T, const N: usize> WriteToPacket for SmallVec<[T; N]>
+where
+    [T; N]: smallvec::Array,
+    <[T; N] as smallvec::Array>::Item: WriteToPacket,
+{
+    #[inline]
+    fn max_size_hint(&self) -> usize {
+        self.as_slice().max_size_hint()
+    }
+
+    #[inline]
+    fn write_to<P>(&self, packet: &mut P) -> std::io::Result<()>
+    where
+        P: Write,
+    {
+        self.as_slice().write_to(packet)
+    }
+}
+
+/// `ton::vector` - 4 bytes of `len`, then `len` items
+impl<T> WriteToPacket for Vec<T>
+where
+    T: WriteToPacket,
+{
+    #[inline]
+    fn max_size_hint(&self) -> usize {
+        self.as_slice().max_size_hint()
+    }
+
+    #[inline]
+    fn write_to<P>(&self, packet: &mut P) -> std::io::Result<()>
+    where
+        P: Write,
+    {
+        self.as_slice().write_to(packet)
     }
 }
 
@@ -413,6 +578,18 @@ pub trait UpdateSignatureHasher {
     fn update_hasher<H>(&self, hasher: &mut H) -> std::io::Result<()>
     where
         H: Write;
+}
+
+impl<T> UpdateSignatureHasher for &T
+where
+    T: UpdateSignatureHasher,
+{
+    fn update_hasher<H>(&self, hasher: &mut H) -> std::io::Result<()>
+    where
+        H: Write,
+    {
+        T::update_hasher(self, hasher)
+    }
 }
 
 /// Marker trait for signatures

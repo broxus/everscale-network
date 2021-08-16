@@ -2,14 +2,14 @@ use std::io::Write;
 
 use super::prelude::*;
 
-#[derive(Debug, Copy, Clone)]
-pub enum MessageView<'a> {
+#[derive(Debug, Clone)]
+pub enum MessageView<'a, T> {
     Answer {
         query_id: HashRef<'a>,
-        answer: &'a [u8],
+        answer: IntermediateBytes<T>,
     },
     Custom {
-        data: &'a [u8],
+        data: IntermediateBytes<T>,
     },
     ConfirmChannel {
         key: HashRef<'a>,
@@ -20,7 +20,7 @@ pub enum MessageView<'a> {
         hash: HashRef<'a>,
         total_size: i32,
         offset: i32,
-        data: &'a [u8],
+        data: IntermediateBytes<T>,
     },
     CreateChannel {
         key: HashRef<'a>,
@@ -28,7 +28,7 @@ pub enum MessageView<'a> {
     },
     Query {
         query_id: HashRef<'a>,
-        query: &'a [u8],
+        query: IntermediateBytes<T>,
     },
     Nop,
     Reinit {
@@ -36,17 +36,17 @@ pub enum MessageView<'a> {
     },
 }
 
-impl Boxed for MessageView<'_> {}
+impl<T> Boxed for MessageView<'_, T> {}
 
-impl<'a> ReadFromPacket<'a> for MessageView<'a> {
+impl<'a> ReadFromPacket<'a> for MessageView<'a, RawBytes<'a>> {
     fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
         match u32::read_from(packet, offset)? {
             ID_MESSAGE_ANSWER => Ok(Self::Answer {
                 query_id: read_fixed_bytes(packet, offset)?,
-                answer: read_bytes(packet, offset)?,
+                answer: ReadFromPacket::read_from(packet, offset)?,
             }),
             ID_MESSAGE_CUSTOM => Ok(Self::Custom {
-                data: read_bytes(packet, offset)?,
+                data: ReadFromPacket::read_from(packet, offset)?,
             }),
             ID_MESSAGE_CONFIRM_CHANNEL => Ok(Self::ConfirmChannel {
                 key: read_fixed_bytes(packet, offset)?,
@@ -57,7 +57,7 @@ impl<'a> ReadFromPacket<'a> for MessageView<'a> {
                 hash: read_fixed_bytes(packet, offset)?,
                 total_size: i32::read_from(packet, offset)?,
                 offset: i32::read_from(packet, offset)?,
-                data: read_bytes(packet, offset)?,
+                data: ReadFromPacket::read_from(packet, offset)?,
             }),
             ID_MESSAGE_CREATE_CHANNEL => Ok(Self::CreateChannel {
                 key: read_fixed_bytes(packet, offset)?,
@@ -65,7 +65,7 @@ impl<'a> ReadFromPacket<'a> for MessageView<'a> {
             }),
             ID_MESSAGE_QUERY => Ok(Self::Query {
                 query_id: read_fixed_bytes(packet, offset)?,
-                query: read_bytes(packet, offset)?,
+                query: ReadFromPacket::read_from(packet, offset)?,
             }),
             ID_MESSAGE_NOP => Ok(Self::Nop),
             ID_MESSAGE_REINIT => Ok(Self::Reinit {
@@ -76,7 +76,10 @@ impl<'a> ReadFromPacket<'a> for MessageView<'a> {
     }
 }
 
-impl WriteToPacket for MessageView<'_> {
+impl<T> WriteToPacket for MessageView<'_, T>
+where
+    T: WriteToPacket,
+{
     fn max_size_hint(&self) -> usize {
         4 + match self {
             MessageView::Answer { query_id, answer } => {
@@ -108,9 +111,9 @@ impl WriteToPacket for MessageView<'_> {
         }
     }
 
-    fn write_to<T>(&self, packet: &mut T) -> std::io::Result<()>
+    fn write_to<P>(&self, packet: &mut P) -> std::io::Result<()>
     where
-        T: Write,
+        P: Write,
     {
         match self {
             MessageView::Answer { query_id, answer } => {

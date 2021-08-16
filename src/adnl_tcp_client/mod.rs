@@ -13,6 +13,7 @@ use ton_api::ton::{self, TLObject};
 use ton_api::IntoBoxed;
 
 use self::ping_cache::*;
+use crate::proto::OwnedRawBytes;
 use crate::utils::*;
 
 mod ping_cache;
@@ -115,7 +116,7 @@ impl AdnlTcpClient {
         let (tx, mut rx) = mpsc::unbounded_channel();
 
         let mut rng = rand::thread_rng();
-        let mut initial_buffer: Vec<u8> = (0..160).map(|_| rng.gen()).collect();
+        let initial_buffer: Vec<u8> = (0..160).map(|_| rng.gen()).collect();
 
         let mut cipher_receive = aes::Aes256Ctr::new(
             generic_array::GenericArray::from_slice(&initial_buffer[0..32]),
@@ -247,9 +248,9 @@ impl AdnlTcpClient {
 
         log::info!("Created connection. Sending init packet...");
 
-        build_handshake_packet(&peer_id, &peer_id_full, &mut initial_buffer)?;
+        let data = build_handshake_packet(&peer_id, &peer_id_full, OwnedRawBytes(initial_buffer))?;
         let _ = client.sender.send(PacketToSend {
-            data: initial_buffer,
+            data,
             should_encrypt: false,
         });
 

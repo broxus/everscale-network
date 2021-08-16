@@ -5,6 +5,7 @@ use aes::cipher::StreamCipher;
 use anyhow::Result;
 use sha2::Digest;
 
+use crate::proto::*;
 use crate::utils::*;
 
 const CHANNEL_RESET_TIMEOUT: i32 = 30; // Seconds
@@ -90,17 +91,28 @@ impl AdnlChannel {
         Ok(())
     }
 
-    pub fn encrypt(&self, buffer: &mut Vec<u8>) -> Result<()> {
-        let checksum: [u8; 32] = sha2::Sha256::digest(buffer.as_slice()).into();
+    pub fn encrypt<T>(&self, data: T) -> Result<Vec<u8>>
+    where
+        T: WriteToPacket,
+    {
+        // Create buffer
+        let len = data.max_size_hint();
+        let mut result = Vec::with_capacity(64 + len);
 
-        let len = buffer.len();
-        buffer.resize(len + 64, 0);
-        buffer.copy_within(..len, 64);
-        buffer[..32].copy_from_slice(&self.channel_out.id);
-        buffer[32..64].copy_from_slice(&checksum);
+        // Fill packet header and data
+        result.extend_from_slice(&self.channel_out.id);
+        result.resize(64, 0); // empty checksum
+        data.write_to(&mut result)?;
 
-        process_channel_data(buffer, &self.channel_out.secret);
-        Ok(())
+        // Fill packet checksum
+        let checksum: [u8; 32] = sha2::Sha256::digest(&result[64..]).into();
+        result[32..64].copy_from_slice(&checksum);
+
+        // Encrypt packet data
+        process_channel_data(&mut result, &self.channel_out.secret);
+
+        // Done
+        Ok(result)
     }
 }
 
@@ -162,62 +174,4 @@ enum AdnlChannelError {
     ChannelMessageIsTooShort(usize),
     #[error("Invalid channel message checksum")]
     InvalidChannelMessageChecksum,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_encrypt_decrypt() {
-        let peer1_key = ed25519_dalek::SecretKey::generate(&mut rand::thread_rng());
-        let peer1_id = peer1_key.compute_node_ids().unwrap().1;
-        let peer1_channel_key = ChannelKey::generate();
-
-        let peer2_key = ed25519_dalek::SecretKey::generate(&mut rand::thread_rng());
-        let peer2_id = peer2_key.compute_node_ids().unwrap().1;
-        let peer2_channel_key = ChannelKey::generate();
-
-        let channel12 = AdnlChannel::new(
-            peer1_id,
-            peer2_id,
-            peer1_channel_key.private_key_part(),
-            peer2_channel_key.public_key().as_bytes(),
-        )
-        .unwrap();
-
-        let channel21 = AdnlChannel::new(
-            peer2_id,
-            peer1_id,
-            peer2_channel_key.private_key_part(),
-            peer1_channel_key.public_key().as_bytes(),
-        )
-        .unwrap();
-
-        let message = "Hello world!";
-
-        // Send 1 to 2
-        {
-            let mut packet = message.as_bytes().to_vec();
-            channel12.encrypt(&mut packet).unwrap();
-
-            let mut received_packet = PacketView::from(packet.as_mut_slice());
-            channel21.decrypt(&mut received_packet).unwrap();
-
-            let received_message = String::from_utf8(received_packet.as_slice().to_vec()).unwrap();
-            assert_eq!(received_message, message);
-        }
-
-        // Send 2 to 1
-        {
-            let mut packet = message.as_bytes().to_vec();
-            channel21.encrypt(&mut packet).unwrap();
-
-            let mut received_packet = PacketView::from(packet.as_mut_slice());
-            channel12.decrypt(&mut received_packet).unwrap();
-
-            let received_message = String::from_utf8(received_packet.as_slice().to_vec()).unwrap();
-            assert_eq!(received_message, message);
-        }
-    }
 }

@@ -6,9 +6,9 @@ use super::prelude::*;
 use super::public_key::*;
 
 #[derive(Debug, Clone)]
-pub struct OwnedDhtValue<V> {
+pub struct OwnedDhtValue {
     pub key: OwnedDhtKeyDescription,
-    pub value: IntermediateBytes<V>,
+    pub value: IntermediateBytes<OwnedRawBytes>,
     pub ttl: i32,
     pub signature: OwnedSignature,
 }
@@ -23,18 +23,18 @@ pub struct DhtValueView<'a, V, S> {
 
 impl<V, S> AsOwned for DhtValueView<'_, V, S>
 where
-    V: AsOwned,
+    V: WriteToPacket,
     S: DataSignature + AsOwned<Owned = OwnedSignature>,
 {
-    type Owned = OwnedDhtValue<V::Owned>;
+    type Owned = std::io::Result<OwnedDhtValue>;
 
     fn as_owned(&self) -> Self::Owned {
-        Self::Owned {
+        Ok(OwnedDhtValue {
             key: self.key.as_owned(),
-            value: self.value.as_owned(),
+            value: self.value.as_owned_raw_bytes()?,
             ttl: self.ttl,
             signature: self.signature.as_owned(),
-        }
+        })
     }
 }
 
@@ -240,6 +240,16 @@ pub struct OwnedDhtKey {
     pub id: [u8; 32],
     pub name: SmallVec<[u8; 16]>,
     pub idx: i32,
+}
+
+impl OwnedDhtKey {
+    pub fn as_view(&self) -> DhtKeyView {
+        DhtKeyView {
+            id: &self.id,
+            name: self.name.as_slice(),
+            idx: self.idx,
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]

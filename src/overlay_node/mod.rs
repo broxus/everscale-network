@@ -7,6 +7,7 @@ use ton_api::ton::{self, TLObject};
 
 use self::overlay_shard::*;
 use crate::adnl_node::*;
+use crate::proto::*;
 use crate::rldp_node::*;
 use crate::subscriber::*;
 use crate::utils::*;

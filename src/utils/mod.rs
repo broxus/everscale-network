@@ -8,8 +8,6 @@ use sha2::Digest;
 use ton_api::ton::TLObject;
 use ton_api::{BoxedSerialize, Deserializer, IntoBoxed, Serializer};
 
-pub use crate::proto::*;
-
 pub use self::address_list::*;
 pub use self::dht::*;
 pub use self::handshake::*;
@@ -24,6 +22,7 @@ pub use self::query::*;
 pub use self::response_collector::*;
 pub use self::socket::*;
 pub use self::updated_at::*;
+use crate::proto::*;
 
 mod address_list;
 mod dht;

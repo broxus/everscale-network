@@ -8,6 +8,7 @@ use ton_api::IntoBoxed;
 
 use crate::adnl_node::AdnlNode;
 use crate::overlay_node::MAX_OVERLAY_PEERS;
+use crate::proto::*;
 use crate::subscriber::*;
 use crate::utils::*;
 
@@ -82,10 +83,13 @@ impl DhtNode {
             key: ton::int256(*self.node_key.id().as_slice()),
             k: 10,
         });
-        let answer: ton::dht::Nodes = match self.query_with_prefix(peer_id, &query).await? {
-            Some(answer) => parse_answer(answer)?,
+
+        let answer = match self.query_with_prefix(peer_id, &query).await? {
+            Some(answer) => answer,
             None => return Ok(false),
         };
+        let answer: ton::dht::Nodes = deserialize_view(&answer)?;
+
         let nodes = answer.only().nodes;
         for node in nodes.0.into_iter() {
             self.add_peer(node)?;
@@ -171,35 +175,37 @@ impl DhtNode {
         Ok(result)
     }
 
-    pub async fn store_overlay_node(
+    pub async fn store_overlay_node<S>(
         self: &Arc<Self>,
         overlay_full_id: &OverlayIdFull,
-        node: &ton::overlay::node::Node,
-    ) -> Result<bool> {
-        let overlay_full_id = ton::pub_::publickey::Overlay {
-            name: ton::bytes(overlay_full_id.as_slice().to_vec()),
+        node: &OverlayNodeView<'_, S>,
+    ) -> Result<bool>
+    where
+        S: DataSignature,
+    {
+        let overlay_full_id = PublicKeyView::Overlay {
+            name: overlay_full_id.as_slice(),
         };
-        let overlay_id = hash(overlay_full_id.clone())?.into();
+        let overlay_id = hash(&overlay_full_id)?.into();
 
         verify_node(&overlay_id, node)?;
 
         let key = make_dht_key(&overlay_id, DHT_KEY_NODES);
-        let value = ton::dht::value::Value {
-            key: ton::dht::keydescription::KeyDescription {
-                key: key.clone(),
-                id: overlay_full_id.into_boxed(),
-                update_rule: ton::dht::UpdateRule::Dht_UpdateRule_OverlayNodes,
+        let value = OwnedDhtValue {
+            key: OwnedDhtKeyDescription {
+                key: key.as_owned(),
+                id: *overlay_full_id,
+                update_rule: DhtUpdateRuleView::OverlayNodes,
                 signature: Default::default(),
             },
-            value: ton::bytes(serialize_boxed(ton::overlay::nodes::Nodes {
-                nodes: vec![node.clone()].into(),
-            })?),
+            value: IntermediateBytes(OverlayNodesView { nodes: &[node] }.into_wrapped())
+                .as_owned_raw_bytes()?,
             ttl: now() + DHT_VALUE_TIMEOUT,
             signature: Default::default(),
         };
 
         self.storage
-            .insert_overlay_nodes(hash(key.clone())?, value.clone())?;
+            .insert_overlay_nodes(hash(key.wrap())?, &value)?;
 
         self.store_value(
             key,
@@ -245,12 +251,12 @@ impl DhtNode {
     }
 
     pub async fn store_ip_address(self: &Arc<Self>, key: &StoredAdnlNodeKey) -> Result<bool> {
-        let value = serialize_boxed(self.adnl.build_address_list(None))?;
-        let value = sign_dht_value(key, DHT_KEY_ADDRESS, &value)?;
+        let address_list = self.adnl.build_address_list(None);
+        let value = sign_dht_value(key, DHT_KEY_ADDRESS, address_list.wrap())?;
         let key = make_dht_key(key.id(), DHT_KEY_ADDRESS);
 
         self.storage
-            .insert_signed_value(hash(key.clone())?, value.clone())?;
+            .insert_signed_value(hash(key.wrap())?, &value)?;
 
         self.store_value(
             key,
@@ -393,17 +399,23 @@ impl DhtNode {
         Ok(ton::dht::Stored::Dht_Stored)
     }
 
-    async fn query(&self, peer_id: &AdnlNodeIdShort, query: &TLObject) -> Result<Option<TLObject>> {
+    async fn query<T>(&self, peer_id: &AdnlNodeIdShort, query: T) -> Result<Option<Vec<u8>>>
+    where
+        T: WriteToPacket,
+    {
         self.adnl
             .query(self.node_key.id(), peer_id, query, None)
             .await
     }
 
-    async fn query_with_prefix(
+    async fn query_with_prefix<T>(
         &self,
         peer_id: &AdnlNodeIdShort,
-        query: &TLObject,
-    ) -> Result<Option<TLObject>> {
+        query: T,
+    ) -> Result<Option<Vec<u8>>>
+    where
+        T: WriteToPacket,
+    {
         self.adnl
             .query_with_prefix(
                 self.node_key.id(),

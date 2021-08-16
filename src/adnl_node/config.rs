@@ -113,6 +113,7 @@ enum AdnlNodeConfigError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proto::*;
 
     #[test]
     fn test_handshake() -> Result<()> {
@@ -124,13 +125,11 @@ mod tests {
 
         let text = "Hello world";
 
-        let mut packet = text.as_bytes().to_vec();
-        println!("Packet decoded: {}", hex::encode(&packet));
+        let mut packet = OwnedRawBytes(text.as_bytes().to_vec());
+        println!("Packet decoded: {}", hex::encode(&packet.0));
 
-        build_handshake_packet(&first_peer_id, first_peer.full_id(), &mut packet)?;
+        let mut packet = build_handshake_packet(&first_peer_id, first_peer.full_id(), packet)?;
         println!("Packet encoded: {}", hex::encode(&packet));
-
-        println!("Packet decoded: {}", hex::encode(packet.as_slice()));
 
         let mut buffer = packet.as_mut_slice().into();
         parse_handshake_packet(first_peer_config.keys(), &mut buffer, None)?;

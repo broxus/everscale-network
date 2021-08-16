@@ -1,37 +1,12 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use ton_api::{ton, BoxedSerialize, IntoBoxed, Serializer};
+use ton_api::{ton, BoxedSerialize};
 
 use super::node_id::*;
 use super::{deserialize_bundle, serialize};
+use crate::proto::*;
 use crate::subscriber::*;
-
-pub fn build_query(
-    prefix: Option<&[u8]>,
-    query: &ton::TLObject,
-) -> Result<(QueryId, ton::adnl::Message)> {
-    use rand::Rng;
-
-    let query_id: QueryId = rand::thread_rng().gen();
-    let query = match prefix {
-        Some(prefix) => {
-            let mut prefix = prefix.to_vec();
-            Serializer::new(&mut prefix).write_boxed(query)?;
-            prefix
-        }
-        None => serialize(query)?,
-    };
-
-    Ok((
-        query_id,
-        ton::adnl::message::message::Query {
-            query_id: ton::int256(query_id),
-            query: ton::bytes(query),
-        }
-        .into_boxed(),
-    ))
-}
 
 pub async fn process_message_custom(
     local_id: &AdnlNodeIdShort,
@@ -50,22 +25,21 @@ pub async fn process_message_custom(
     Ok(false)
 }
 
-pub async fn process_message_adnl_query(
+pub async fn process_message_adnl_query<'a>(
     local_id: &AdnlNodeIdShort,
     peer_id: &AdnlNodeIdShort,
     subscribers: &[Arc<dyn Subscriber>],
-    query_id: &QueryId,
+    query_id: &'a QueryId,
     query: &[u8],
-) -> Result<QueryProcessingResult<ton::adnl::Message>> {
+) -> Result<QueryProcessingResult<MessageView<'a, OwnedRawBytes>>> {
     match process_query(local_id, peer_id, subscribers, query).await? {
-        QueryProcessingResult::Processed(answer) => convert_answer(answer, |answer| {
-            ton::adnl::message::message::Answer {
-                query_id: ton::int256(*query_id),
-                answer: ton::bytes(answer),
-            }
-            .into_boxed()
-        })
-        .map(QueryProcessingResult::Processed),
+        QueryProcessingResult::Processed(answer) => {
+            convert_answer(answer, |answer| MessageView::Answer {
+                query_id,
+                answer: IntermediateBytes(OwnedRawBytes(answer)),
+            })
+            .map(QueryProcessingResult::Processed)
+        }
         _ => Ok(QueryProcessingResult::Rejected),
     }
 }
@@ -129,16 +103,6 @@ async fn process_query(
 pub enum QueryProcessingResult<T> {
     Processed(Option<T>),
     Rejected,
-}
-
-pub fn parse_answer<T>(answer: ton::TLObject) -> Result<T>
-where
-    T: BoxedSerialize + serde::Serialize + Send + Sync + 'static,
-{
-    match answer.downcast::<T>() {
-        Ok(answer) => Ok(answer),
-        Err(_) => Err(QueryError::UnsupportedResponse.into()),
-    }
 }
 
 fn convert_answer<A, F>(answer: Option<QueryAnswer>, convert: F) -> Result<Option<A>>

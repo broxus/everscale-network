@@ -23,7 +23,7 @@ impl OwnedPublicKey {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
 pub enum PublicKeyView<'a> {
     Aes { key: HashRef<'a> },
     Ed25519 { key: HashRef<'a> },

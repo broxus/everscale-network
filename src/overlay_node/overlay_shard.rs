@@ -11,6 +11,7 @@ use ton_api::{ton, IntoBoxed};
 
 use super::{broadcast_receiver::*, MAX_OVERLAY_PEERS};
 use crate::adnl_node::*;
+use crate::proto::*;
 use crate::rldp_node::*;
 use crate::utils::*;
 
