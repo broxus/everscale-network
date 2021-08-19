@@ -412,16 +412,18 @@ impl OverlayShard {
             async move {
                 while outgoing_transfer.seqno <= max_seqno {
                     for _ in 0..MAX_BROADCAST_WAVE {
-                        let result = overlay_shard
-                            .prepare_fec_broadcast(&mut outgoing_transfer, &key)
-                            .and_then(|data| async {
-                                data_tx.send(data).await?;
-                                Ok(())
-                            });
-
-                        if let Err(e) = result {
-                            log::warn!("Failed to send overlay broadcast: {}", e);
-                            return;
+                        let result =
+                            overlay_shard.prepare_fec_broadcast(&mut outgoing_transfer, &key);
+                        match result {
+                            Ok(data) => {
+                                if let Err(e) = data_tx.send(data).await {
+                                    log::error!("Failed sending broadcast via channel: {}", e)
+                                }
+                            }
+                            Err(e) => {
+                                log::warn!("Failed to send overlay broadcast: {}", e);
+                                return;
+                            }
                         }
 
                         if outgoing_transfer.seqno > max_seqno {
