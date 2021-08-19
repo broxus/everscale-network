@@ -318,17 +318,20 @@ impl OverlayShard {
         }
 
         if !transfer.completed.load(Ordering::Acquire) {
-            transfer.broadcast_tx.send(BroadcastFec {
-                node_id,
-                data_hash: broadcast_id,
-                data_size: broadcast.data_size,
-                flags: broadcast.flags,
-                data: broadcast.data.to_vec(),
-                seqno: broadcast.seqno,
-                fec_type,
-                date: broadcast.date,
-                signature,
-            })?;
+            transfer
+                .broadcast_tx
+                .send(BroadcastFec {
+                    node_id,
+                    data_hash: broadcast_id,
+                    data_size: broadcast.data_size,
+                    flags: broadcast.flags,
+                    data: broadcast.data.to_vec(),
+                    seqno: broadcast.seqno,
+                    fec_type,
+                    date: broadcast.date,
+                    signature,
+                })
+                .await?;
         }
 
         let neighbours = self.neighbours.get_random_peers(5, Some(peer_id));
@@ -391,7 +394,7 @@ impl OverlayShard {
         };
 
         let data_size = data.len() as u32;
-        let (data_tx, mut data_rx) = mpsc::unbounded_channel();
+        let (data_tx, mut data_rx) = mpsc::channel(data_size as usize);
 
         let mut outgoing_transfer = OutgoingFecTransfer {
             broadcast_id,
@@ -411,8 +414,8 @@ impl OverlayShard {
                     for _ in 0..MAX_BROADCAST_WAVE {
                         let result = overlay_shard
                             .prepare_fec_broadcast(&mut outgoing_transfer, &key)
-                            .and_then(|data| {
-                                data_tx.send(data)?;
+                            .and_then(|data| async {
+                                data_tx.send(data).await?;
                                 Ok(())
                             });
 
@@ -500,7 +503,7 @@ impl OverlayShard {
         broadcast_id: BroadcastId,
         peer_id: AdnlNodeIdShort,
     ) -> Result<IncomingFecTransfer> {
-        let (broadcast_tx, mut broadcast_rx) = mpsc::unbounded_channel();
+        let (broadcast_tx, mut broadcast_rx) = mpsc::channel(4096);
         let mut decoder = RaptorQDecoder::with_params(fec_type);
 
         tokio::spawn({
@@ -795,7 +798,7 @@ struct BroadcastFec {
     signature: [u8; 64],
 }
 
-type BroadcastFecTx = mpsc::UnboundedSender<BroadcastFec>;
+type BroadcastFecTx = mpsc::Sender<BroadcastFec>;
 
 type BroadcastId = [u8; 32];
 
