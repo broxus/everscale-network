@@ -1,5 +1,5 @@
 use std::convert::TryInto;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 use aes::cipher::StreamCipher;
 use anyhow::Result;
@@ -11,10 +11,13 @@ use crate::utils::*;
 const CHANNEL_RESET_TIMEOUT: i32 = 30; // Seconds
 
 pub struct AdnlChannel {
+    ready: AtomicBool,
     channel_out: ChannelSide,
     channel_in: ChannelSide,
     local_id: AdnlNodeIdShort,
     peer_id: AdnlNodeIdShort,
+    peer_channel_public_key: [u8; 32],
+    peer_channel_date: i32,
     drop: AtomicI32,
 }
 
@@ -24,6 +27,8 @@ impl AdnlChannel {
         peer_id: AdnlNodeIdShort,
         channel_private_key_part: &[u8; 32],
         channel_public_key: &[u8; 32],
+        peer_channel_date: i32,
+        context: ChannelCreationContext,
     ) -> Result<Self> {
         let shared_secret = compute_shared_secret(channel_private_key_part, channel_public_key)?;
         let mut reversed_secret = shared_secret;
@@ -36,12 +41,40 @@ impl AdnlChannel {
         };
 
         Ok(Self {
+            ready: AtomicBool::new(context == ChannelCreationContext::ConfirmChannel),
             channel_out: ChannelSide::from_secret(out_secret)?,
             channel_in: ChannelSide::from_secret(in_secret)?,
             local_id,
             peer_id,
+            peer_channel_public_key: *channel_public_key,
+            peer_channel_date,
             drop: Default::default(),
         })
+    }
+
+    pub fn is_still_valid(
+        &self,
+        peer_channel_public_key: &[u8; 32],
+        peer_channel_date: i32,
+    ) -> bool {
+        &self.peer_channel_public_key == peer_channel_public_key
+            || self.peer_channel_date >= peer_channel_date
+    }
+
+    pub fn ready(&self) -> bool {
+        self.ready.load(Ordering::Acquire)
+    }
+
+    pub fn set_ready(&self) {
+        self.ready.store(true, Ordering::Release)
+    }
+
+    pub fn peer_channel_public_key(&self) -> &[u8; 32] {
+        &self.peer_channel_public_key
+    }
+
+    pub fn peer_channel_date(&self) -> i32 {
+        self.peer_channel_date
     }
 
     pub fn channel_in_id(&self) -> &AdnlChannelId {
@@ -102,6 +135,21 @@ impl AdnlChannel {
 
         process_channel_data(buffer, &self.channel_out.secret);
         Ok(())
+    }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum ChannelCreationContext {
+    CreateChannel,
+    ConfirmChannel,
+}
+
+impl std::fmt::Display for ChannelCreationContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CreateChannel => f.write_str("creation"),
+            Self::ConfirmChannel => f.write_str("confirmation"),
+        }
     }
 }
 
@@ -186,6 +234,8 @@ mod tests {
             peer2_id,
             peer1_channel_key.private_key_part(),
             peer2_channel_key.public_key().as_bytes(),
+            now(),
+            ChannelCreationContext::CreateChannel,
         )
         .unwrap();
 
@@ -194,6 +244,8 @@ mod tests {
             peer1_id,
             peer2_channel_key.private_key_part(),
             peer1_channel_key.public_key().as_bytes(),
+            now(),
+            ChannelCreationContext::CreateChannel,
         )
         .unwrap();
 

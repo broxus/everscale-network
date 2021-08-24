@@ -35,8 +35,6 @@ pub struct AdnlNode {
     channels_by_id: FxDashMap<AdnlChannelId, Arc<AdnlChannel>>,
     /// Channels table used to fast search when sending messages
     channels_by_peers: FxDashMap<AdnlNodeIdShort, Arc<AdnlChannel>>,
-    /// Channels that were created on this node but waiting for confirmation
-    channels_to_confirm: FxDashMap<AdnlNodeIdShort, Arc<AdnlChannel>>,
 
     /// Pending transfers of large messages that were split
     incoming_transfers: Arc<FxDashMap<TransferId, Arc<Transfer>>>,
@@ -78,7 +76,6 @@ impl AdnlNode {
             peers,
             channels_by_id: Default::default(),
             channels_by_peers: Default::default(),
-            channels_to_confirm: Default::default(),
             incoming_transfers: Default::default(),
             queries: Default::default(),
             sender_queue_tx,
@@ -224,10 +221,7 @@ impl AdnlNode {
             } else if let Some(channel) = { self.channels_by_id.get(&data[0..32]) } {
                 let channel = channel.value();
                 channel.decrypt(&mut data)?;
-                if let Some((key, removed)) = self.channels_to_confirm.remove(channel.peer_id()) {
-                    self.channels_by_peers.insert(key, removed);
-                }
-
+                channel.set_ready();
                 channel.reset_drop_timeout();
                 (*channel.local_id(), Some(*channel.peer_id()))
             } else {
@@ -342,46 +336,41 @@ impl AdnlNode {
         };
 
         // Process message
-        let response: Option<ton::adnl::Message> = match alt_message.unwrap_or(message) {
+        match alt_message.unwrap_or(message) {
             MessageView::Answer { query_id, answer } => {
-                self.process_message_answer(query_id, answer).await?;
-                None
+                self.process_message_answer(query_id, answer).await
             }
-            MessageView::ConfirmChannel { key, peer_key, .. } => {
-                self.process_message_confirm_channel(local_id, peer_id, key, peer_key)?;
-                None
+            MessageView::ConfirmChannel { key, date, .. } => {
+                self.process_message_confirm_channel(local_id, peer_id, key, date)
             }
             MessageView::CreateChannel { key, date } => {
-                let reply = self.process_message_create_channel(local_id, peer_id, key, date)?;
-                Some(reply.into_boxed())
+                self.process_message_create_channel(local_id, peer_id, key, date)
             }
             MessageView::Custom { data } => {
-                if !process_message_custom(local_id, peer_id, subscribers, data).await? {
-                    return Err(AdnlNodeError::NoSubscribersForCustomMessage.into());
+                if process_message_custom(local_id, peer_id, subscribers, data).await? {
+                    Ok(())
+                } else {
+                    Err(AdnlNodeError::NoSubscribersForCustomMessage.into())
                 }
-                None
             }
-            MessageView::Nop => None,
+            MessageView::Nop => Ok(()),
             MessageView::Query { query_id, query } => {
-                match process_message_adnl_query(local_id, peer_id, subscribers, query_id, query)
-                    .await?
-                {
-                    QueryProcessingResult::Processed(answer) => answer,
+                let result =
+                    process_message_adnl_query(local_id, peer_id, subscribers, query_id, query)
+                        .await?;
+
+                match result {
+                    QueryProcessingResult::Processed(Some(message)) => {
+                        self.send_message(local_id, peer_id, message)
+                    }
+                    QueryProcessingResult::Processed(None) => Ok(()),
                     QueryProcessingResult::Rejected => {
-                        return Err(AdnlNodeError::NoSubscribersForQuery.into())
+                        Err(AdnlNodeError::NoSubscribersForQuery.into())
                     }
                 }
             }
-            _ => return Err(AdnlNodeError::UnknownMessage.into()),
-        };
-
-        // Send answer if needed
-        if let Some(message) = response {
-            self.send_message(local_id, peer_id, message)?;
+            _ => Err(AdnlNodeError::UnknownMessage.into()),
         }
-
-        // Done
-        Ok(())
     }
 
     async fn process_message_answer(&self, query_id: &QueryId, answer: &[u8]) -> Result<()> {
@@ -397,25 +386,15 @@ impl AdnlNode {
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
         peer_channel_public_key: &[u8; 32],
-        peer_key: &[u8; 32],
+        peer_channel_date: i32,
     ) -> Result<()> {
-        // Create new channel
-        let mut local_channel_public_key = Some(*peer_key);
-
-        let channel = self.create_channel(
+        self.create_channel(
             local_id,
             peer_id,
-            &mut local_channel_public_key,
             peer_channel_public_key,
-            "confirmation",
-        )?;
-
-        self.channels_by_peers.insert(*peer_id, channel.clone());
-        self.channels_by_id
-            .insert(*channel.channel_in_id(), channel);
-
-        // Done
-        Ok(())
+            peer_channel_date,
+            ChannelCreationContext::ConfirmChannel,
+        )
     }
 
     fn process_message_create_channel(
@@ -423,46 +402,15 @@ impl AdnlNode {
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
         peer_channel_public_key: &[u8; 32],
-        date: i32,
-    ) -> Result<ton::adnl::message::message::ConfirmChannel> {
-        // Create new channel
-        let mut local_channel_public_key = None;
-
-        let channel = self.create_channel(
+        peer_channel_date: i32,
+    ) -> Result<()> {
+        self.create_channel(
             local_id,
             peer_id,
-            &mut local_channel_public_key,
             peer_channel_public_key,
-            "creation",
-        )?;
-
-        // Prepare confirmation message
-        let message = match local_channel_public_key {
-            Some(public_key) => ton::adnl::message::message::ConfirmChannel {
-                key: ton::int256(public_key),
-                peer_key: ton::int256(*peer_channel_public_key),
-                date,
-            },
-            None => return Err(AdnlNodeError::ChannelKeyMismatch.into()),
-        };
-
-        // Insert new channel into pending
-        if self
-            .channels_to_confirm
-            .insert(*peer_id, channel.clone())
-            .is_some()
-        {
-            // Make sure that removed channel will no longer exist anywhere
-            self.channels_by_peers
-                .remove(peer_id)
-                .and_then(|(_, removed)| self.channels_by_id.remove(removed.channel_in_id()));
-        }
-
-        self.channels_by_id
-            .insert(*channel.channel_in_id(), channel);
-
-        // Done
-        Ok(message)
+            peer_channel_date,
+            ChannelCreationContext::CreateChannel,
+        )
     }
 
     /// Validates incoming packet. Attempts to extract peer id
@@ -599,24 +547,32 @@ impl AdnlNode {
 
         let local_key = self.config.key_by_id(local_id)?;
         let channel = self.channels_by_peers.get(peer_id);
-        let create_channel_message =
-            if channel.is_none() && !self.channels_to_confirm.contains_key(peer_id) {
-                log::debug!("Create channel {} -> {}", local_id, peer_id);
-                Some(
-                    ton::adnl::message::message::CreateChannel {
-                        key: ton::int256(peer.channel_key().public_key().to_bytes()),
-                        date: now(),
-                    }
-                    .into_boxed(),
-                )
-            } else {
-                None
-            };
+        let (mut size, additional_message) = match &channel {
+            Some(channel) if channel.ready() => (0, None),
+            Some(channel) => {
+                log::debug!("Confirm channel {} -> {}", local_id, peer_id);
 
-        let mut size = create_channel_message
-            .is_some()
-            .then(|| MSG_CREATE_CHANNEL_SIZE)
-            .unwrap_or_default();
+                let message = ton::adnl::message::message::ConfirmChannel {
+                    key: ton::int256(*channel.peer_channel_public_key()),
+                    peer_key: ton::int256(peer.channel_key().public_key().to_bytes()),
+                    date: channel.peer_channel_date(),
+                }
+                .into_boxed();
+
+                (MSG_CONFIRM_CHANNEL_SIZE, Some(message))
+            }
+            None => {
+                log::debug!("Create channel {} -> {}", local_id, peer_id);
+
+                let message = ton::adnl::message::message::CreateChannel {
+                    key: ton::int256(peer.channel_key().public_key().to_bytes()),
+                    date: now(),
+                }
+                .into_boxed();
+
+                (MSG_CREATE_CHANNEL_SIZE, Some(message))
+            }
+        };
 
         size += match &message {
             ton::adnl::Message::Adnl_Message_Answer(msg) => msg.answer.len() + MSG_ANSWER_SIZE,
@@ -633,9 +589,9 @@ impl AdnlNode {
         };
 
         if size <= MAX_ADNL_MESSAGE_SIZE {
-            let message = match create_channel_message {
-                Some(create_channel_message) => {
-                    MessageToSend::Multiple(vec![create_channel_message, message])
+            let message = match additional_message {
+                Some(additional_message) => {
+                    MessageToSend::Multiple(vec![additional_message, message])
                 }
                 None => MessageToSend::Single(message),
             };
@@ -666,7 +622,7 @@ impl AdnlNode {
             let hash: [u8; 32] = sha2::Sha256::digest(&data).into();
             let mut offset = 0;
 
-            if let Some(create_channel_message) = create_channel_message {
+            if let Some(additional_message) = additional_message {
                 let message = build_part_message(
                     &data,
                     &hash,
@@ -679,7 +635,7 @@ impl AdnlNode {
                     peer_id,
                     peer,
                     signer,
-                    MessageToSend::Multiple(vec![create_channel_message, message]),
+                    MessageToSend::Multiple(vec![additional_message, message]),
                 )?;
             }
 
@@ -941,9 +897,8 @@ impl AdnlNode {
 
         log::warn!("Resetting peer pair {} -> {}", local_id, peer_id);
 
-        self.channels_to_confirm
+        self.channels_by_peers
             .remove(peer_id)
-            .or_else(|| self.channels_by_peers.remove(peer_id))
             .and_then(|(_, removed)| self.channels_by_id.remove(removed.channel_in_id()));
 
         peer.reset();
@@ -955,10 +910,12 @@ impl AdnlNode {
         &self,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
-        local_channel_public_key: &mut Option<[u8; 32]>,
         peer_channel_public_key: &[u8; 32],
-        context: &str,
-    ) -> Result<Arc<AdnlChannel>> {
+        peer_channel_date: i32,
+        context: ChannelCreationContext,
+    ) -> Result<()> {
+        use dashmap::mapref::entry::Entry;
+
         let peers = self.get_peers(local_id)?;
         let peer = match peers.get(peer_id) {
             Some(peer) => peer,
@@ -966,25 +923,48 @@ impl AdnlNode {
         };
         let peer = peer.value();
 
-        let channel_public_key = peer.channel_key().public_key().as_bytes();
+        match self.channels_by_peers.entry(*peer_id) {
+            Entry::Occupied(entry) => {
+                if entry
+                    .get()
+                    .is_still_valid(peer_channel_public_key, peer_channel_date)
+                {
+                    return Ok(());
+                }
 
-        if let Some(public_key) = local_channel_public_key {
-            if channel_public_key != public_key {
-                return Err(AdnlNodeError::ChannelKeyMismatch.into());
+                let new_channel = Arc::new(AdnlChannel::new(
+                    *local_id,
+                    *peer_id,
+                    peer.channel_key().private_key_part(),
+                    peer_channel_public_key,
+                    peer_channel_date,
+                    context,
+                )?);
+
+                let (.., old_channel) = entry.replace_entry(new_channel.clone());
+                self.channels_by_id.remove(old_channel.channel_in_id());
+                self.channels_by_id
+                    .insert(*new_channel.channel_in_id(), new_channel);
             }
-        } else {
-            local_channel_public_key.replace(*channel_public_key);
+            Entry::Vacant(entry) => {
+                let new_channel = entry
+                    .insert(Arc::new(AdnlChannel::new(
+                        *local_id,
+                        *peer_id,
+                        peer.channel_key().private_key_part(),
+                        peer_channel_public_key,
+                        peer_channel_date,
+                        context,
+                    )?))
+                    .clone();
+                self.channels_by_id
+                    .insert(*new_channel.channel_in_id(), new_channel);
+            }
         }
 
-        let channel = AdnlChannel::new(
-            *local_id,
-            *peer_id,
-            peer.channel_key().private_key_part(),
-            peer_channel_public_key,
-        )?;
         log::debug!("Channel {}: {} -> {}", context, local_id, peer_id);
 
-        Ok(Arc::new(channel))
+        Ok(())
     }
 }
 
@@ -1023,8 +1003,6 @@ enum AdnlNodeError {
     UnknownPeer,
     #[error("Channel with unknown peer")]
     UnknownPeerInChannel,
-    #[error("Channel key mismatch")]
-    ChannelKeyMismatch,
     #[error("No subscribers for custom message")]
     NoSubscribersForCustomMessage,
     #[error("No subscribers for query")]
