@@ -218,7 +218,7 @@ impl AdnlNode {
         let (local_id, peer_id) =
             if let Some(local_id) = parse_handshake_packet(self.config.keys(), &mut data, None)? {
                 (local_id, None)
-            } else if let Some(channel) = { self.channels_by_id.get(&data[0..32]) } {
+            } else if let Some(channel) = self.channels_by_id.get(&data[0..32]) {
                 let channel = channel.value();
                 channel.decrypt(&mut data)?;
                 channel.set_ready();
@@ -925,10 +925,12 @@ impl AdnlNode {
 
         match self.channels_by_peers.entry(*peer_id) {
             Entry::Occupied(entry) => {
-                if entry
-                    .get()
-                    .is_still_valid(peer_channel_public_key, peer_channel_date)
-                {
+                let channel = entry.get();
+
+                if channel.is_still_valid(peer_channel_public_key, peer_channel_date) {
+                    if context == ChannelCreationContext::ConfirmChannel {
+                        channel.set_ready();
+                    }
                     return Ok(());
                 }
 
