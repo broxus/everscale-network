@@ -93,14 +93,14 @@ impl OverlayNode {
         &self,
         overlay_id: &OverlayIdShort,
         ip_address: AdnlAddressUdp,
-        node: &ton::overlay::node::Node,
+        node: ton::overlay::node::Node,
     ) -> Result<Option<AdnlNodeIdShort>> {
         let shard = self.get_overlay_shard(overlay_id)?;
         if shard.is_private() {
             return Err(OverlayNodeError::PublicPeerToPrivateOverlay.into());
         }
 
-        if let Err(e) = verify_node(overlay_id, node) {
+        if let Err(e) = verify_node(overlay_id, &node) {
             log::warn!("Error during overlay peer verification: {:?}", e);
             return Ok(None);
         }
@@ -117,6 +117,42 @@ impl OverlayNode {
         } else {
             Ok(None)
         }
+    }
+
+    pub fn add_public_peers<I>(
+        &self,
+        overlay_id: &OverlayIdShort,
+        nodes: I,
+    ) -> Result<Vec<AdnlNodeIdShort>>
+    where
+        I: IntoIterator<Item = (AdnlAddressUdp, ton::overlay::node::Node)>,
+    {
+        let shard = self.get_overlay_shard(overlay_id)?.clone();
+        if shard.is_private() {
+            return Err(OverlayNodeError::PublicPeerToPrivateOverlay.into());
+        }
+
+        let mut result = Vec::new();
+        for (ip_address, node) in nodes {
+            if let Err(e) = verify_node(overlay_id, &node) {
+                log::debug!("Error during overlay peer verification: {:?}", e);
+                continue;
+            }
+
+            let peer_id_full = AdnlNodeIdFull::try_from(&node.id)?;
+            let peer_id = peer_id_full.compute_short_id()?;
+
+            let is_new_peer =
+                self.adnl
+                    .add_peer(self.node_key.id(), &peer_id, ip_address, peer_id_full)?;
+            if is_new_peer {
+                shard.add_public_peer(&peer_id, node);
+                result.push(peer_id);
+                log::trace!("Node id: {}, address: {}", peer_id, ip_address);
+            }
+        }
+
+        Ok(result)
     }
 
     pub fn delete_public_peer(

@@ -138,7 +138,7 @@ impl OverlayShard {
         self.update_neighbours(MAX_SHARD_NEIGHBOURS);
     }
 
-    pub fn add_public_peer(&self, peer_id: &AdnlNodeIdShort, node: &ton::overlay::node::Node) {
+    pub fn add_public_peer(&self, peer_id: &AdnlNodeIdShort, node: ton::overlay::node::Node) {
         use dashmap::mapref::entry::Entry;
 
         self.ignored_peers.remove(peer_id);
