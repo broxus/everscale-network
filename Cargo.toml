@@ -12,14 +12,12 @@ base64 = "0.13"
 curve25519-dalek-ng = "4.0"
 crossbeam-queue = "0.3"
 dashmap = "4.0"
-ed25519-dalek = { git = "https://github.com/broxus/ed25519-dalek.git" }
 generic-array = "0.14"
 hex = "0.4"
 log = "0.4"
 libc = "0.2"
 parking_lot = "0.11"
 rand = "0.8"
-raptorq = { git = "https://github.com/Rexagon/raptorq.git" }
 rustc-hash = "1.1.0"
 serde = "1.0"
 sha2 = "0.9"
@@ -28,6 +26,9 @@ thiserror = "1.0"
 tokio = { version = "1.6", features = ["sync", "net", "rt", "time", "io-util"] }
 tokio-io-timeout = "1.1.1"
 x25519-dalek = "1"
+
+ed25519-dalek = { git = "https://github.com/broxus/ed25519-dalek.git" }
+raptorq = { git = "https://github.com/Rexagon/raptorq.git" }
 
 ton_types = { git = "https://github.com/broxus/ton-labs-types" }
 
