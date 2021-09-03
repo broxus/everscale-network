@@ -5,7 +5,6 @@ use parking_lot::{RwLock, RwLockWriteGuard};
 use rand::Rng;
 
 use super::neighbour::Neighbour;
-use super::MAX_NEIGHBOURS;
 use crate::utils::*;
 
 pub struct NeighboursCache {
@@ -13,13 +12,13 @@ pub struct NeighboursCache {
 }
 
 impl NeighboursCache {
-    pub fn new(initial_peers: &[AdnlNodeIdShort]) -> Self {
+    pub fn new(initial_peers: &[AdnlNodeIdShort], max_len: usize) -> Self {
         let result = Self {
-            state: RwLock::new(NeighboursCacheState::new()),
+            state: RwLock::new(NeighboursCacheState::new(max_len)),
         };
 
         let mut state = result.state.write();
-        for peer_id in initial_peers.iter().take(MAX_NEIGHBOURS) {
+        for peer_id in initial_peers.iter().take(max_len) {
             state.insert(*peer_id);
         }
         std::mem::drop(state);
@@ -65,17 +64,19 @@ impl NeighboursCache {
 }
 
 pub struct NeighboursCacheState {
+    max_len: usize,
     next: usize,
     values: FxHashMap<AdnlNodeIdShort, Arc<Neighbour>>,
     indices: Vec<AdnlNodeIdShort>,
 }
 
 impl NeighboursCacheState {
-    fn new() -> Self {
+    fn new(max_len: usize) -> Self {
         Self {
+            max_len,
             next: 0,
             values: Default::default(),
-            indices: Vec::with_capacity(MAX_NEIGHBOURS),
+            indices: Vec::with_capacity(max_len),
         }
     }
 
@@ -160,7 +161,7 @@ impl NeighboursCacheState {
     pub fn insert(&mut self, peer_id: AdnlNodeIdShort) -> bool {
         use std::collections::hash_map::Entry;
 
-        if self.indices.len() >= MAX_NEIGHBOURS {
+        if self.indices.len() >= self.max_len {
             return false;
         }
 
@@ -183,12 +184,12 @@ impl NeighboursCacheState {
 
         const MAX_UNRELIABILITY: u32 = 5;
 
-        if self.indices.len() < MAX_NEIGHBOURS {
+        if self.indices.len() < self.max_len {
             return match self.values.entry(peer_id) {
                 Entry::Vacant(entry) => {
                     entry.insert(Arc::new(Neighbour::new(peer_id)));
                     self.indices.push(peer_id);
-                    if self.indices.len() == MAX_NEIGHBOURS {
+                    if self.indices.len() == self.max_len {
                         (NeighboursCacheHint::MaybeHasUnreliable, None)
                     } else {
                         (NeighboursCacheHint::HasSpace, None)
@@ -222,7 +223,7 @@ impl NeighboursCacheState {
             ),
             _ => (
                 NeighboursCacheHint::DefinitelyFull,
-                rng.gen_range(0, self.indices.len()),
+                rng.gen_range(0..self.indices.len()),
                 None,
             ),
         };

@@ -6,7 +6,6 @@ use ton_api::ton::TLObject;
 
 use super::neighbour::Neighbour;
 use super::neighbours::Neighbours;
-use crate::adnl_node::AdnlNode;
 use crate::overlay_node::OverlayNode;
 use crate::rldp_node::RldpNode;
 use crate::utils::*;
@@ -154,8 +153,13 @@ impl OverlayClient {
         A: ton_api::AnyBoxedSerialize,
     {
         let now = Instant::now();
-        let timeout =
-            timeout.or_else(|| Some(AdnlNode::compute_query_timeout(neighbour.roundtrip_adnl())));
+        let timeout = timeout.or_else(|| {
+            Some(
+                self.overlay
+                    .adnl()
+                    .compute_query_timeout(neighbour.roundtrip_adnl()),
+            )
+        });
 
         let answer = self
             .overlay

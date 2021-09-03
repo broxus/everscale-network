@@ -1,10 +1,10 @@
 #![allow(clippy::too_many_arguments)]
 
-pub use adnl_node::{AdnlNode, AdnlNodeConfig};
+pub use adnl_node::{AdnlKeystore, AdnlNode, AdnlNodeOptions};
 pub use adnl_tcp_client::{AdnlTcpClient, AdnlTcpClientConfig};
-pub use dht_node::{DhtNode, ExternalDhtIter};
-pub use network::{Neighbour, Neighbours, OverlayClient, MAX_NEIGHBOURS};
-pub use overlay_node::{OverlayNode, MAX_OVERLAY_PEERS};
+pub use dht_node::{DhtNode, DhtNodeOptions, ExternalDhtIter};
+pub use network::{Neighbour, Neighbours, NeighboursOptions, OverlayClient};
+pub use overlay_node::{OverlayNode, OverlayShardOptions, MAX_OVERLAY_PEERS};
 pub use rldp_node::RldpNode;
 pub use subscriber::{
     AdnlPingSubscriber, OverlaySubscriber, QueryAnswer, QueryBundleConsumingResult,

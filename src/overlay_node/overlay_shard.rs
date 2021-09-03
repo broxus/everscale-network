@@ -18,6 +18,7 @@ pub struct OverlayShard {
     adnl: Arc<AdnlNode>,
     overlay_id: OverlayIdShort,
     overlay_key: Option<Arc<StoredAdnlNodeKey>>,
+    options: OverlayShardOptions,
 
     owned_broadcasts: FxDashMap<BroadcastId, Arc<OwnedBroadcast>>,
     finished_broadcasts: SegQueue<BroadcastId>,
@@ -37,11 +38,48 @@ pub struct OverlayShard {
     message_prefix: Vec<u8>,
 }
 
+#[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct OverlayShardOptions {
+    /// Default: 20
+    pub max_shard_peers: usize,
+    /// Default: 5
+    pub max_shard_neighbours: usize,
+    /// Default: 1000
+    pub max_broadcast_log: u32,
+    /// Default: 1000
+    pub broadcast_gc_timeout_ms: u64,
+    /// Default: 60000
+    pub overlay_peers_timeout_ms: u64,
+    /// Default: 3
+    pub broadcast_target_count: usize,
+    /// Default: 20
+    pub max_broadcast_wave: usize,
+    /// Default: 60
+    pub broadcast_timeout_sec: u64,
+}
+
+impl Default for OverlayShardOptions {
+    fn default() -> Self {
+        Self {
+            max_shard_peers: 20,
+            max_shard_neighbours: 5,
+            max_broadcast_log: 1000,
+            broadcast_gc_timeout_ms: 1000,
+            overlay_peers_timeout_ms: 60000,
+            broadcast_target_count: 3,
+            max_broadcast_wave: 20,
+            broadcast_timeout_sec: 60,
+        }
+    }
+}
+
 impl OverlayShard {
     pub fn new(
         adnl: Arc<AdnlNode>,
         overlay_id: OverlayIdShort,
         overlay_key: Option<Arc<StoredAdnlNodeKey>>,
+        options: OverlayShardOptions,
     ) -> Result<Arc<Self>> {
         let query_prefix = serialize(&ton::rpc::overlay::Query {
             overlay: ton::int256(overlay_id.into()),
@@ -55,6 +93,7 @@ impl OverlayShard {
             adnl,
             overlay_id,
             overlay_key,
+            options,
             owned_broadcasts: FxDashMap::default(),
             finished_broadcasts: SegQueue::new(),
             finished_broadcast_count: AtomicU32::new(0),
@@ -64,27 +103,24 @@ impl OverlayShard {
             nodes: FxDashMap::default(),
             ignored_peers: FxDashSet::default(),
             known_peers: PeersCache::with_capacity(MAX_OVERLAY_PEERS),
-            random_peers: PeersCache::with_capacity(MAX_SHARD_PEERS),
-            neighbours: PeersCache::with_capacity(MAX_SHARD_NEIGHBOURS),
+            random_peers: PeersCache::with_capacity(options.max_shard_peers),
+            neighbours: PeersCache::with_capacity(options.max_shard_neighbours),
             query_prefix,
             message_prefix,
         });
 
-        overlay.update_neighbours(MAX_SHARD_NEIGHBOURS);
+        overlay.update_neighbours(options.max_shard_neighbours);
 
         tokio::spawn({
-            const MAX_BROADCAST_LOG: u32 = 1000;
-
-            const GC_TIMEOUT: u64 = 1000; // Milliseconds
-            const PEERS_TIMEOUT: u64 = 60000; // Milliseconds
-
             let overlay = Arc::downgrade(&overlay);
+
+            let gc_interval = Duration::from_millis(options.broadcast_gc_timeout_ms);
 
             async move {
                 let mut peers_timeout = 0;
                 while let Some(overlay) = overlay.upgrade() {
                     while overlay.finished_broadcast_count.load(Ordering::Acquire)
-                        > MAX_BROADCAST_LOG
+                        > options.max_broadcast_log
                     {
                         if let Some(broadcast_id) = overlay.finished_broadcasts.pop() {
                             overlay.owned_broadcasts.remove(&broadcast_id);
@@ -94,8 +130,8 @@ impl OverlayShard {
                             .fetch_sub(1, Ordering::Release);
                     }
 
-                    peers_timeout += GC_TIMEOUT;
-                    if peers_timeout > PEERS_TIMEOUT {
+                    peers_timeout += options.broadcast_gc_timeout_ms;
+                    if peers_timeout > options.overlay_peers_timeout_ms {
                         if overlay.is_private() {
                             overlay.update_neighbours(1);
                         } else {
@@ -104,7 +140,7 @@ impl OverlayShard {
                         peers_timeout = 0;
                     }
 
-                    tokio::time::sleep(Duration::from_millis(GC_TIMEOUT)).await;
+                    tokio::time::sleep(gc_interval).await;
                 }
             }
         });
@@ -135,7 +171,7 @@ impl OverlayShard {
             None => self.known_peers.extend(peers.iter().cloned()),
         }
 
-        self.update_neighbours(MAX_SHARD_NEIGHBOURS);
+        self.update_neighbours(self.options.max_shard_neighbours);
     }
 
     pub fn add_public_peer(&self, peer_id: &AdnlNodeIdShort, node: ton::overlay::node::Node) {
@@ -144,22 +180,22 @@ impl OverlayShard {
         self.ignored_peers.remove(peer_id);
         self.known_peers.put(*peer_id);
 
-        if self.random_peers.len() < MAX_SHARD_PEERS {
+        if self.random_peers.len() < self.options.max_shard_peers {
             self.random_peers.put(*peer_id);
         }
 
-        if self.neighbours.len() < MAX_SHARD_NEIGHBOURS {
+        if self.neighbours.len() < self.options.max_shard_neighbours {
             self.neighbours.put(*peer_id);
         }
 
         match self.nodes.entry(*peer_id) {
             Entry::Occupied(entry) => {
                 if entry.get().version < node.version {
-                    entry.replace_entry(node.clone());
+                    entry.replace_entry(node);
                 }
             }
             Entry::Vacant(entry) => {
-                entry.insert(node.clone());
+                entry.insert(node);
             }
         }
     }
@@ -169,7 +205,7 @@ impl OverlayShard {
             return false;
         }
         if self.random_peers.contains(peer_id) {
-            self.update_random_peers(MAX_SHARD_PEERS);
+            self.update_random_peers(self.options.max_shard_peers);
         }
         true
     }
@@ -250,7 +286,9 @@ impl OverlayShard {
             from: node_peer_id,
         });
 
-        let neighbours = self.neighbours.get_random_peers(3, Some(peer_id));
+        let neighbours = self
+            .neighbours
+            .get_random_peers(self.options.broadcast_target_count, Some(peer_id));
         self.distribute_broadcast(local_id, &neighbours, raw_data);
         self.spawn_broadcast_gc_task(broadcast_id);
 
@@ -405,10 +443,11 @@ impl OverlayShard {
         tokio::spawn({
             let key = key.clone();
             let overlay_shard = self.clone();
+            let max_broadcast_wave = self.options.max_broadcast_wave;
 
             async move {
                 while outgoing_transfer.seqno <= max_seqno {
-                    for _ in 0..MAX_BROADCAST_WAVE {
+                    for _ in 0..max_broadcast_wave {
                         let result = overlay_shard
                             .prepare_fec_broadcast(&mut outgoing_transfer, &key)
                             .and_then(|data| {
@@ -431,7 +470,9 @@ impl OverlayShard {
             }
         });
 
-        let neighbours = self.neighbours.get_random_peers(MAX_SHARD_NEIGHBOURS, None);
+        let neighbours = self
+            .neighbours
+            .get_random_peers(self.options.max_shard_neighbours, None);
         let info = OutgoingBroadcastInfo {
             packets: max_seqno,
             recipient_count: neighbours.len(),
@@ -477,7 +518,7 @@ impl OverlayShard {
     }
 
     fn is_broadcast_outdated(&self, date: i32) -> bool {
-        date + (BROADCAST_TIMEOUT as i32) < now()
+        date + (self.options.broadcast_timeout_sec as i32) < now()
     }
 
     fn create_broadcast(&self, data: &[u8]) -> Option<BroadcastId> {
@@ -546,15 +587,16 @@ impl OverlayShard {
 
         tokio::spawn({
             let overlay_shard = self.clone();
+            let broadcast_timeout_sec = self.options.broadcast_timeout_sec;
 
             async move {
                 loop {
-                    tokio::time::sleep(Duration::from_millis(BROADCAST_TIMEOUT * 100)).await;
+                    tokio::time::sleep(Duration::from_millis(broadcast_timeout_sec * 100)).await;
 
                     if let Some(broadcast) = overlay_shard.owned_broadcasts.get(&broadcast_id) {
                         match broadcast.value().as_ref() {
                             OwnedBroadcast::Incoming(transfer) => {
-                                if !transfer.updated_at.is_expired(BROADCAST_TIMEOUT) {
+                                if !transfer.updated_at.is_expired(broadcast_timeout_sec) {
                                     continue;
                                 }
                             }
@@ -637,7 +679,10 @@ impl OverlayShard {
     fn spawn_broadcast_gc_task(self: &Arc<Self>, broadcast_id: BroadcastId) {
         let overlay_shard = self.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(BROADCAST_TIMEOUT)).await;
+            tokio::time::sleep(Duration::from_secs(
+                overlay_shard.options.broadcast_timeout_sec,
+            ))
+            .await;
             overlay_shard
                 .finished_broadcast_count
                 .fetch_add(1, Ordering::Release);
@@ -736,13 +781,8 @@ fn make_fec_part_to_sign(
     })
 }
 
-const MAX_BROADCAST_WAVE: u32 = 20;
-const MAX_SHARD_NEIGHBOURS: usize = 5;
-const MAX_SHARD_PEERS: usize = 20;
-
 const BROADCAST_FLAG_ANY_SENDER: i32 = 1; // Any sender
 
-const BROADCAST_TIMEOUT: u64 = 60; // Seconds
 const TRANSFER_LOOP_INTERVAL: u64 = 10; // Milliseconds
 
 pub struct IncomingBroadcastInfo {

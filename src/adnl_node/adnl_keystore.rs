@@ -5,19 +5,17 @@ use anyhow::Result;
 
 use crate::utils::*;
 
-pub struct AdnlNodeConfig {
-    ip_address: AdnlAddressUdp,
+pub struct AdnlKeystore {
     keys: FxHashMap<AdnlNodeIdShort, Arc<StoredAdnlNodeKey>>,
     tags: FxHashMap<usize, AdnlNodeIdShort>,
 }
 
-impl AdnlNodeConfig {
-    pub fn from_ip_address_and_keys(
-        ip_address: AdnlAddressUdp,
-        keys: Vec<(ed25519_dalek::SecretKey, usize)>,
-    ) -> Result<Self> {
-        let mut result = AdnlNodeConfig {
-            ip_address,
+impl AdnlKeystore {
+    pub fn from_tagged_keys<I>(keys: I) -> Result<Self>
+    where
+        I: IntoIterator<Item = (ed25519_dalek::SecretKey, usize)>,
+    {
+        let mut result = AdnlKeystore {
             keys: Default::default(),
             tags: Default::default(),
         };
@@ -27,10 +25,6 @@ impl AdnlNodeConfig {
         }
 
         Ok(result)
-    }
-
-    pub fn ip_address(&self) -> AdnlAddressUdp {
-        self.ip_address
     }
 
     pub fn key_by_id(&self, id: &AdnlNodeIdShort) -> Result<Arc<StoredAdnlNodeKey>> {
@@ -116,7 +110,7 @@ mod tests {
 
     #[test]
     fn test_handshake() -> Result<()> {
-        let mut first_peer_config = AdnlNodeConfig::from_ip_address_and_keys(0.into(), Vec::new())?;
+        let mut first_peer_config = AdnlKeystore::from_tagged_keys(Vec::new())?;
 
         let first_peer_key = ed25519_dalek::SecretKey::generate(&mut rand::thread_rng());
         let first_peer_id = first_peer_config.add_key(first_peer_key, 1)?;

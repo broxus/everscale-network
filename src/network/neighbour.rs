@@ -83,7 +83,7 @@ impl Neighbour {
         let weight = (1 << (FAIL_UNRELIABILITY - unreliability)) as u64;
         *total_weight += weight;
 
-        rng.gen_range(0, *total_weight) < weight
+        rng.gen_range(0..*total_weight) < weight
     }
 
     pub fn peer_id(&self) -> &AdnlNodeIdShort {

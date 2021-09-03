@@ -13,20 +13,21 @@ use ton_api::{ton, IntoBoxed};
 use crate::subscriber::*;
 use crate::utils::*;
 
+pub use self::adnl_keystore::*;
 use self::channel::*;
-pub use self::config::*;
 use self::peer::*;
 use self::transfer::*;
 use crate::utils::MessageView;
 
+mod adnl_keystore;
 mod channel;
-mod config;
 mod peer;
 mod transfer;
 
 pub struct AdnlNode {
-    /// Ip address and keys for signing
-    config: AdnlNodeConfig,
+    ip_address: AdnlAddressUdp,
+    keystore: AdnlKeystore,
+    options: AdnlNodeOptions,
 
     /// Known peers for each local node id
     peers: FxDashMap<AdnlNodeIdShort, Arc<AdnlPeers>>,
@@ -51,28 +52,51 @@ pub struct AdnlNode {
     start_time: i32,
 }
 
-impl AdnlNode {
-    pub const MIN_QUERY_TIMEOUT: u64 = 500; // Milliseconds
-    pub const MAX_QUERY_TIMEOUT: u64 = 5000; // Milliseconds
+#[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct AdnlNodeOptions {
+    /// Default: 500
+    pub query_min_timeout_ms: u64,
+    /// Default: 5000
+    pub query_max_timeout_ms: u64,
+    /// Default: 3
+    pub transfer_timeout_sec: u64,
+    /// Default: 60
+    pub clock_tolerance_sec: i32,
+    /// Default: 1000
+    pub address_list_timeout_sec: i32,
+    /// Default: false
+    pub packet_history_enabled: bool,
+}
 
-    pub fn compute_query_timeout(roundtrip: Option<u64>) -> u64 {
-        let timeout = roundtrip.unwrap_or(AdnlNode::MAX_QUERY_TIMEOUT);
-        if timeout < AdnlNode::MIN_QUERY_TIMEOUT {
-            AdnlNode::MIN_QUERY_TIMEOUT
-        } else {
-            timeout
+impl Default for AdnlNodeOptions {
+    fn default() -> Self {
+        Self {
+            query_min_timeout_ms: 500,
+            query_max_timeout_ms: 5000,
+            transfer_timeout_sec: 3,
+            clock_tolerance_sec: 60,
+            address_list_timeout_sec: 1000,
+            packet_history_enabled: false,
         }
     }
+}
 
-    pub fn with_config(config: AdnlNodeConfig) -> Arc<Self> {
+impl AdnlNode {
+    pub fn new(
+        ip_address: AdnlAddressUdp,
+        keystore: AdnlKeystore,
+        options: AdnlNodeOptions,
+    ) -> Arc<Self> {
         let (sender_queue_tx, sender_queue_rx) = mpsc::unbounded_channel();
-        let peers = FxDashMap::with_capacity_and_hasher(config.keys().len(), Default::default());
-        for key in config.keys().keys() {
+        let peers = FxDashMap::with_capacity_and_hasher(keystore.keys().len(), Default::default());
+        for key in keystore.keys().keys() {
             peers.insert(*key, Default::default());
         }
 
         Arc::new(Self {
-            config,
+            ip_address,
+            keystore,
             peers,
             channels_by_id: Default::default(),
             channels_by_peers: Default::default(),
@@ -81,6 +105,7 @@ impl AdnlNode {
             sender_queue_tx,
             sender_queue_rx: Mutex::new(Some(sender_queue_rx)),
             start_time: now(),
+            options,
         })
     }
 
@@ -92,7 +117,7 @@ impl AdnlNode {
         };
 
         // Bind node socket
-        let socket = make_udp_socket(self.config.ip_address().port())?;
+        let socket = make_udp_socket(self.ip_address.port())?;
 
         subscribers.push(Arc::new(AdnlPingSubscriber));
         let subscribers = Arc::new(subscribers);
@@ -215,22 +240,23 @@ impl AdnlNode {
         subscribers: &[Arc<dyn Subscriber>],
     ) -> Result<()> {
         // Decrypt packet and extract peers
-        let (local_id, peer_id) =
-            if let Some(local_id) = parse_handshake_packet(self.config.keys(), &mut data, None)? {
-                (local_id, None)
-            } else if let Some(channel) = self.channels_by_id.get(&data[0..32]) {
-                let channel = channel.value();
-                channel.decrypt(&mut data)?;
-                channel.set_ready();
-                channel.reset_drop_timeout();
-                (*channel.local_id(), Some(*channel.peer_id()))
-            } else {
-                log::trace!(
-                    "Received message to unknown key ID: {}",
-                    hex::encode(&data[0..32])
-                );
-                return Ok(());
-            };
+        let (local_id, peer_id) = if let Some(local_id) =
+            parse_handshake_packet(self.keystore.keys(), &mut data, None)?
+        {
+            (local_id, None)
+        } else if let Some(channel) = self.channels_by_id.get(&data[0..32]) {
+            let channel = channel.value();
+            channel.decrypt(&mut data)?;
+            channel.set_ready();
+            channel.reset_drop_timeout();
+            (*channel.local_id(), Some(*channel.peer_id()))
+        } else {
+            log::trace!(
+                "Received message to unknown key ID: {}",
+                hex::encode(&data[0..32])
+            );
+            return Ok(());
+        };
 
         // Parse packet
         let packet = deserialize_view(data.as_slice()).map_err(|_| AdnlNodeError::InvalidPacket)?;
@@ -267,8 +293,6 @@ impl AdnlNode {
     ) -> Result<()> {
         use dashmap::mapref::entry::Entry;
 
-        const TRANSFER_TIMEOUT: u64 = 3; // Seconds
-
         // Handle split message case
         let alt_message = if let MessageView::Part {
             hash,
@@ -287,11 +311,12 @@ impl AdnlNode {
                     tokio::spawn({
                         let incoming_transfers = self.incoming_transfers.clone();
                         let transfer = transfer.clone();
+                        let transfer_timeout = self.options.transfer_timeout_sec;
 
                         async move {
                             loop {
-                                tokio::time::sleep(Duration::from_secs(TRANSFER_TIMEOUT)).await;
-                                if !transfer.timings().is_expired(TRANSFER_TIMEOUT) {
+                                tokio::time::sleep(Duration::from_secs(transfer_timeout)).await;
+                                if !transfer.timings().is_expired(transfer_timeout) {
                                     continue;
                                 }
 
@@ -422,8 +447,6 @@ impl AdnlNode {
     ) -> Result<Option<AdnlNodeIdShort>> {
         use std::cmp::Ordering;
 
-        const CLOCK_TOLERANCE: i32 = 60;
-
         let from_channel = peer_id.is_some();
 
         // Extract peer id
@@ -493,7 +516,7 @@ impl AdnlNode {
             match reinit_date.cmp(&sender_reinit_date) {
                 Ordering::Equal => { /* do nothing */ }
                 Ordering::Greater => {
-                    if reinit_date > now() + CLOCK_TOLERANCE {
+                    if reinit_date > now() + self.options.clock_tolerance_sec {
                         return Err(AdnlPacketError::SrcReinitDateTooNew.into());
                     } else {
                         peer.sender_state().set_reinit_date(reinit_date);
@@ -507,11 +530,13 @@ impl AdnlNode {
             }
         }
 
-        // if let Some(seqno) = packet.seqno {
-        //     if !peer.receiver_state().history().deliver_packet(seqno) {
-        //         return Ok(None);
-        //     }
-        // }
+        if self.options.packet_history_enabled {
+            if let Some(seqno) = packet.seqno {
+                if !peer.receiver_state().history().deliver_packet(seqno) {
+                    return Ok(None);
+                }
+            }
+        }
 
         if let Some(confirm_seqno) = packet.confirm_seqno {
             let sender_seqno = peer.sender_state().history().seqno();
@@ -545,7 +570,7 @@ impl AdnlNode {
         };
         let peer = peer.value();
 
-        let local_key = self.config.key_by_id(local_id)?;
+        let local_key = self.keystore.key_by_id(local_id)?;
         let channel = self.channels_by_peers.get(peer_id);
         let (mut size, additional_message) = match &channel {
             Some(channel) if channel.ready() => (0, None),
@@ -662,8 +687,6 @@ impl AdnlNode {
         signer: MessageSigner,
         message: MessageToSend,
     ) -> Result<()> {
-        const ADDRESS_LIST_TIMEOUT: i32 = 1000; // Seconds
-
         let (message, messages) = match message {
             MessageToSend::Single(message) => (Some(message), None),
             MessageToSend::Multiple(messages) => (None, Some(messages.into())),
@@ -681,7 +704,9 @@ impl AdnlNode {
             },
             message,
             messages,
-            address: Some(self.build_address_list(Some(now() + ADDRESS_LIST_TIMEOUT))),
+            address: Some(
+                self.build_address_list(Some(now() + self.options.address_list_timeout_sec)),
+            ),
             priority_address: None,
             seqno: Some(peer.sender_state().history().bump_seqno()),
             confirm_seqno: Some(peer.receiver_state().history().seqno()),
@@ -714,8 +739,17 @@ impl AdnlNode {
         Ok(())
     }
 
+    pub fn compute_query_timeout(&self, roundtrip: Option<u64>) -> u64 {
+        let timeout = roundtrip.unwrap_or(self.options.query_max_timeout_ms);
+        if timeout < self.options.query_min_timeout_ms {
+            self.options.query_min_timeout_ms
+        } else {
+            timeout
+        }
+    }
+
     pub fn ip_address(&self) -> AdnlAddressUdp {
-        self.config.ip_address()
+        self.ip_address
     }
 
     pub fn build_address_list(
@@ -724,7 +758,7 @@ impl AdnlNode {
     ) -> ton::adnl::addresslist::AddressList {
         let now = now();
         ton::adnl::addresslist::AddressList {
-            addrs: vec![self.config.ip_address().as_tl()].into(),
+            addrs: vec![self.ip_address.as_tl()].into(),
             version: now,
             reinit_date: self.start_time,
             priority: 0,
@@ -739,7 +773,7 @@ impl AdnlNode {
     ) -> Result<AdnlNodeIdShort> {
         use dashmap::mapref::entry::Entry;
 
-        let result = self.config.add_key(key, tag)?;
+        let result = self.keystore.add_key(key, tag)?;
         if let Entry::Vacant(entry) = self.peers.entry(result) {
             entry.insert(Arc::new(Default::default()));
         };
@@ -749,15 +783,15 @@ impl AdnlNode {
 
     pub fn delete_key(&mut self, key: &AdnlNodeIdShort, tag: usize) -> Result<bool> {
         self.peers.remove(key);
-        self.config.delete_key(key, tag)
+        self.keystore.delete_key(key, tag)
     }
 
     pub fn key_by_id(&self, id: &AdnlNodeIdShort) -> Result<Arc<StoredAdnlNodeKey>> {
-        self.config.key_by_id(id)
+        self.keystore.key_by_id(id)
     }
 
     pub fn key_by_tag(&self, tag: usize) -> Result<Arc<StoredAdnlNodeKey>> {
-        self.config.key_by_tag(tag)
+        self.keystore.key_by_tag(tag)
     }
 
     pub fn add_peer(
@@ -849,10 +883,9 @@ impl AdnlNode {
 
         tokio::spawn({
             let queries = self.queries.clone();
+            let timeout = timeout.unwrap_or(self.options.query_max_timeout_ms);
 
             async move {
-                let timeout = timeout.unwrap_or(Self::MAX_QUERY_TIMEOUT);
-
                 tokio::time::sleep(Duration::from_millis(timeout)).await;
 
                 match queries.update_query(query_id, None).await {

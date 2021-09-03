@@ -20,6 +20,7 @@ mod storage;
 pub struct DhtNode {
     adnl: Arc<AdnlNode>,
     node_key: Arc<StoredAdnlNodeKey>,
+    options: DhtNodeOptions,
     known_peers: PeersCache,
 
     buckets: Buckets,
@@ -28,13 +29,32 @@ pub struct DhtNode {
     query_prefix: Vec<u8>,
 }
 
+#[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct DhtNodeOptions {
+    /// Default: 3600
+    pub value_timeout_sec: u32,
+    /// Default: 5
+    pub max_dht_tasks: usize,
+}
+
+impl Default for DhtNodeOptions {
+    fn default() -> Self {
+        Self {
+            value_timeout_sec: 3600,
+            max_dht_tasks: 5,
+        }
+    }
+}
+
 impl DhtNode {
-    pub fn with_adnl_node(adnl: Arc<AdnlNode>, key_tag: usize) -> Result<Arc<Self>> {
+    pub fn new(adnl: Arc<AdnlNode>, key_tag: usize, options: DhtNodeOptions) -> Result<Arc<Self>> {
         let node_key = adnl.key_by_tag(key_tag)?;
 
         let mut dht_node = Self {
             adnl,
             node_key,
+            options,
             known_peers: PeersCache::with_capacity(MAX_OVERLAY_PEERS),
             buckets: Buckets::default(),
             storage: Storage::default(),
@@ -47,6 +67,14 @@ impl DhtNode {
         serialize_inplace(&mut dht_node.query_prefix, &query)?;
 
         Ok(Arc::new(dht_node))
+    }
+
+    pub fn adnl(&self) -> &Arc<AdnlNode> {
+        &self.adnl
+    }
+
+    pub fn options(&self) -> &DhtNodeOptions {
+        &self.options
     }
 
     pub fn add_peer(&self, peer: ton::dht::node::Node) -> Result<Option<AdnlNodeIdShort>> {
@@ -194,7 +222,7 @@ impl DhtNode {
             value: ton::bytes(serialize_boxed(ton::overlay::nodes::Nodes {
                 nodes: vec![node.clone()].into(),
             })?),
-            ttl: now() + DHT_VALUE_TIMEOUT,
+            ttl: now() + self.options.value_timeout_sec as i32,
             signature: Default::default(),
         };
 
@@ -246,7 +274,7 @@ impl DhtNode {
 
     pub async fn store_ip_address(self: &Arc<Self>, key: &StoredAdnlNodeKey) -> Result<bool> {
         let value = serialize_boxed(self.adnl.build_address_list(None))?;
-        let value = sign_dht_value(key, DHT_KEY_ADDRESS, &value)?;
+        let value = sign_dht_value(key, DHT_KEY_ADDRESS, &value, self.options.value_timeout_sec)?;
         let key = make_dht_key(key.id(), DHT_KEY_ADDRESS);
 
         self.storage
@@ -468,7 +496,9 @@ impl DhtNode {
             k: 6,
         }));
 
-        let mut response_collector = LimitedResponseCollector::new(MAX_TASKS);
+        let max_tasks = self.options.max_dht_tasks;
+
+        let mut response_collector = LimitedResponseCollector::new(max_tasks);
 
         let mut known_peers_cache_version = self.known_peers.version();
         loop {
@@ -507,12 +537,12 @@ impl DhtNode {
                     }
                 }
 
-                if finished || !all || result.len() < MAX_TASKS {
+                if finished || !all || result.len() < max_tasks {
                     break;
                 }
             }
 
-            if finished || all && result.len() >= MAX_TASKS || !all && !result.is_empty() {
+            if finished || all && result.len() >= max_tasks || !all && !result.is_empty() {
                 break;
             }
         }
@@ -661,6 +691,7 @@ impl Subscriber for DhtNode {
 }
 
 pub struct ExternalDhtIter {
+    max_tasks: usize,
     iter: Option<ExternalPeersCacheIter>,
     key_id: StorageKey,
     order: Vec<(u8, AdnlNodeIdShort)>,
@@ -669,6 +700,7 @@ pub struct ExternalDhtIter {
 impl ExternalDhtIter {
     fn with_key_id(dht: &DhtNode, key_id: StorageKey) -> Self {
         let mut result = Self {
+            max_tasks: dht.options.max_dht_tasks,
             iter: None,
             key_id,
             order: Vec::new(),
@@ -688,7 +720,7 @@ impl ExternalDhtIter {
 
             let add = match self.order.last() {
                 Some((top_affinity, _)) => {
-                    *top_affinity <= affinity || self.order.len() < MAX_TASKS
+                    *top_affinity <= affinity || self.order.len() < self.max_tasks
                 }
                 None => true,
             };
@@ -705,7 +737,7 @@ impl ExternalDhtIter {
         if let Some((top_affinity, _)) = self.order.last() {
             let mut drop_to = 0;
 
-            while self.order.len() - drop_to > MAX_TASKS {
+            while self.order.len() - drop_to > self.max_tasks {
                 if self.order[drop_to].0 < *top_affinity {
                     drop_to += 1;
                 } else {
@@ -720,8 +752,6 @@ impl ExternalDhtIter {
 
 const DHT_KEY_ADDRESS: &str = "address";
 const DHT_KEY_NODES: &str = "nodes";
-
-const MAX_TASKS: usize = 5;
 
 #[derive(thiserror::Error, Debug)]
 enum DhtNodeError {

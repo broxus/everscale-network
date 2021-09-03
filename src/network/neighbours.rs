@@ -4,13 +4,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use rand::Rng;
 use ton_api::ton::{self, TLObject};
 
 use super::neighbour::*;
 use super::neighbours_cache::*;
-use super::MAX_NEIGHBOURS;
-use crate::adnl_node::*;
 use crate::dht_node::*;
 use crate::overlay_node::*;
 use crate::utils::*;
@@ -19,6 +16,7 @@ pub struct Neighbours {
     dht: Arc<DhtNode>,
     overlay: Arc<OverlayNode>,
     overlay_id: OverlayIdShort,
+    options: NeighboursOptions,
 
     cache: Arc<NeighboursCache>,
     overlay_peers: FxDashSet<AdnlNodeIdShort>,
@@ -29,18 +27,58 @@ pub struct Neighbours {
     start: Instant,
 }
 
+#[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct NeighboursOptions {
+    /// Default: 16
+    pub max_neighbours: usize,
+    /// Default: 10
+    pub reloading_min_interval_sec: u32,
+    /// Default: 30
+    pub reloading_max_interval_sec: u32,
+    /// Default: 500
+    pub ping_interval_ms: u64,
+    /// Default: 1000
+    pub search_interval_ms: u64,
+    /// Default: 10
+    pub ping_min_timeout_ms: u64,
+    /// Default: 1000
+    pub ping_max_timeout_ms: u64,
+    /// Default: 6
+    pub max_ping_tasks: usize,
+}
+
+impl Default for NeighboursOptions {
+    fn default() -> Self {
+        Self {
+            max_neighbours: 16,
+            reloading_min_interval_sec: 10,
+            reloading_max_interval_sec: 30,
+            ping_interval_ms: 500,
+            search_interval_ms: 1000,
+            ping_min_timeout_ms: 10,
+            ping_max_timeout_ms: 1000,
+            max_ping_tasks: 6,
+        }
+    }
+}
+
 impl Neighbours {
     pub fn new(
         dht: &Arc<DhtNode>,
         overlay: &Arc<OverlayNode>,
         overlay_id: &OverlayIdShort,
         initial_peers: &[AdnlNodeIdShort],
+        options: NeighboursOptions,
     ) -> Arc<Self> {
+        let cache = Arc::new(NeighboursCache::new(initial_peers, options.max_neighbours));
+
         Arc::new(Self {
             dht: dht.clone(),
             overlay: overlay.clone(),
             overlay_id: *overlay_id,
-            cache: Arc::new(NeighboursCache::new(initial_peers)),
+            options,
+            cache,
             overlay_peers: Default::default(),
             failed_attempts: Default::default(),
             all_attempts: Default::default(),
@@ -48,11 +86,24 @@ impl Neighbours {
         })
     }
 
+    pub fn options(&self) -> &NeighboursOptions {
+        &self.options
+    }
+
     pub fn start_reloading_neighbours(self: &Arc<Self>) {
+        use rand::distributions::Distribution;
+
         let neighbours = Arc::downgrade(self);
+
+        let (min_ms, max_ms) = ordered_boundaries(
+            self.options.reloading_min_interval_sec,
+            self.options.reloading_max_interval_sec,
+        );
+        let distribution = rand::distributions::Uniform::new(min_ms, max_ms);
+
         tokio::spawn(async move {
             loop {
-                let sleep_duration = rand::thread_rng().gen_range(10, 30);
+                let sleep_duration = distribution.sample(&mut rand::thread_rng()) as u64;
                 tokio::time::sleep(Duration::from_secs(sleep_duration)).await;
 
                 let neighbours = match neighbours.upgrade() {
@@ -68,6 +119,8 @@ impl Neighbours {
     }
 
     pub fn start_pinging_neighbours(self: &Arc<Self>) {
+        let interval = Duration::from_millis(self.options.ping_interval_ms);
+
         let neighbours = Arc::downgrade(self);
         tokio::spawn(async move {
             loop {
@@ -78,16 +131,18 @@ impl Neighbours {
 
                 if let Err(e) = neighbours.ping_neighbours().await {
                     log::warn!("Failed to ping neighbours: {}", e);
-                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    tokio::time::sleep(interval).await;
                 }
             }
         });
     }
 
     pub fn start_searching_peers(self: &Arc<Self>) {
+        let interval = Duration::from_millis(self.options.search_interval_ms);
+
         let neighbours = Arc::downgrade(self);
         tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+            tokio::time::sleep(interval).await;
 
             let neighbours = match neighbours.upgrade() {
                 Some(neighbours) => neighbours,
@@ -172,9 +227,9 @@ impl Neighbours {
     pub fn reload_neighbours(&self, overlay_id: &OverlayIdShort) -> Result<()> {
         log::trace!("Start reload_neighbours (overlay: {})", overlay_id);
 
-        let peers = PeersCache::with_capacity(MAX_NEIGHBOURS * 2 + 1);
+        let peers = PeersCache::with_capacity(self.options.max_neighbours * 2 + 1);
         self.overlay
-            .write_cached_peers(overlay_id, MAX_NEIGHBOURS * 2, &peers)?;
+            .write_cached_peers(overlay_id, self.options.max_neighbours * 2, &peers)?;
         self.process_neighbours(peers)?;
 
         log::trace!("Finish reload_neighbours (overlay: {})", overlay_id);
@@ -182,8 +237,6 @@ impl Neighbours {
     }
 
     pub async fn ping_neighbours(self: &Arc<Self>) -> Result<()> {
-        const MAX_TASKS: usize = 6;
-
         let neighbour_count = self.cache.len();
         if neighbour_count == 0 {
             return Err(NeighboursError::NoPeersInOverlay(self.overlay_id).into());
@@ -195,23 +248,26 @@ impl Neighbours {
             )
         }
 
-        let max_tasks = std::cmp::min(neighbour_count, MAX_TASKS);
+        let max_tasks = std::cmp::min(neighbour_count, self.options.max_ping_tasks);
         let mut response_collector = LimitedResponseCollector::new(max_tasks);
         loop {
             let neighbour = match self.cache.get_next_for_ping(&self.start) {
                 Some(neighbour) => neighbour,
                 None => {
                     log::trace!("No neighbours to ping");
-                    tokio::time::sleep(Duration::from_millis(MIN_PING_TIMEOUT)).await;
+                    tokio::time::sleep(Duration::from_millis(self.options.ping_min_timeout_ms))
+                        .await;
                     continue;
                 }
             };
 
             let ms_since_last_ping = self.elapsed().saturating_sub(neighbour.last_ping());
-            let additional_sleep = if ms_since_last_ping < MAX_PING_TIMEOUT {
-                MAX_PING_TIMEOUT.saturating_sub(ms_since_last_ping)
+            let additional_sleep = if ms_since_last_ping < self.options.ping_max_timeout_ms {
+                self.options
+                    .ping_max_timeout_ms
+                    .saturating_sub(ms_since_last_ping)
             } else {
-                MIN_PING_TIMEOUT
+                self.options.ping_min_timeout_ms
             };
             tokio::time::sleep(Duration::from_millis(additional_sleep)).await;
 
@@ -296,7 +352,11 @@ impl Neighbours {
             self.overlay_id
         );
 
-        let timeout = Some(AdnlNode::compute_query_timeout(neighbour.roundtrip_adnl()));
+        let timeout = Some(
+            self.dht
+                .adnl()
+                .compute_query_timeout(neighbour.roundtrip_adnl()),
+        );
 
         match self
             .overlay
@@ -350,9 +410,6 @@ impl Neighbours {
         self.start.elapsed().as_millis() as u64
     }
 }
-
-const MIN_PING_TIMEOUT: u64 = 10; // Milliseconds
-const MAX_PING_TIMEOUT: u64 = 1000; // Milliseconds
 
 #[derive(thiserror::Error, Debug)]
 enum NeighboursError {

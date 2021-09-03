@@ -74,7 +74,7 @@ pub fn compute_shared_secret(
     private_key_part: &[u8; 32],
     public_key: &[u8; 32],
 ) -> Result<[u8; 32]> {
-    let point = curve25519_dalek::edwards::CompressedEdwardsY(*public_key)
+    let point = curve25519_dalek_ng::edwards::CompressedEdwardsY(*public_key)
         .decompress()
         .ok_or(BadPublicKeyData)?
         .to_montgomery()
@@ -151,4 +151,15 @@ pub fn now() -> i32 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i32
+}
+
+pub fn ordered_boundaries<T>(min: T, max: T) -> (T, T)
+where
+    T: Ord,
+{
+    if min > max {
+        (max, min)
+    } else {
+        (min, max)
+    }
 }

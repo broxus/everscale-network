@@ -19,15 +19,35 @@ mod peer;
 mod transfers_cache;
 
 pub struct RldpNode {
+    options: RldpNodeOptions,
     peers: FxDashMap<AdnlNodeIdShort, Arc<RldpPeer>>,
     transfers: TransfersCache,
 }
 
+#[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RldpNodeOptions {
+    /// Default: 16
+    pub max_peer_queries: u32,
+}
+
+impl Default for RldpNodeOptions {
+    fn default() -> Self {
+        Self {
+            max_peer_queries: 16,
+        }
+    }
+}
+
 impl RldpNode {
-    pub fn with_adnl_node(adnl: Arc<AdnlNode>, subscribers: Vec<Arc<dyn Subscriber>>) -> Arc<Self> {
+    pub fn new(
+        adnl: Arc<AdnlNode>,
+        subscribers: Vec<Arc<dyn Subscriber>>,
+        options: RldpNodeOptions,
+    ) -> Arc<Self> {
         Arc::new(Self {
             peers: Default::default(),
             transfers: TransfersCache::new(adnl, subscribers),
+            options,
         })
     }
 
@@ -41,7 +61,12 @@ impl RldpNode {
     ) -> Result<(Option<Vec<u8>>, u64)> {
         let (query_id, query) = make_query(data, max_answer_size)?;
 
-        let peer = self.peers.entry(*peer_id).or_default().value().clone();
+        let peer = self
+            .peers
+            .entry(*peer_id)
+            .or_insert_with(|| Arc::new(RldpPeer::new(self.options.max_peer_queries)))
+            .value()
+            .clone();
 
         peer.begin_query().await;
 

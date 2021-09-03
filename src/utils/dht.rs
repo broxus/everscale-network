@@ -2,23 +2,22 @@ use std::convert::TryFrom;
 
 use anyhow::Result;
 use ton_api::ton::{self, TLObject};
+use ton_api::IntoBoxed;
 
 use super::address_list::*;
 use super::node_id::*;
 use super::now;
-use ton_api::IntoBoxed;
-
-pub const DHT_VALUE_TIMEOUT: i32 = 3600; // Seconds
 
 pub fn sign_dht_value(
     key: &StoredAdnlNodeKey,
     name: &str,
     value: &[u8],
+    timeout: u32,
 ) -> Result<ton::dht::value::Value> {
     let value = ton::dht::value::Value {
         key: sign_dht_key_description(key, name)?,
         value: ton::bytes(value.to_vec()),
-        ttl: now() + DHT_VALUE_TIMEOUT,
+        ttl: now() + timeout as i32,
         signature: Default::default(),
     };
     key.sign_boxed(value, |value, signature| {

@@ -6,7 +6,10 @@ use anyhow::Result;
 use ton_api::ton::{self, TLObject};
 use ton_api::IntoBoxed;
 
-use self::overlay_shard::*;
+pub use self::overlay_shard::OverlayShardOptions;
+use self::overlay_shard::{
+    CatchainUpdate, IncomingBroadcastInfo, OutgoingBroadcastInfo, OverlayShard,
+};
 use crate::adnl_node::*;
 use crate::rldp_node::*;
 use crate::subscriber::*;
@@ -24,7 +27,7 @@ pub struct OverlayNode {
 }
 
 impl OverlayNode {
-    pub fn with_adnl_node_and_zero_state(
+    pub fn new(
         adnl: Arc<AdnlNode>,
         zero_state_file_hash: [u8; 32],
         key_tag: usize,
@@ -37,6 +40,10 @@ impl OverlayNode {
             subscribers: Default::default(),
             zero_state_file_hash,
         }))
+    }
+
+    pub fn adnl(&self) -> &Arc<AdnlNode> {
+        &self.adnl
     }
 
     pub fn add_subscriber(
@@ -182,8 +189,12 @@ impl OverlayNode {
         Ok(self.get_overlay_shard(overlay_id)?.query_prefix().clone())
     }
 
-    pub fn add_public_overlay(&self, overlay_id: &OverlayIdShort) -> Result<bool> {
-        self.add_overlay_shard(overlay_id, None)
+    pub fn add_public_overlay(
+        &self,
+        overlay_id: &OverlayIdShort,
+        options: OverlayShardOptions,
+    ) -> Result<bool> {
+        self.add_overlay_shard(overlay_id, None, options)
     }
 
     pub fn add_private_overlay(
@@ -191,8 +202,9 @@ impl OverlayNode {
         overlay_id: &OverlayIdShort,
         overlay_key: &Arc<StoredAdnlNodeKey>,
         peers: &[AdnlNodeIdShort],
+        options: OverlayShardOptions,
     ) -> Result<bool> {
-        if !self.add_overlay_shard(overlay_id, Some(overlay_key.clone()))? {
+        if !self.add_overlay_shard(overlay_id, Some(overlay_key.clone()), options)? {
             return Ok(false);
         }
 
@@ -366,6 +378,7 @@ impl OverlayNode {
         &self,
         overlay_id: &OverlayIdShort,
         overlay_key: Option<Arc<StoredAdnlNodeKey>>,
+        options: OverlayShardOptions,
     ) -> Result<bool> {
         use dashmap::mapref::entry::Entry;
 
@@ -375,6 +388,7 @@ impl OverlayNode {
                     self.adnl.clone(),
                     *overlay_id,
                     overlay_key,
+                    options,
                 )?);
                 true
             }
