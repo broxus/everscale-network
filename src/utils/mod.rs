@@ -79,7 +79,7 @@ pub fn compute_shared_secret(
         .ok_or(BadPublicKeyData)?
         .to_montgomery()
         .to_bytes();
-    Ok(x25519_dalek::x25519(*private_key_part, point))
+    Ok(x25519_dalek_ng::x25519(*private_key_part, point))
 }
 
 #[derive(thiserror::Error, Debug)]
