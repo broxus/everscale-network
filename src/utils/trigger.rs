@@ -29,7 +29,7 @@ pub struct Trigger {
 
 impl Trigger {
     pub fn trigger(&self) {
-        if self.state.complete.swap(false, Ordering::AcqRel) {
+        if self.state.complete.swap(true, Ordering::AcqRel) {
             return;
         }
 
@@ -88,4 +88,30 @@ struct State {
     complete: AtomicBool,
     wakers: Mutex<FxHashMap<usize, Waker>>,
     next_id: AtomicUsize,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_trigger() {
+        let (trigger, signal) = trigger();
+
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                    panic!("Trigger was not called");
+                }
+                _ = signal => {}
+            };
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        trigger.trigger();
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }

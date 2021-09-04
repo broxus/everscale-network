@@ -23,7 +23,7 @@ serde = "1.0"
 sha2 = "0.9"
 smallvec = { version = "1.6.1", features = ["union", "const_generics"] }
 thiserror = "1.0"
-tokio = { version = "1.6", features = ["sync", "net", "rt", "time", "io-util"] }
+tokio = { version = "1.6", features = ["sync", "net", "rt", "time", "io-util", "macros"] }
 tokio-io-timeout = "1.1.1"
 x25519-dalek-ng = "1.1"
 
