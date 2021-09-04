@@ -68,14 +68,12 @@ impl RldpNode {
             .value()
             .clone();
 
-        peer.begin_query().await;
-
-        let result = self
-            .transfers
-            .query(local_id, peer_id, query.as_slice(), roundtrip)
-            .await;
-
-        peer.end_query().await;
+        let result = {
+            let _guard = peer.begin_query().await;
+            self.transfers
+                .query(local_id, peer_id, query.as_slice(), roundtrip)
+                .await
+        };
 
         match result? {
             (Some(answer), roundtrip) => match deserialize_view(answer.as_slice()) {

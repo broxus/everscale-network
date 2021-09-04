@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -20,6 +21,27 @@ pub fn trigger() -> (Trigger, TriggerReceiver) {
         },
         TriggerReceiver { id: 0, state },
     )
+}
+
+pub fn trigger_on_drop() -> (TriggerOnDrop, TriggerReceiver) {
+    let (trigger, signal) = trigger();
+    (TriggerOnDrop(trigger), signal)
+}
+
+pub struct TriggerOnDrop(Trigger);
+
+impl Deref for TriggerOnDrop {
+    type Target = Trigger;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for TriggerOnDrop {
+    fn drop(&mut self) {
+        self.0.trigger();
+    }
 }
 
 #[derive(Clone)]
