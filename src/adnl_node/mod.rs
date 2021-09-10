@@ -50,6 +50,15 @@ pub struct AdnlNode {
 
     /// Basic reinit date for all local peer states
     start_time: i32,
+
+    complete_signal: TriggerReceiver,
+    complete_trigger: Trigger,
+}
+
+impl Drop for AdnlNode {
+    fn drop(&mut self) {
+        self.shutdown()
+    }
 }
 
 #[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
@@ -94,9 +103,12 @@ impl AdnlNode {
             peers.insert(*key, Default::default());
         }
 
+        let (complete_trigger, complete_signal) = trigger();
+
         Arc::new(Self {
             ip_address,
             keystore,
+            options,
             peers,
             channels_by_id: Default::default(),
             channels_by_peers: Default::default(),
@@ -105,7 +117,8 @@ impl AdnlNode {
             sender_queue_tx,
             sender_queue_rx: Mutex::new(Some(sender_queue_rx)),
             start_time: now(),
-            options,
+            complete_signal,
+            complete_trigger,
         })
     }
 
@@ -129,6 +142,10 @@ impl AdnlNode {
 
         // Done
         Ok(())
+    }
+
+    pub fn shutdown(&self) {
+        self.complete_trigger.trigger();
     }
 
     /// Starts a process that polls subscribers
@@ -184,27 +201,26 @@ impl AdnlNode {
     ) {
         const RECV_BUFFER_SIZE: usize = 2048;
 
+        let complete_signal = self.complete_signal.clone();
         let node = Arc::downgrade(self);
 
         tokio::spawn(async move {
             let mut buffer = None;
 
             loop {
-                // Check if node is still alive
-                let node = match node.upgrade() {
-                    Some(node) => node,
-                    None => return,
+                // Receive packet
+                let fut = socket.recv_from(
+                    buffer
+                        .get_or_insert_with(|| vec![0u8; RECV_BUFFER_SIZE])
+                        .as_mut_slice(),
+                );
+
+                let data = tokio::select! {
+                    data = fut => data,
+                    _ = complete_signal.clone() => return,
                 };
 
-                // Receive packet
-                let len = match socket
-                    .recv_from(
-                        buffer
-                            .get_or_insert_with(|| vec![0u8; RECV_BUFFER_SIZE])
-                            .as_mut_slice(),
-                    )
-                    .await
-                {
+                let len = match data {
                     Ok((len, _)) if len == 0 => continue,
                     Ok((len, _)) => len,
                     Err(e) => {
@@ -218,6 +234,12 @@ impl AdnlNode {
                     None => continue,
                 };
                 buffer.truncate(len);
+
+                // Check if node is still alive
+                let node = match node.upgrade() {
+                    Some(node) => node,
+                    None => return,
+                };
 
                 // Process packet
                 let subscribers = subscribers.clone();
