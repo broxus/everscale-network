@@ -1,4 +1,4 @@
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use std::hash::BuildHasherDefault;
 use std::sync::Arc;
 
@@ -65,7 +65,7 @@ impl OverlayNode {
     pub fn add_private_peers(
         &self,
         local_id: &AdnlNodeIdShort,
-        peers: &[(AdnlAddressUdp, ed25519_dalek::PublicKey)],
+        peers: &[(AdnlAddressUdp, ed25519_consensus::VerificationKey)],
     ) -> Result<Vec<AdnlNodeIdShort>> {
         let mut new_peers = Vec::new();
 
@@ -418,7 +418,7 @@ impl OverlayNode {
         let mut result = Vec::new();
 
         for node in nodes.nodes.0 {
-            let suitable_key = matches!(&node.id, ton::PublicKey::Pub_Ed25519(id) if &id.key.0 != self.node_key.full_id().public_key().as_bytes());
+            let suitable_key = matches!(&node.id, ton::PublicKey::Pub_Ed25519(id) if &id.key.0 != self.node_key.full_id().public_key().as_ref());
             if !suitable_key {
                 continue;
             }
@@ -466,12 +466,13 @@ impl OverlayNode {
             version,
         })?;
         let signature = key.sign(&signature);
+        let signature_bytes: [u8; 64] = signature.try_into()?;
 
         Ok(ton::overlay::node::Node {
             id: key.full_id().as_tl().into_boxed(),
             overlay: ton::int256(shard.id().into()),
             version,
-            signature: ton::bytes(signature.to_bytes().to_vec()),
+            signature: ton::bytes(signature_bytes.to_vec()),
         })
     }
 }

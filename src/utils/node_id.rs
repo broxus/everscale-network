@@ -1,35 +1,34 @@
 use std::convert::{TryFrom, TryInto};
 
 use anyhow::Result;
-use ed25519_dalek::ed25519::signature::Signature;
-use ed25519_dalek::Verifier;
 use rand::Rng;
 use ton_api::{ton, IntoBoxed};
 
 use super::tl_view::PublicKeyView;
 use super::{hash, serialize, serialize_boxed};
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub struct AdnlNodeIdFull(ed25519_dalek::PublicKey);
+// todo return Eq, PartialEq
+#[derive(Debug, Copy, Clone)]
+pub struct AdnlNodeIdFull(ed25519_consensus::VerificationKey);
 
 impl AdnlNodeIdFull {
-    pub fn new(public_key: ed25519_dalek::PublicKey) -> Self {
+    pub fn new(public_key: ed25519_consensus::VerificationKey) -> Self {
         Self(public_key)
     }
 
-    pub fn public_key(&self) -> &ed25519_dalek::PublicKey {
+    pub fn public_key(&self) -> &ed25519_consensus::VerificationKey {
         &self.0
     }
 
     pub fn as_tl(&self) -> ton::pub_::publickey::Ed25519 {
         ton::pub_::publickey::Ed25519 {
-            key: ton::int256(self.0.to_bytes()),
+            key: ton::int256(self.0.as_ref().try_into().unwrap()),
         }
     }
 
     pub fn verify(&self, message: &[u8], other_signature: &[u8]) -> Result<()> {
-        let other_signature = ed25519_dalek::Signature::from_bytes(other_signature)?;
-        self.0.verify(message, &other_signature)?;
+        let other_signature = ed25519_consensus::Signature::try_from(other_signature)?;
+        self.0.verify(&other_signature, message)?;
         Ok(())
     }
 
@@ -56,8 +55,8 @@ impl std::fmt::Display for AdnlNodeIdFull {
     }
 }
 
-impl From<ed25519_dalek::PublicKey> for AdnlNodeIdFull {
-    fn from(key: ed25519_dalek::PublicKey) -> Self {
+impl From<ed25519_consensus::VerificationKey> for AdnlNodeIdFull {
+    fn from(key: ed25519_consensus::VerificationKey) -> Self {
         Self::new(key)
     }
 }
@@ -68,7 +67,8 @@ impl TryFrom<&ton::PublicKey> for AdnlNodeIdFull {
     fn try_from(public_key: &ton::PublicKey) -> Result<Self> {
         match public_key {
             ton::PublicKey::Pub_Ed25519(public_key) => {
-                let public_key = ed25519_dalek::PublicKey::from_bytes(&public_key.key.0).unwrap();
+                let public_key =
+                    ed25519_consensus::VerificationKeyBytes::from(public_key.key.0).try_into()?;
                 Ok(Self::new(public_key))
             }
             _ => Err(AdnlNodeIdError::UnsupportedPublicKey.into()),
@@ -82,7 +82,8 @@ impl<'a> TryFrom<PublicKeyView<'a>> for AdnlNodeIdFull {
     fn try_from(value: PublicKeyView<'a>) -> Result<Self, Self::Error> {
         match value {
             PublicKeyView::Ed25519 { key } => {
-                let public_key = ed25519_dalek::PublicKey::from_bytes(key).unwrap();
+                let public_key =
+                    ed25519_consensus::VerificationKeyBytes::from(key.clone()).try_into()?;
                 Ok(Self::new(public_key))
             }
             _ => Err(AdnlNodeIdError::UnsupportedPublicKey.into()),
@@ -162,16 +163,16 @@ pub trait ComputeNodeIds {
     fn compute_node_ids(&self) -> Result<(AdnlNodeIdFull, AdnlNodeIdShort)>;
 }
 
-impl ComputeNodeIds for ed25519_dalek::SecretKey {
+impl ComputeNodeIds for ed25519_consensus::SigningKey {
     fn compute_node_ids(&self) -> Result<(AdnlNodeIdFull, AdnlNodeIdShort)> {
-        let public_key = ed25519_dalek::PublicKey::from(self);
+        let public_key = ed25519_consensus::VerificationKey::from(self);
         let full_id = AdnlNodeIdFull::new(public_key);
         let short_id = full_id.compute_short_id()?;
         Ok((full_id, short_id))
     }
 }
 
-impl ComputeNodeIds for ed25519_dalek::PublicKey {
+impl ComputeNodeIds for ed25519_consensus::VerificationKey {
     fn compute_node_ids(&self) -> Result<(AdnlNodeIdFull, AdnlNodeIdShort)> {
         let full_id = AdnlNodeIdFull::new(*self);
         let short_id = full_id.compute_short_id()?;
@@ -188,24 +189,19 @@ enum AdnlNodeIdError {
 pub struct StoredAdnlNodeKey {
     short_id: AdnlNodeIdShort,
     full_id: AdnlNodeIdFull,
-    private_key: ed25519_dalek::ExpandedSecretKey,
-    private_key_part: [u8; 32],
+    private_key: ed25519_consensus::SigningKey,
 }
 
 impl StoredAdnlNodeKey {
     pub fn from_id_and_private_key(
         short_id: AdnlNodeIdShort,
         full_id: AdnlNodeIdFull,
-        private_key: &ed25519_dalek::SecretKey,
+        private_key: &ed25519_consensus::SigningKey,
     ) -> Self {
-        let private_key = ed25519_dalek::ExpandedSecretKey::from(private_key);
-        let private_key_part = private_key.to_bytes()[0..32].try_into().unwrap();
-
         Self {
             short_id,
             full_id,
-            private_key,
-            private_key_part,
+            private_key: private_key.clone(),
         }
     }
 
@@ -217,16 +213,12 @@ impl StoredAdnlNodeKey {
         &self.full_id
     }
 
-    pub fn private_key(&self) -> &ed25519_dalek::ExpandedSecretKey {
+    pub fn private_key(&self) -> &ed25519_consensus::SigningKey {
         &self.private_key
     }
 
-    pub fn private_key_part(&self) -> &[u8; 32] {
-        &self.private_key_part
-    }
-
-    pub fn sign(&self, data: &[u8]) -> ed25519_dalek::Signature {
-        self.private_key.sign(data, self.full_id.public_key())
+    pub fn sign(&self, data: &[u8]) -> ed25519_consensus::Signature {
+        self.private_key.sign(data)
     }
 
     pub fn sign_boxed<T, F, R>(&self, data: T, inserter: F) -> Result<R>
@@ -238,7 +230,9 @@ impl StoredAdnlNodeKey {
         let mut buffer = serialize(&data)?;
         let signature = self.sign(&buffer);
         buffer.truncate(0);
-        buffer.extend_from_slice(signature.as_ref());
+        let signature_bytes: [u8; 64] = signature.try_into()?;
+
+        buffer.extend_from_slice(signature_bytes.as_ref());
         Ok(inserter(data, ton::bytes(buffer)))
     }
 }

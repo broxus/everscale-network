@@ -1,4 +1,4 @@
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::sync::Arc;
 
 use aes::cipher::StreamCipher;
@@ -16,8 +16,8 @@ pub fn build_handshake_packet(
     buffer: &mut Vec<u8>,
 ) -> Result<()> {
     // Create temp local key
-    let temp_private_key = ed25519_dalek::SecretKey::generate(&mut rand::thread_rng());
-    let temp_public_key = ed25519_dalek::PublicKey::from(&temp_private_key);
+    let temp_private_key = ed25519_consensus::SigningKey::new(&mut rand::thread_rng());
+    let temp_public_key = ed25519_consensus::VerificationKey::from(&temp_private_key);
 
     // Prepare packet
     let checksum: [u8; 32] = sha2::Sha256::digest(buffer.as_slice()).into();
@@ -27,17 +27,13 @@ pub fn build_handshake_packet(
     buffer.copy_within(..length, 96);
 
     buffer[..32].copy_from_slice(peer_id.as_slice());
-    buffer[32..64].copy_from_slice(temp_public_key.as_bytes());
+    buffer[32..64].copy_from_slice(temp_public_key.as_ref());
     buffer[64..96].copy_from_slice(&checksum);
 
     // Encrypt packet data
-    let temp_private_key_part = ed25519_dalek::ExpandedSecretKey::from(&temp_private_key)
-        .to_bytes()[0..32]
-        .try_into()
-        .unwrap();
-
-    let shared_secret =
-        compute_shared_secret(&temp_private_key_part, peer_id_full.public_key().as_bytes())?;
+    let temp_private_key_part = temp_private_key.as_ref()[0..32].try_into().unwrap();
+    let pubkey: [u8; 32] = peer_id_full.public_key().as_ref().try_into()?;
+    let shared_secret = compute_shared_secret(&temp_private_key_part, &pubkey)?;
     build_packet_cipher(&shared_secret, &checksum).apply_keystream(&mut buffer[96..]);
 
     // Done
@@ -74,7 +70,7 @@ pub fn parse_handshake_packet(
         if key == &buffer[0..32] {
             // Decrypt data
             let shared_secret = compute_shared_secret(
-                value.private_key_part(),
+                <&[u8; 32]>::try_from(value.private_key().as_ref())?,
                 buffer[32..64].try_into().unwrap(),
             )?;
 

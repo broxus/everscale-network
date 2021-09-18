@@ -13,7 +13,7 @@ pub struct AdnlKeystore {
 impl AdnlKeystore {
     pub fn from_tagged_keys<I>(keys: I) -> Result<Self>
     where
-        I: IntoIterator<Item = (ed25519_dalek::SecretKey, usize)>,
+        I: IntoIterator<Item = (ed25519_consensus::SigningKey, usize)>,
     {
         let mut result = AdnlKeystore {
             keys: Default::default(),
@@ -49,7 +49,7 @@ impl AdnlKeystore {
 
     pub fn add_key(
         &mut self,
-        key: ed25519_dalek::SecretKey,
+        key: ed25519_consensus::SigningKey,
         tag: usize,
     ) -> Result<AdnlNodeIdShort> {
         let (full_id, short_id) = key.compute_node_ids()?;

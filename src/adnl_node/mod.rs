@@ -1,4 +1,4 @@
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::net::SocketAddrV4;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -601,7 +601,9 @@ impl AdnlNode {
 
                 let message = ton::adnl::message::message::ConfirmChannel {
                     key: ton::int256(*channel.peer_channel_public_key()),
-                    peer_key: ton::int256(peer.channel_key().public_key().to_bytes()),
+                    peer_key: ton::int256(<[u8; 32]>::try_from(
+                        peer.channel_key().public_key().as_ref(),
+                    )?),
                     date: channel.peer_channel_date(),
                 }
                 .into_boxed();
@@ -612,7 +614,9 @@ impl AdnlNode {
                 log::debug!("Create channel {} -> {}", local_id, peer_id);
 
                 let message = ton::adnl::message::message::CreateChannel {
-                    key: ton::int256(peer.channel_key().public_key().to_bytes()),
+                    key: ton::int256(<[u8; 32]>::try_from(
+                        peer.channel_key().public_key().as_ref(),
+                    )?),
                     date: now(),
                 }
                 .into_boxed();
@@ -790,7 +794,7 @@ impl AdnlNode {
 
     pub fn add_key(
         &mut self,
-        key: ed25519_dalek::SecretKey,
+        key: ed25519_consensus::SigningKey,
         tag: usize,
     ) -> Result<AdnlNodeIdShort> {
         use dashmap::mapref::entry::Entry;

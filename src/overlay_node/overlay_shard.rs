@@ -391,14 +391,14 @@ impl OverlayShard {
             }
         };
         let signature = key.sign(&signature);
-
+        let signature_bytes: [u8; 64] = signature.try_into()?;
         let broadcast = ton::overlay::broadcast::Broadcast {
             src: key.full_id().as_tl().into_boxed(),
             certificate: ton::overlay::Certificate::Overlay_EmptyCertificate,
             flags: BROADCAST_FLAG_ANY_SENDER,
             data: ton::bytes(data.to_vec()),
             date,
-            signature: ton::bytes(signature.as_ref().to_vec()),
+            signature: ton::bytes(signature_bytes.to_vec()),
         }
         .into_boxed();
         let mut buffer = self.message_prefix.clone();
@@ -641,6 +641,7 @@ impl OverlayShard {
             None,
         )?;
         let signature = key.sign(&signature);
+        let signature_bytes: [u8; 64] = signature.try_into()?;
 
         let broadcast = ton::overlay::broadcast::BroadcastFec {
             src: key.full_id().as_tl().into_boxed(),
@@ -652,7 +653,7 @@ impl OverlayShard {
             seqno: transfer.seqno as i32,
             fec: transfer.encoder.params().clone().into_boxed(),
             date,
-            signature: ton::bytes(signature.as_ref().to_vec()),
+            signature: ton::bytes(signature_bytes.to_vec()),
         }
         .into_boxed();
 

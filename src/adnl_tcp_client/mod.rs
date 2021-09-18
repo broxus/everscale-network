@@ -27,7 +27,7 @@ pub struct AdnlTcpClient {
 #[derive(Debug, Clone)]
 pub struct AdnlTcpClientConfig {
     pub server_address: SocketAddrV4,
-    pub server_key: ed25519_dalek::PublicKey,
+    pub server_key: ed25519_consensus::VerificationKey,
     pub socket_read_timeout: Duration,
     pub socket_send_timeout: Duration,
 }

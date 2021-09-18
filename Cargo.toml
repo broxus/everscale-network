@@ -27,7 +27,7 @@ tokio = { version = "1.6", features = ["sync", "net", "rt", "time", "io-util", "
 tokio-io-timeout = "1.1.1"
 x25519-dalek-ng = "1.1"
 
-ed25519-dalek = { git = "https://github.com/broxus/ed25519-dalek.git" }
+ed25519-consensus = "1.0.0"
 raptorq = { git = "https://github.com/Rexagon/raptorq.git" }
 
 ton_types = { git = "https://github.com/broxus/ton-labs-types" }
@@ -39,4 +39,4 @@ default-features = false
 features = ["ton_api"]
 
 [features]
-asm = ["sha2/asm", "ed25519-dalek/asm", "ton_types/asm"]
+asm = ["sha2/asm",  "ton_types/asm"]

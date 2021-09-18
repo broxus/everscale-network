@@ -168,16 +168,15 @@ impl ChannelSide {
 }
 
 pub struct ChannelKey {
-    public_key: ed25519_dalek::PublicKey,
+    public_key: ed25519_consensus::VerificationKey,
     private_key_part: [u8; 32],
 }
 
 impl ChannelKey {
     pub fn generate() -> Self {
-        let private_key = ed25519_dalek::SecretKey::generate(&mut rand::thread_rng());
-        let public_key = ed25519_dalek::PublicKey::from(&private_key);
-        let private_key = ed25519_dalek::ExpandedSecretKey::from(&private_key);
-        let private_key_part = private_key.to_bytes()[0..32].try_into().unwrap();
+        let private_key = ed25519_consensus::SigningKey::new(&mut rand::thread_rng());
+        let public_key = ed25519_consensus::VerificationKey::from(&private_key);
+        let private_key_part = private_key.as_ref()[0..32].try_into().unwrap();
 
         Self {
             public_key,
@@ -185,7 +184,7 @@ impl ChannelKey {
         }
     }
 
-    pub fn public_key(&self) -> &ed25519_dalek::PublicKey {
+    pub fn public_key(&self) -> &ed25519_consensus::VerificationKey {
         &self.public_key
     }
 
