@@ -28,6 +28,7 @@ pub struct AdnlNode {
     ip_address: AdnlAddressUdp,
     keystore: AdnlKeystore,
     options: AdnlNodeOptions,
+    node_filter: Option<Arc<dyn AdnlNodeFilter>>,
 
     /// Known peers for each local node id
     peers: FxDashMap<AdnlNodeIdShort, Arc<AdnlPeers>>,
@@ -91,11 +92,24 @@ impl Default for AdnlNodeOptions {
     }
 }
 
+pub trait AdnlNodeFilter: Send + Sync {
+    fn check(&self, ctx: PeerContext, ip: AdnlAddressUdp, peer_id: &AdnlNodeIdShort) -> bool;
+}
+
+#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
+pub enum PeerContext {
+    AdnlPacket,
+    Dht,
+    PublicOverlay,
+    PrivateOverlay,
+}
+
 impl AdnlNode {
     pub fn new(
         ip_address: AdnlAddressUdp,
         keystore: AdnlKeystore,
         options: AdnlNodeOptions,
+        node_filter: Option<Arc<dyn AdnlNodeFilter>>,
     ) -> Arc<Self> {
         let (sender_queue_tx, sender_queue_rx) = mpsc::unbounded_channel();
         let peers = FxDashMap::with_capacity_and_hasher(keystore.keys().len(), Default::default());
@@ -109,6 +123,7 @@ impl AdnlNode {
             ip_address,
             keystore,
             options,
+            node_filter,
             peers,
             channels_by_id: Default::default(),
             channels_by_peers: Default::default(),
@@ -487,7 +502,13 @@ impl AdnlNode {
 
             if let Some(list) = &packet.address {
                 let ip_address = parse_address_list_view(list)?;
-                self.add_peer(local_id, &peer_id, ip_address, full_id)?;
+                self.add_peer(
+                    PeerContext::AdnlPacket,
+                    local_id,
+                    &peer_id,
+                    ip_address,
+                    full_id,
+                )?;
             }
 
             peer_id
@@ -774,6 +795,10 @@ impl AdnlNode {
         self.ip_address
     }
 
+    pub fn start_time(&self) -> i32 {
+        self.start_time
+    }
+
     pub fn build_address_list(
         &self,
         expire_at: Option<i32>,
@@ -818,6 +843,7 @@ impl AdnlNode {
 
     pub fn add_peer(
         &self,
+        ctx: PeerContext,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
         peer_ip_address: AdnlAddressUdp,
@@ -827,6 +853,12 @@ impl AdnlNode {
 
         if peer_id == local_id {
             return Ok(false);
+        }
+
+        if let Some(filter) = &self.node_filter {
+            if !filter.check(ctx, peer_ip_address, peer_id) {
+                return Ok(false);
+            }
         }
 
         match self.get_peers(local_id)?.entry(*peer_id) {

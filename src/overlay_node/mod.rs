@@ -72,9 +72,13 @@ impl OverlayNode {
         for (peer_ip_address, public_key) in peers {
             let (peer_full_id, peer_id) = public_key.compute_node_ids()?;
 
-            let is_new_peer =
-                self.adnl
-                    .add_peer(local_id, &peer_id, *peer_ip_address, peer_full_id)?;
+            let is_new_peer = self.adnl.add_peer(
+                PeerContext::PrivateOverlay,
+                local_id,
+                &peer_id,
+                *peer_ip_address,
+                peer_full_id,
+            )?;
 
             if is_new_peer {
                 new_peers.push(peer_id);
@@ -115,9 +119,13 @@ impl OverlayNode {
         let peer_id_full = AdnlNodeIdFull::try_from(&node.id)?;
         let peer_id = peer_id_full.compute_short_id()?;
 
-        let is_new_peer =
-            self.adnl
-                .add_peer(self.node_key.id(), &peer_id, ip_address, peer_id_full)?;
+        let is_new_peer = self.adnl.add_peer(
+            PeerContext::PublicOverlay,
+            self.node_key.id(),
+            &peer_id,
+            ip_address,
+            peer_id_full,
+        )?;
         if is_new_peer {
             shard.add_public_peer(&peer_id, node);
             Ok(Some(peer_id))
@@ -149,9 +157,13 @@ impl OverlayNode {
             let peer_id_full = AdnlNodeIdFull::try_from(&node.id)?;
             let peer_id = peer_id_full.compute_short_id()?;
 
-            let is_new_peer =
-                self.adnl
-                    .add_peer(self.node_key.id(), &peer_id, ip_address, peer_id_full)?;
+            let is_new_peer = self.adnl.add_peer(
+                PeerContext::PublicOverlay,
+                self.node_key.id(),
+                &peer_id,
+                ip_address,
+                peer_id_full,
+            )?;
             if is_new_peer {
                 shard.add_public_peer(&peer_id, node);
                 result.push(peer_id);

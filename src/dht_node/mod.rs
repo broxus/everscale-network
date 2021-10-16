@@ -6,7 +6,7 @@ use rand::Rng;
 use ton_api::ton::{self, TLObject};
 use ton_api::IntoBoxed;
 
-use crate::adnl_node::AdnlNode;
+use crate::adnl_node::{AdnlNode, PeerContext};
 use crate::overlay_node::MAX_OVERLAY_PEERS;
 use crate::subscriber::*;
 use crate::utils::*;
@@ -91,9 +91,13 @@ impl DhtNode {
         let peer_id = peer_full_id.compute_short_id()?;
         let peer_ip_address = parse_address_list(&peer.addr_list)?;
 
-        let is_new_peer =
-            self.adnl
-                .add_peer(self.node_key.id(), &peer_id, peer_ip_address, peer_full_id)?;
+        let is_new_peer = self.adnl.add_peer(
+            PeerContext::Dht,
+            self.node_key.id(),
+            &peer_id,
+            peer_ip_address,
+            peer_full_id,
+        )?;
         if !is_new_peer {
             return Ok(None);
         }
