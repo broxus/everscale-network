@@ -53,6 +53,10 @@ pub struct OverlayShardOptions {
     pub overlay_peers_timeout_ms: u64,
     /// Default: 3
     pub broadcast_target_count: usize,
+    /// Default: 3
+    pub secondary_broadcast_target_count: usize,
+    /// Default: 5
+    pub secondary_fec_broadcast_target_count: usize,
     /// Default: 20
     pub max_broadcast_wave: usize,
     /// Default: 60
@@ -68,6 +72,8 @@ impl Default for OverlayShardOptions {
             broadcast_gc_timeout_ms: 1000,
             overlay_peers_timeout_ms: 60000,
             broadcast_target_count: 3,
+            secondary_broadcast_target_count: 3,
+            secondary_fec_broadcast_target_count: 5,
             max_broadcast_wave: 20,
             broadcast_timeout_sec: 60,
         }
@@ -288,7 +294,7 @@ impl OverlayShard {
 
         let neighbours = self
             .neighbours
-            .get_random_peers(self.options.broadcast_target_count, Some(peer_id));
+            .get_random_peers(self.options.secondary_broadcast_target_count, Some(peer_id));
         self.distribute_broadcast(local_id, &neighbours, raw_data);
         self.spawn_broadcast_gc_task(broadcast_id);
 
@@ -369,7 +375,10 @@ impl OverlayShard {
             })?;
         }
 
-        let neighbours = self.neighbours.get_random_peers(5, Some(peer_id));
+        let neighbours = self.neighbours.get_random_peers(
+            self.options.secondary_fec_broadcast_target_count,
+            Some(peer_id),
+        );
         self.distribute_broadcast(local_id, &neighbours, raw_data);
 
         Ok(())
@@ -404,7 +413,9 @@ impl OverlayShard {
         let mut buffer = self.message_prefix.clone();
         serialize_append(&mut buffer, &broadcast)?;
 
-        let neighbours = self.neighbours.get_random_peers(3, None);
+        let neighbours = self
+            .neighbours
+            .get_random_peers(self.options.broadcast_target_count, None);
         self.distribute_broadcast(local_id, &neighbours, &buffer);
         self.spawn_broadcast_gc_task(broadcast_id);
 
