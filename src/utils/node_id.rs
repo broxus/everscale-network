@@ -1,7 +1,6 @@
 use std::convert::{TryFrom, TryInto};
 
 use anyhow::Result;
-use ed25519_dalek::ed25519::signature::Signature;
 use ed25519_dalek::Verifier;
 use rand::Rng;
 use ton_api::{ton, IntoBoxed};
