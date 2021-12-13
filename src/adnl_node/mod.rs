@@ -222,6 +222,8 @@ impl AdnlNode {
         tokio::spawn(async move {
             let mut buffer = None;
 
+            tokio::pin!(complete_signal);
+
             loop {
                 // Receive packet
                 let fut = socket.recv_from(
@@ -232,7 +234,7 @@ impl AdnlNode {
 
                 let data = tokio::select! {
                     data = fut => data,
-                    _ = complete_signal.clone() => return,
+                    _ = &mut complete_signal => return,
                 };
 
                 let len = match data {
