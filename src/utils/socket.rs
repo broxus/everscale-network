@@ -6,6 +6,7 @@ use tokio::net::UdpSocket;
 
 pub fn make_udp_socket(port: u16) -> Result<Arc<UdpSocket>> {
     let udp_socket = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port))?;
+    udp_socket.set_nonblocking(true)?;
 
     #[cfg(unix)]
     {
