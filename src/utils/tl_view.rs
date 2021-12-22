@@ -9,7 +9,7 @@ where
     Ok(view)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PacketContentsView<'a> {
     pub from: Option<PublicKeyView<'a>>,
     pub from_short: Option<HashRef<'a>>,
@@ -23,6 +23,28 @@ pub struct PacketContentsView<'a> {
     pub reinit_date: Option<i32>,
     pub dst_reinit_date: Option<i32>,
     pub signature: Option<&'a [u8]>,
+}
+
+impl Clone for PacketContentsView<'_> {
+    fn clone(&self) -> Self {
+        Self {
+            from: self.from,
+            from_short: self.from_short,
+            message: self.message,
+            messages: self
+                .messages
+                .as_ref()
+                .map(|items| SmallVec::from_slice(items)),
+            address: self.address,
+            seqno: self.seqno,
+            confirm_seqno: self.confirm_seqno,
+            recv_addr_list_version: self.recv_addr_list_version,
+            recv_priority_addr_list_version: self.recv_priority_addr_list_version,
+            reinit_date: self.reinit_date,
+            dst_reinit_date: self.dst_reinit_date,
+            signature: self.signature,
+        }
+    }
 }
 
 impl<'a> ReadFromPacket<'a> for PacketContentsView<'a> {
