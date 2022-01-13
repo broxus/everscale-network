@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use ton_api::ton;
 
 pub use self::decoder::RaptorQDecoder;
@@ -81,9 +81,16 @@ impl RldpNode {
                     query_id: answer_id,
                     data,
                 }) if answer_id == &query_id => Ok((Some(data.to_vec()), roundtrip)),
-                Ok(RldpMessageView::Answer { .. }) => Err(RldpNodeError::QueryIdMismatch.into()),
-                _ => Err(RldpNodeError::UnexpectedAnswer.into()),
-            },
+                Ok(RldpMessageView::Answer { .. }) => Err(RldpNodeError::QueryIdMismatch),
+                Ok(RldpMessageView::Message { .. }) => {
+                    Err(RldpNodeError::UnexpectedAnswer("RldpMessageView::Message"))
+                }
+                Ok(RldpMessageView::Query { .. }) => {
+                    Err(RldpNodeError::UnexpectedAnswer("RldpMessageView::Query"))
+                }
+                Err(e) => Err(RldpNodeError::InvalidPacketContent(e)),
+            }
+            .with_context(|| format!("RLDP query from peer {} failed", peer_id)),
             (None, roundtrip) => Ok((None, roundtrip)),
         }
     }
@@ -120,8 +127,10 @@ pub struct MessagePart {
 
 #[derive(thiserror::Error, Debug)]
 enum RldpNodeError {
-    #[error("Unexpected answer")]
-    UnexpectedAnswer,
+    #[error("Unexpected answer: {0}")]
+    UnexpectedAnswer(&'static str),
+    #[error("Invalid packet content: {0:?}")]
+    InvalidPacketContent(PacketContentsError),
     #[error("Unknown query id")]
     QueryIdMismatch,
 }
