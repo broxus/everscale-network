@@ -17,6 +17,7 @@ pub fn build_handshake_packet(
 ) -> Result<()> {
     // Create temp local key
     let temp_private_key = ed25519_dalek::SecretKey::generate(&mut rand::thread_rng());
+    let temp_private_key = ed25519_dalek::ExpandedSecretKey::from(&temp_private_key);
     let temp_public_key = ed25519_dalek::PublicKey::from(&temp_private_key);
 
     // Prepare packet
@@ -31,10 +32,7 @@ pub fn build_handshake_packet(
     buffer[64..96].copy_from_slice(&checksum);
 
     // Encrypt packet data
-    let temp_private_key_part = ed25519_dalek::ExpandedSecretKey::from(&temp_private_key)
-        .to_bytes()[0..32]
-        .try_into()
-        .unwrap();
+    let temp_private_key_part = temp_private_key.to_bytes()[0..32].try_into().unwrap();
 
     let shared_secret =
         compute_shared_secret(&temp_private_key_part, peer_id_full.public_key().as_bytes())?;
