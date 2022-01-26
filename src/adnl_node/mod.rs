@@ -137,6 +137,16 @@ impl AdnlNode {
         })
     }
 
+    pub fn metrics(&self) -> AdnlNodeMetrics {
+        AdnlNodeMetrics {
+            peer_count: self.peers.len(),
+            channels_by_id_len: self.channels_by_id.len(),
+            channels_by_peers_len: self.channels_by_peers.len(),
+            incoming_transfers_len: self.incoming_transfers.len(),
+            query_count: self.queries.len(),
+        }
+    }
+
     pub async fn start(self: &Arc<Self>, mut subscribers: Vec<Arc<dyn Subscriber>>) -> Result<()> {
         // Consume receiver
         let sender_queue_rx = match self.sender_queue_rx.lock().take() {
@@ -1057,6 +1067,15 @@ impl AdnlNode {
 
         Ok(())
     }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct AdnlNodeMetrics {
+    pub peer_count: usize,
+    pub channels_by_id_len: usize,
+    pub channels_by_peers_len: usize,
+    pub incoming_transfers_len: usize,
+    pub query_count: usize,
 }
 
 struct PacketToSend {

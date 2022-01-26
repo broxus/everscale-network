@@ -12,6 +12,15 @@ pub struct QueriesCache {
 }
 
 impl QueriesCache {
+    #[allow(unused)]
+    pub fn is_empty(&self) -> bool {
+        self.queries.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.queries.len()
+    }
+
     pub fn add_query(self: &Arc<Self>, query_id: QueryId) -> PendingAdnlQuery {
         let barrier = Arc::new(Barrier::new(2));
         let query = QueryState::Sent(barrier.clone());

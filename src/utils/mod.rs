@@ -67,8 +67,8 @@ pub fn build_packet_cipher(shared_secret: &[u8; 32], checksum: &[u8; 32]) -> aes
     aes_ctr_bytes[4..16].copy_from_slice(&shared_secret[20..32]);
 
     aes::Aes256Ctr::new(
-        generic_array::GenericArray::from_slice(&aes_key_bytes),
-        generic_array::GenericArray::from_slice(&aes_ctr_bytes),
+        &generic_array::GenericArray::from(aes_key_bytes),
+        &generic_array::GenericArray::from(aes_ctr_bytes),
     )
 }
 

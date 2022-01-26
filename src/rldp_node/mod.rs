@@ -51,6 +51,13 @@ impl RldpNode {
         })
     }
 
+    pub fn metrics(&self) -> RldpNodeMetrics {
+        RldpNodeMetrics {
+            peer_count: self.peers.len(),
+            transfers_cache_len: self.transfers.len(),
+        }
+    }
+
     pub async fn query(
         &self,
         local_id: &AdnlNodeIdShort,
@@ -115,6 +122,12 @@ impl Subscriber for RldpNode {
 
         Ok(true)
     }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct RldpNodeMetrics {
+    pub peer_count: usize,
+    pub transfers_cache_len: usize,
 }
 
 pub struct MessagePart {

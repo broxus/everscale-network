@@ -143,6 +143,15 @@ impl TransfersCache {
         result
     }
 
+    #[allow(unused)]
+    pub fn is_empty(&self) -> bool {
+        self.transfers.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.transfers.len()
+    }
+
     /// Handles incoming message
     pub async fn handle_message(
         &self,

@@ -69,6 +69,14 @@ impl DhtNode {
         Ok(Arc::new(dht_node))
     }
 
+    pub fn metrics(&self) -> DhtNodeMetrics {
+        DhtNodeMetrics {
+            peers_cache_len: self.known_peers.len(),
+            bucket_peer_count: self.buckets.iter().map(|bucket| bucket.len()).sum(),
+            storage_len: self.storage.len(),
+        }
+    }
+
     pub fn adnl(&self) -> &Arc<AdnlNode> {
         &self.adnl
     }
@@ -692,6 +700,13 @@ impl Subscriber for DhtNode {
             QueryConsumingResult::Rejected(_) => Err(DhtNodeError::UnexpectedQuery.into()),
         }
     }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct DhtNodeMetrics {
+    pub peers_cache_len: usize,
+    pub bucket_peer_count: usize,
+    pub storage_len: usize,
 }
 
 pub struct ExternalDhtIter {

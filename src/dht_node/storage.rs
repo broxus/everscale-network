@@ -12,6 +12,15 @@ pub struct Storage {
 }
 
 impl Storage {
+    #[allow(unused)]
+    pub fn is_empty(&self) -> bool {
+        self.storage.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.storage.len()
+    }
+
     pub fn get(&self, key: &StorageKey) -> Option<ton::dht::value::Value> {
         match self.storage.get(key) {
             Some(item) if item.ttl > now() => Some(item.value().clone()),
