@@ -139,7 +139,7 @@ impl AdnlNode {
 
     pub fn metrics(&self) -> AdnlNodeMetrics {
         AdnlNodeMetrics {
-            peer_count: self.peers.len(),
+            peer_count: self.peers.iter().map(|peers| peers.len()).sum(),
             channels_by_id_len: self.channels_by_id.len(),
             channels_by_peers_len: self.channels_by_peers.len(),
             incoming_transfers_len: self.incoming_transfers.len(),
