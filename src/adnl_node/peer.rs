@@ -24,6 +24,7 @@ impl AdnlPeer {
         }
     }
 
+    #[inline(always)]
     pub fn id(&self) -> &AdnlNodeIdFull {
         &self.id
     }

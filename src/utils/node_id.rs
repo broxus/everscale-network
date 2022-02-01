@@ -16,6 +16,7 @@ impl AdnlNodeIdFull {
         Self(public_key)
     }
 
+    #[inline(always)]
     pub fn public_key(&self) -> &ed25519_dalek::PublicKey {
         &self.0
     }
@@ -208,18 +209,22 @@ impl StoredAdnlNodeKey {
         }
     }
 
+    #[inline(always)]
     pub fn id(&self) -> &AdnlNodeIdShort {
         &self.short_id
     }
 
+    #[inline(always)]
     pub fn full_id(&self) -> &AdnlNodeIdFull {
         &self.full_id
     }
 
+    #[inline(always)]
     pub fn private_key(&self) -> &ed25519_dalek::ExpandedSecretKey {
         &self.private_key
     }
 
+    #[inline(always)]
     pub fn private_key_part(&self) -> &[u8; 32] {
         &self.private_key_part
     }

@@ -1,4 +1,8 @@
+use std::convert::TryInto;
+
 use smallvec::SmallVec;
+
+use crate::utils::PacketView;
 
 pub fn deserialize_view<'a, T>(packet: &'a [u8]) -> PacketContentsResult<T>
 where
@@ -22,33 +26,14 @@ pub struct PacketContentsView<'a> {
     pub recv_priority_addr_list_version: Option<i32>,
     pub reinit_date: Option<i32>,
     pub dst_reinit_date: Option<i32>,
-    pub signature: Option<&'a [u8]>,
 }
 
-impl Clone for PacketContentsView<'_> {
-    fn clone(&self) -> Self {
-        Self {
-            from: self.from,
-            from_short: self.from_short,
-            message: self.message,
-            messages: self
-                .messages
-                .as_ref()
-                .map(|items| SmallVec::from_slice(items)),
-            address: self.address,
-            seqno: self.seqno,
-            confirm_seqno: self.confirm_seqno,
-            recv_addr_list_version: self.recv_addr_list_version,
-            recv_priority_addr_list_version: self.recv_priority_addr_list_version,
-            reinit_date: self.reinit_date,
-            dst_reinit_date: self.dst_reinit_date,
-            signature: self.signature,
-        }
-    }
-}
+impl<'a> PacketContentsView<'a> {
+    pub fn read_from_packet(
+        packet: &'a [u8],
+    ) -> PacketContentsResult<(Self, Option<PacketContentsSignature>)> {
+        let offset = &mut 0usize;
 
-impl<'a> ReadFromPacket<'a> for PacketContentsView<'a> {
-    fn read_from(packet: &'a [u8], offset: &mut usize) -> PacketContentsResult<Self> {
         let constructor = u32::read_from(packet, offset)?;
         if constructor != 0xd142cd89 {
             return Err(PacketContentsError::UnknownConstructor);
@@ -56,6 +41,7 @@ impl<'a> ReadFromPacket<'a> for PacketContentsView<'a> {
 
         read_bytes(packet, offset)?; // skip rand1
 
+        let flags_offset = *offset;
         let flags = u32::read_from(packet, offset)?;
 
         let from = read_optional(packet, offset, flags & 0x0001 != 0)?;
@@ -76,24 +62,123 @@ impl<'a> ReadFromPacket<'a> for PacketContentsView<'a> {
         let reinit_date = read_optional(packet, offset, flags & 0x0400 != 0)?;
         let dst_reinit_date = read_optional(packet, offset, flags & 0x0400 != 0)?;
 
-        let signature = read_optional(packet, offset, flags & 0x0800 != 0)?;
+        let signature = if flags & 0x0800 != 0 {
+            let signature_start = *offset;
+            let signature = <&[u8]>::read_from(packet, offset)?;
+            let signature_end = *offset;
+
+            if signature.len() != 64 {
+                return Err(PacketContentsError::InvalidSignature);
+            }
+
+            Some(PacketContentsSignature {
+                signature: signature.try_into().unwrap(),
+                flags_offset,
+                signature_start,
+                signature_end,
+            })
+        } else {
+            None
+        };
 
         read_bytes(packet, offset)?; // skip rand2
 
-        Ok(Self {
-            from,
-            from_short,
-            message,
-            messages,
-            address,
-            seqno,
-            confirm_seqno,
-            recv_addr_list_version,
-            recv_priority_addr_list_version,
-            reinit_date,
-            dst_reinit_date,
+        Ok((
+            Self {
+                from,
+                from_short,
+                message,
+                messages,
+                address,
+                seqno,
+                confirm_seqno,
+                recv_addr_list_version,
+                recv_priority_addr_list_version,
+                reinit_date,
+                dst_reinit_date,
+            },
             signature,
-        })
+        ))
+    }
+}
+
+impl Clone for PacketContentsView<'_> {
+    fn clone(&self) -> Self {
+        Self {
+            from: self.from,
+            from_short: self.from_short,
+            message: self.message,
+            messages: self
+                .messages
+                .as_ref()
+                .map(|items| SmallVec::from_slice(items)),
+            address: self.address,
+            seqno: self.seqno,
+            confirm_seqno: self.confirm_seqno,
+            recv_addr_list_version: self.recv_addr_list_version,
+            recv_priority_addr_list_version: self.recv_priority_addr_list_version,
+            reinit_date: self.reinit_date,
+            dst_reinit_date: self.dst_reinit_date,
+        }
+    }
+}
+
+pub struct PacketContentsSignature {
+    signature: [u8; 64],
+    flags_offset: usize,
+    signature_start: usize,
+    signature_end: usize,
+}
+
+impl PacketContentsSignature {
+    /// Modifies the content of the packet even though the PacketView
+    /// is passed as a constant reference
+    ///
+    /// # Safety
+    ///
+    /// * Must be called only once on same packet
+    ///
+    pub unsafe fn extract<'a>(
+        self,
+        packet: &'a PacketView<'_>,
+    ) -> PacketContentsResult<(&'a [u8], [u8; 64])> {
+        let origin = packet.as_slice().as_ptr() as *mut u8;
+        let packet: &mut [u8] = std::slice::from_raw_parts_mut(origin, packet.len());
+
+        // `packet` before:
+        // [............_*__.................|__________________|.........]
+        // flags_offset ^     signature_start ^    signature_end ^
+
+        // NOTE: `flags_offset + 1` is used because flags are stored in LE bytes order and
+        // we need the second byte (signature mask - 0x0800)
+        let (signature_len, remaining) = match (packet.len(), self.flags_offset + 1) {
+            (packet_len, flags_offset)
+                if flags_offset < packet_len
+                    && self.signature_start < self.signature_end
+                    && self.signature_end < packet_len =>
+            {
+                packet[flags_offset] &= 0xf7; // reset signature bit
+
+                (
+                    self.signature_end - self.signature_start, // signature len
+                    packet_len - self.signature_end,           // remaining
+                )
+            }
+            _ => return Err(PacketContentsError::InvalidSignature),
+        };
+
+        let src = origin.add(self.signature_end);
+        let dst = origin.add(self.signature_start);
+        std::ptr::copy(src, dst, remaining);
+
+        // `packet` after:
+        // [............_0__.................||.........]-----removed-----]
+        // flags_offset ^     signature_start ^
+
+        Ok((
+            std::slice::from_raw_parts(origin, packet.len() - signature_len),
+            self.signature,
+        ))
     }
 }
 
@@ -888,4 +973,6 @@ pub enum PacketContentsError {
     UnexpectedEof,
     #[error("Unknown constructor")]
     UnknownConstructor,
+    #[error("Invalid signature")]
+    InvalidSignature,
 }
