@@ -176,7 +176,7 @@ impl PacketContentsSignature {
         // flags_offset ^     signature_start ^
 
         Ok((
-            std::slice::from_raw_parts(origin, remaining - signature_len),
+            std::slice::from_raw_parts(origin, packet.len() - signature_len),
             self.signature,
         ))
     }
