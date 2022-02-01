@@ -57,7 +57,7 @@ impl OverlayClient {
         let (answer, neighbour, roundtrip) = self
             .send_rldp_query_to_neighbour(neighbour, query, attempt)
             .await?;
-        match ton_api::Deserializer::new(&mut std::io::Cursor::new(answer)).read_boxed() {
+        match ton_api::Deserializer::new(&mut answer.as_slice()).read_boxed() {
             Ok(answer) => {
                 neighbour.query_succeeded(roundtrip, true);
                 Ok(answer)
