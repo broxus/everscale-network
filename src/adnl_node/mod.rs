@@ -686,7 +686,7 @@ impl AdnlNode {
 
         let signer = match channel.as_ref() {
             Some(channel) => MessageSigner::Channel(channel.value()),
-            None => MessageSigner::Random(local_key.full_id()),
+            None => MessageSigner::Random(&local_key),
         };
 
         if size <= MAX_ADNL_MESSAGE_SIZE {
@@ -697,7 +697,7 @@ impl AdnlNode {
                 None => MessageToSend::Single(message),
             };
 
-            self.send_packet(local_id, peer_id, peer, signer, message)
+            self.send_packet(peer_id, peer, signer, message)
         } else {
             fn build_part_message(
                 data: &[u8],
@@ -732,7 +732,6 @@ impl AdnlNode {
                 );
 
                 self.send_packet(
-                    local_id,
                     peer_id,
                     peer,
                     signer,
@@ -748,7 +747,7 @@ impl AdnlNode {
                     &mut offset,
                 ));
 
-                self.send_packet(local_id, peer_id, peer, signer, message)?;
+                self.send_packet(peer_id, peer, signer, message)?;
             }
 
             Ok(())
@@ -757,7 +756,6 @@ impl AdnlNode {
 
     fn send_packet(
         &self,
-        local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
         peer: &AdnlPeer,
         signer: MessageSigner,
@@ -768,15 +766,15 @@ impl AdnlNode {
             MessageToSend::Multiple(messages) => (None, Some(messages.into())),
         };
 
-        let mut data = serialize_boxed(ton::adnl::packetcontents::PacketContents {
+        let mut packet = ton::adnl::packetcontents::PacketContents {
             rand1: ton::bytes(gen_packet_offset()),
             from: match signer {
                 MessageSigner::Channel(_) => None,
-                MessageSigner::Random(local_id_full) => Some(local_id_full.as_tl().into_boxed()),
+                MessageSigner::Random(local_key) => Some(local_key.full_id().as_tl().into_boxed()),
             },
             from_short: match signer {
                 MessageSigner::Channel(_) => None,
-                MessageSigner::Random(_) => Some(local_id.as_tl()),
+                MessageSigner::Random(local_key) => Some(local_key.id().as_tl()),
             },
             message,
             messages,
@@ -798,7 +796,14 @@ impl AdnlNode {
             },
             signature: None,
             rand2: ton::bytes(gen_packet_offset()),
-        })?;
+        };
+
+        if let MessageSigner::Random(signer) = signer {
+            let signature = signer.sign(&serialize_boxed(packet.clone())?);
+            packet.signature = Some(ton::bytes(signature.to_bytes().to_vec()));
+        }
+
+        let mut data = serialize_boxed(packet)?;
 
         match signer {
             MessageSigner::Channel(channel) => channel.encrypt(&mut data)?,
@@ -1107,7 +1112,7 @@ struct PacketToSend {
 #[derive(Copy, Clone)]
 enum MessageSigner<'a> {
     Channel(&'a Arc<AdnlChannel>),
-    Random(&'a AdnlNodeIdFull),
+    Random(&'a Arc<StoredAdnlNodeKey>),
 }
 
 enum MessageToSend {
