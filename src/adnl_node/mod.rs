@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use ed25519_dalek::Verifier;
 use parking_lot::Mutex;
 use sha2::Digest;
 use tokio::net::UdpSocket;
@@ -308,10 +309,11 @@ impl AdnlNode {
         };
 
         // Parse packet
-        let packet = deserialize_view(data.as_slice()).map_err(|_| AdnlNodeError::InvalidPacket)?;
+        let (packet, signature) = PacketContentsView::read_from_packet(data.as_slice())
+            .map_err(|_| AdnlNodeError::InvalidPacket)?;
 
         // Validate packet
-        let peer_id = match self.check_packet(&packet, &local_id, peer_id)? {
+        let peer_id = match self.check_packet(&data, &packet, signature, &local_id, peer_id)? {
             // New packet
             Some(peer_id) => peer_id,
             // Repeated packet
@@ -490,20 +492,36 @@ impl AdnlNode {
     /// Validates incoming packet. Attempts to extract peer id
     fn check_packet(
         &self,
+        raw_packet: &PacketView<'_>,
         packet: &PacketContentsView<'_>,
+        mut signature: Option<PacketContentsSignature>,
         local_id: &AdnlNodeIdShort,
         peer_id: Option<AdnlNodeIdShort>,
     ) -> Result<Option<AdnlNodeIdShort>> {
         use std::cmp::Ordering;
 
+        fn verify(
+            raw_packet: &PacketView<'_>,
+            signature: &mut Option<PacketContentsSignature>,
+            public_key: &ed25519_dalek::PublicKey,
+        ) -> Result<()> {
+            if let Some(signature) = signature.take() {
+                // SAFETY: called only once on same packet
+                let (message, signature) = unsafe { signature.extract(raw_packet)? };
+                let signature = ed25519_dalek::Signature::from_bytes(&signature)?;
+                public_key.verify(message, &signature)?;
+            }
+            Ok(())
+        }
+
         let from_channel = peer_id.is_some();
 
         // Extract peer id
-        let peer_id = if let Some(peer_id) = peer_id {
+        let (peer_id, check_signature) = if let Some(peer_id) = peer_id {
             if packet.from.is_some() || packet.from_short.is_some() {
                 return Err(AdnlPacketError::ExplicitSourceForChannel.into());
             }
-            peer_id
+            (peer_id, true)
         } else if let Some(public_key) = packet.from {
             let full_id: AdnlNodeIdFull = public_key.try_into()?;
             let peer_id = full_id.compute_short_id()?;
@@ -511,6 +529,8 @@ impl AdnlNode {
             if matches!(packet.from_short, Some(id) if peer_id.as_slice() != id) {
                 return Err(AdnlPacketError::InvalidPeerId.into());
             }
+
+            verify(raw_packet, &mut signature, full_id.public_key())?;
 
             if let Some(list) = &packet.address {
                 let ip_address = parse_address_list_view(list)?;
@@ -523,9 +543,9 @@ impl AdnlNode {
                 )?;
             }
 
-            peer_id
+            (peer_id, false)
         } else if let Some(peer_id) = packet.from_short {
-            AdnlNodeIdShort::new(*peer_id)
+            (AdnlNodeIdShort::new(*peer_id), true)
         } else {
             return Err(AdnlPacketError::NoKeyDataInPacket.into());
         };
@@ -549,39 +569,40 @@ impl AdnlNode {
         }
         .ok_or(AdnlPacketError::UnknownPeer)?;
 
-        if let (Some(dst_reinit_date), Some(reinit_date)) = (dst_reinit_date, reinit_date) {
-            if dst_reinit_date != 0 {
-                match dst_reinit_date.cmp(&peer.receiver_state().reinit_date()) {
-                    Ordering::Equal => { /* do nothing */ }
-                    Ordering::Greater => return Err(AdnlPacketError::DstReinitDateTooNew.into()),
-                    Ordering::Less => {
-                        std::mem::drop(peer);
+        if check_signature {
+            verify(raw_packet, &mut signature, peer.id().public_key())?;
+        }
 
-                        self.send_message(
-                            local_id,
-                            &peer_id,
-                            ton::adnl::Message::Adnl_Message_Nop,
-                        )?;
-                        return Err(AdnlPacketError::DstReinitDateTooOld.into());
-                    }
-                }
+        if let (Some(dst_reinit_date), Some(reinit_date)) = (dst_reinit_date, reinit_date) {
+            let local_reinit_date = peer.receiver_state().reinit_date();
+            let dst_reinit_date_cmp = dst_reinit_date.cmp(&local_reinit_date);
+
+            if dst_reinit_date_cmp == Ordering::Greater {
+                return Err(AdnlPacketError::DstReinitDateTooNew.into());
+            }
+
+            if reinit_date > now() + self.options.clock_tolerance_sec {
+                return Err(AdnlPacketError::SrcReinitDateTooNew.into());
             }
 
             let sender_reinit_date = peer.sender_state().reinit_date();
             match reinit_date.cmp(&sender_reinit_date) {
                 Ordering::Equal => { /* do nothing */ }
                 Ordering::Greater => {
-                    if reinit_date > now() + self.options.clock_tolerance_sec {
-                        return Err(AdnlPacketError::SrcReinitDateTooNew.into());
-                    } else {
-                        peer.sender_state().set_reinit_date(reinit_date);
-                        if sender_reinit_date != 0 {
-                            peer.sender_state().history().reset();
-                            peer.receiver_state().history().reset();
-                        }
+                    peer.sender_state().set_reinit_date(reinit_date);
+                    if sender_reinit_date != 0 {
+                        peer.sender_state().history().reset();
+                        peer.receiver_state().history().reset();
                     }
                 }
                 Ordering::Less => return Err(AdnlPacketError::SrcReinitDateTooOld.into()),
+            };
+
+            if dst_reinit_date != 0 && dst_reinit_date_cmp == Ordering::Less {
+                std::mem::drop(peer);
+
+                self.send_message(local_id, &peer_id, ton::adnl::Message::Adnl_Message_Nop)?;
+                return Err(AdnlPacketError::DstReinitDateTooOld.into());
             }
         }
 

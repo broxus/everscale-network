@@ -16,6 +16,7 @@ impl AdnlNodeIdFull {
         Self(public_key)
     }
 
+    #[inline(always)]
     pub fn public_key(&self) -> &ed25519_dalek::PublicKey {
         &self.0
     }
