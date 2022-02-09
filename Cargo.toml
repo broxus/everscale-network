@@ -11,21 +11,21 @@ anyhow = "1.0"
 base64 = "0.13"
 curve25519-dalek-ng = "4.1"
 crossbeam-queue = "0.3"
-dashmap = "5.0"
-generic-array = "0.14"
+dashmap = "5.1.0"
+generic-array = "0.14.5"
 hex = "0.4"
 log = "0.4"
 libc = "0.2"
-parking_lot = "0.11"
+parking_lot = "0.12.0"
 rand = "0.8"
 rustc-hash = "1.1.0"
 serde = "1.0"
 sha2 = "0.9"
-smallvec = { version = "1.6.1", features = ["union", "const_generics"] }
+smallvec = { version = "1.8.0", features = ["union", "const_generics"] }
 thiserror = "1.0"
-tokio = { version = "1.6", features = ["sync", "net", "rt", "time", "io-util", "macros"] }
-tokio-io-timeout = "1.1.1"
-x25519-dalek-ng = "1.1"
+tokio = { version = "1.16.1", features = ["sync", "net", "rt", "time", "io-util", "macros"] }
+tokio-io-timeout = "1.2.0"
+x25519-dalek-ng = "1.1.1"
 
 ed25519-dalek = { git = "https://github.com/broxus/ed25519-dalek.git" }
 raptorq = { git = "https://github.com/Rexagon/raptorq.git" }
@@ -37,6 +37,3 @@ git = "https://github.com/broxus/ton-labs-tl.git"
 package = "ton_api"
 default-features = false
 features = ["ton_api"]
-
-[features]
-asm = ["sha2/asm", "ed25519-dalek/asm", "ton_types/asm"]
