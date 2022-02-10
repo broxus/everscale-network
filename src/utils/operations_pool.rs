@@ -26,6 +26,14 @@ where
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.operations.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.operations.len()
+    }
+
     pub async fn do_or_wait<O>(
         &self,
         id: &K,
