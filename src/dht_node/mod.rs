@@ -74,6 +74,7 @@ impl DhtNode {
             peers_cache_len: self.known_peers.len(),
             bucket_peer_count: self.buckets.iter().map(|bucket| bucket.len()).sum(),
             storage_len: self.storage.len(),
+            storage_total_size: self.storage.total_size(),
         }
     }
 
@@ -707,6 +708,7 @@ pub struct DhtNodeMetrics {
     pub peers_cache_len: usize,
     pub bucket_peer_count: usize,
     pub storage_len: usize,
+    pub storage_total_size: usize,
 }
 
 pub struct ExternalDhtIter {

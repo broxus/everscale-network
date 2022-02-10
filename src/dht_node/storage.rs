@@ -21,6 +21,10 @@ impl Storage {
         self.storage.len()
     }
 
+    pub fn total_size(&self) -> usize {
+        self.storage.iter().map(|item| item.value.0.len()).sum()
+    }
+
     pub fn get(&self, key: &StorageKey) -> Option<ton::dht::value::Value> {
         match self.storage.get(key) {
             Some(item) if item.ttl > now() => Some(item.value().clone()),
