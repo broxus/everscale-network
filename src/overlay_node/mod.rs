@@ -6,10 +6,10 @@ use anyhow::Result;
 use ton_api::ton::{self, TLObject};
 use ton_api::IntoBoxed;
 
-pub use self::overlay_shard::OverlayShardOptions;
 use self::overlay_shard::{
     CatchainUpdate, IncomingBroadcastInfo, OutgoingBroadcastInfo, OverlayShard,
 };
+pub use self::overlay_shard::{OverlayShardMetrics, OverlayShardOptions};
 use crate::adnl_node::*;
 use crate::rldp_node::*;
 use crate::subscriber::*;
@@ -40,6 +40,10 @@ impl OverlayNode {
             subscribers: Default::default(),
             zero_state_file_hash,
         }))
+    }
+
+    pub fn metrics(&self) -> impl Iterator<Item = (OverlayIdShort, OverlayShardMetrics)> + '_ {
+        self.shards.iter().map(|item| (*item.id(), item.metrics()))
     }
 
     pub fn adnl(&self) -> &Arc<AdnlNode> {

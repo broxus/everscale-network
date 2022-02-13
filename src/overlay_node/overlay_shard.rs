@@ -154,6 +154,17 @@ impl OverlayShard {
         Ok(overlay)
     }
 
+    pub fn metrics(&self) -> OverlayShardMetrics {
+        OverlayShardMetrics {
+            owned_broadcasts_len: self.owned_broadcasts.len(),
+            finished_broadcasts_len: self.finished_broadcast_count.load(Ordering::Acquire),
+            node_count: self.nodes.len(),
+            known_peers_len: self.known_peers.len(),
+            random_peers_len: self.random_peers.len(),
+            neighbours: self.neighbours.len(),
+        }
+    }
+
     pub fn id(&self) -> &OverlayIdShort {
         &self.overlay_id
     }
@@ -700,6 +711,16 @@ impl OverlayShard {
             overlay_shard.finished_broadcasts.push(broadcast_id);
         });
     }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct OverlayShardMetrics {
+    pub owned_broadcasts_len: usize,
+    pub finished_broadcasts_len: u32,
+    pub node_count: usize,
+    pub known_peers_len: usize,
+    pub random_peers_len: usize,
+    pub neighbours: usize,
 }
 
 fn process_fec_broadcast(
