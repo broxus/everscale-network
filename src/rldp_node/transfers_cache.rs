@@ -19,14 +19,20 @@ pub struct TransfersCache {
     adnl: Arc<AdnlNode>,
     transfers: Arc<FxDashMap<TransferId, RldpTransfer>>,
     subscribers: Arc<Vec<Arc<dyn Subscriber>>>,
+    force_compression: bool,
 }
 
 impl TransfersCache {
-    pub fn new(adnl: Arc<AdnlNode>, subscribers: Vec<Arc<dyn Subscriber>>) -> Self {
+    pub fn new(
+        adnl: Arc<AdnlNode>,
+        subscribers: Vec<Arc<dyn Subscriber>>,
+        force_compression: bool,
+    ) -> Self {
         Self {
             adnl,
             transfers: Arc::new(Default::default()),
             subscribers: Arc::new(subscribers),
+            force_compression,
         }
     }
 
@@ -35,7 +41,7 @@ impl TransfersCache {
         &self,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
-        data: &[u8],
+        data: Vec<u8>,
         roundtrip: Option<u64>,
     ) -> Result<(Option<Vec<u8>>, u64)> {
         // Initiate outgoing transfer with new id
@@ -287,23 +293,28 @@ impl TransfersCache {
         tokio::spawn({
             let subscribers = self.subscribers.clone();
             let transfers = self.transfers.clone();
+            let force_compression = self.force_compression;
             async move {
                 // Wait until incoming query is received
                 receive_loop(&mut incoming_context, None).await;
-                transfers.insert(incoming_context.transfer_id, RldpTransfer::Done);
+                transfers.insert(transfer_id, RldpTransfer::Done);
 
                 // Process query
-                let outgoing_transfer_id =
-                    answer_loop(&mut incoming_context, transfers.clone(), subscribers)
-                        .await
-                        .unwrap_or_default();
+                let outgoing_transfer_id = answer_loop(
+                    incoming_context,
+                    transfers.clone(),
+                    subscribers,
+                    force_compression,
+                )
+                .await
+                .unwrap_or_default();
 
                 // Clear transfers in background
                 tokio::time::sleep(Duration::from_millis(MAX_TIMEOUT * 2)).await;
                 if let Some(outgoing_transfer_id) = outgoing_transfer_id {
                     transfers.remove(&outgoing_transfer_id);
                 }
-                transfers.remove(&incoming_context.transfer_id);
+                transfers.remove(&transfer_id);
             }
         });
 
@@ -321,7 +332,7 @@ impl TransfersCache {
     }
 }
 
-pub fn make_query(data: &[u8], max_answer_size: Option<i64>) -> Result<(QueryId, Vec<u8>)> {
+pub fn make_query(data: Vec<u8>, max_answer_size: Option<i64>) -> Result<(QueryId, Vec<u8>)> {
     use rand::Rng;
 
     let query_id: QueryId = rand::thread_rng().gen();
@@ -329,7 +340,7 @@ pub fn make_query(data: &[u8], max_answer_size: Option<i64>) -> Result<(QueryId,
         query_id: ton::int256(query_id),
         max_answer_size: max_answer_size.unwrap_or(128 * 1024),
         timeout: now() + MAX_TIMEOUT as i32 / 1000,
-        data: ton::bytes(data.to_vec()),
+        data: ton::bytes(data),
     })?;
 
     Ok((query_id, data))
@@ -384,7 +395,7 @@ async fn receive_loop(
 }
 
 async fn send_loop(
-    mut outgoing_context: OutgoingContext<'_>,
+    mut outgoing_context: OutgoingContext,
     roundtrip: Option<u64>,
 ) -> Result<(bool, u64)> {
     const MAX_TRANSFER_WAVE: u32 = 10;
@@ -441,23 +452,28 @@ async fn send_loop(
 }
 
 async fn answer_loop(
-    incoming_context: &mut IncomingContext,
+    mut incoming_context: IncomingContext,
     transfers: Arc<FxDashMap<TransferId, RldpTransfer>>,
     subscribers: Arc<Vec<Arc<dyn Subscriber>>>,
+    force_compression: bool,
 ) -> Result<Option<TransferId>> {
     // Deserialize incoming query
-    let query =
-        match deserialize(incoming_context.transfer.data())?.downcast::<ton::rldp::Message>() {
-            Ok(ton::rldp::Message::Rldp_Query(query)) => query,
-            _ => return Err(TransfersCacheError::UnexpectedMessage.into()),
-        };
+    let query = match deserialize(&incoming_context.transfer.take_data())?
+        .downcast::<ton::rldp::Message>()
+    {
+        Ok(ton::rldp::Message::Rldp_Query(query)) => query,
+        _ => return Err(TransfersCacheError::UnexpectedMessage.into()),
+    };
+
+    let max_answer_size = query.max_answer_size as usize;
 
     // Process query
     let answer = match process_message_rldp_query(
         &incoming_context.local_id,
         &incoming_context.peer_id,
         &subscribers,
-        &query,
+        *query,
+        force_compression,
     )
     .await?
     {
@@ -467,14 +483,14 @@ async fn answer_loop(
     };
 
     // Check answer
-    if answer.data.len() > query.max_answer_size as usize {
+    if answer.data.len() > max_answer_size {
         return Err(TransfersCacheError::AnswerSizeExceeded.into());
     }
 
     // Create outgoing transfer
     let answer = serialize_boxed(answer)?;
     let outgoing_transfer_id = negate_id(incoming_context.transfer_id);
-    let outgoing_transfer = OutgoingTransfer::new(&answer, Some(outgoing_transfer_id));
+    let outgoing_transfer = OutgoingTransfer::new(answer, Some(outgoing_transfer_id));
     transfers.insert(
         outgoing_transfer_id,
         RldpTransfer::Outgoing(outgoing_transfer.state().clone()),
@@ -525,11 +541,11 @@ enum RldpTransfer {
     Done,
 }
 
-struct OutgoingContext<'a> {
+struct OutgoingContext {
     adnl: Arc<AdnlNode>,
     local_id: AdnlNodeIdShort,
     peer_id: AdnlNodeIdShort,
-    transfer: OutgoingTransfer<'a>,
+    transfer: OutgoingTransfer,
 }
 
 struct IncomingContext {

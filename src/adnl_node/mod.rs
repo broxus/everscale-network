@@ -504,12 +504,15 @@ impl AdnlNode {
             raw_packet: &PacketView<'_>,
             signature: &mut Option<PacketContentsSignature>,
             public_key: &ed25519_dalek::PublicKey,
+            mandatory: bool,
         ) -> Result<()> {
             if let Some(signature) = signature.take() {
                 // SAFETY: called only once on same packet
                 let (message, signature) = unsafe { signature.extract(raw_packet)? };
                 let signature = ed25519_dalek::Signature::from_bytes(&signature)?;
                 public_key.verify(message, &signature)?;
+            } else if mandatory {
+                return Err(AdnlPacketError::SignatureNotFound.into());
             }
             Ok(())
         }
@@ -530,7 +533,7 @@ impl AdnlNode {
                 return Err(AdnlPacketError::InvalidPeerId.into());
             }
 
-            verify(raw_packet, &mut signature, full_id.public_key())?;
+            verify(raw_packet, &mut signature, full_id.public_key(), true)?;
 
             if let Some(list) = &packet.address {
                 let ip_address = parse_address_list_view(list)?;
@@ -570,7 +573,7 @@ impl AdnlNode {
         .ok_or(AdnlPacketError::UnknownPeer)?;
 
         if check_signature {
-            verify(raw_packet, &mut signature, peer.id().public_key())?;
+            verify(raw_packet, &mut signature, peer.id().public_key(), false)?;
         }
 
         if let (Some(dst_reinit_date), Some(reinit_date)) = (dst_reinit_date, reinit_date) {
@@ -585,18 +588,9 @@ impl AdnlNode {
                 return Err(AdnlPacketError::SrcReinitDateTooNew.into());
             }
 
-            let sender_reinit_date = peer.sender_state().reinit_date();
-            match reinit_date.cmp(&sender_reinit_date) {
-                Ordering::Equal => { /* do nothing */ }
-                Ordering::Greater => {
-                    peer.sender_state().set_reinit_date(reinit_date);
-                    if sender_reinit_date != 0 {
-                        peer.sender_state().history().reset();
-                        peer.receiver_state().history().reset();
-                    }
-                }
-                Ordering::Less => return Err(AdnlPacketError::SrcReinitDateTooOld.into()),
-            };
+            if !peer.try_reinit(reinit_date) {
+                return Err(AdnlPacketError::SrcReinitDateTooOld.into());
+            }
 
             if dst_reinit_date != 0 && dst_reinit_date_cmp == Ordering::Less {
                 std::mem::drop(peer);
@@ -1173,4 +1167,6 @@ enum AdnlPacketError {
     SrcReinitDateTooOld,
     #[error("Confirmation seqno is too new")]
     ConfirmationSeqnoTooNew,
+    #[error("Signature not found")]
+    SignatureNotFound,
 }

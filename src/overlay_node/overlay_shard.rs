@@ -61,6 +61,8 @@ pub struct OverlayShardOptions {
     pub max_broadcast_wave: usize,
     /// Default: 60
     pub broadcast_timeout_sec: u64,
+    /// Default: false
+    pub force_compression: bool,
 }
 
 impl Default for OverlayShardOptions {
@@ -76,6 +78,7 @@ impl Default for OverlayShardOptions {
             secondary_fec_broadcast_target_count: 5,
             max_broadcast_wave: 20,
             broadcast_timeout_sec: 60,
+            force_compression: false,
         }
     }
 }
@@ -288,18 +291,37 @@ impl OverlayShard {
             _ => None,
         };
 
-        let broadcast_to_sign =
-            make_broadcast_to_sign(broadcast.data, broadcast.date, source.as_ref())?;
-        let broadcast_id = match self.create_broadcast(&broadcast_to_sign) {
-            Some(broadcast_id) => broadcast_id,
-            None => return Ok(()),
+        let broadcast_data = match compression::decompress(broadcast.data) {
+            Some(decompressed) => {
+                let broadcast_to_sign =
+                    make_broadcast_to_sign(&decompressed, broadcast.date, source.as_ref())?;
+                match node_id.verify(&broadcast_to_sign, broadcast.signature) {
+                    Ok(()) => match self.create_broadcast(&broadcast_to_sign) {
+                        Some(broadcast_id) => Some((broadcast_id, decompressed)),
+                        None => return Ok(()),
+                    },
+                    Err(_) => None,
+                }
+            }
+            None => None,
         };
 
-        node_id.verify(&broadcast_to_sign, broadcast.signature)?;
+        let (broadcast_id, data) = match broadcast_data {
+            Some((id, data)) => (id, data),
+            None => {
+                let broadcast_to_sign =
+                    make_broadcast_to_sign(broadcast.data, broadcast.date, source.as_ref())?;
+                node_id.verify(&broadcast_to_sign, broadcast.signature)?;
+                match self.create_broadcast(&broadcast_to_sign) {
+                    Some(broadcast_id) => (broadcast_id, broadcast.data.to_vec()),
+                    None => return Ok(()),
+                }
+            }
+        };
 
         self.received_broadcasts.push(IncomingBroadcastInfo {
             packets: 1,
-            data: broadcast.data.to_vec(),
+            data,
             from: node_peer_id,
         });
 
@@ -398,25 +420,31 @@ impl OverlayShard {
     pub fn send_broadcast(
         self: &Arc<Self>,
         local_id: &AdnlNodeIdShort,
-        data: &[u8],
+        mut data: Vec<u8>,
         key: &Arc<StoredAdnlNodeKey>,
     ) -> Result<OutgoingBroadcastInfo> {
         let date = now();
-        let signature = make_broadcast_to_sign(data, date, None)?;
-        let broadcast_id = match self.create_broadcast(data) {
+        let broadcast_to_sign = make_broadcast_to_sign(&data, date, None)?;
+        let broadcast_id = match self.create_broadcast(&broadcast_to_sign) {
             Some(broadcast_id) => broadcast_id,
             None => {
                 log::warn!("Trying to send duplicated broadcast");
                 return Ok(Default::default());
             }
         };
-        let signature = key.sign(&signature);
+        let signature = key.sign(&broadcast_to_sign);
+
+        if self.options.force_compression {
+            if let Err(e) = compression::compress(&mut data) {
+                log::warn!("Failed to compress overlay broadcast: {:?}", e);
+            }
+        }
 
         let broadcast = ton::overlay::broadcast::Broadcast {
             src: key.full_id().as_tl().into_boxed(),
             certificate: ton::overlay::Certificate::Overlay_EmptyCertificate,
             flags: BROADCAST_FLAG_ANY_SENDER,
-            data: ton::bytes(data.to_vec()),
+            data: ton::bytes(data),
             date,
             signature: ton::bytes(signature.as_ref().to_vec()),
         }
@@ -439,10 +467,10 @@ impl OverlayShard {
     pub fn send_fec_broadcast(
         self: &Arc<Self>,
         local_id: &AdnlNodeIdShort,
-        data: &[u8],
+        mut data: Vec<u8>,
         key: &Arc<StoredAdnlNodeKey>,
     ) -> Result<OutgoingBroadcastInfo> {
-        let broadcast_id = match self.create_broadcast(data) {
+        let broadcast_id = match self.create_broadcast(&data) {
             Some(id) => id,
             None => {
                 log::warn!("Trying to send duplicated broadcast");
@@ -450,14 +478,24 @@ impl OverlayShard {
             }
         };
 
+        if self.options.force_compression {
+            if let Err(e) = compression::compress(&mut data) {
+                log::warn!("Failed to compress overlay FEC broadcast: {:?}", e);
+            }
+        }
+
         let data_size = data.len() as u32;
         let (data_tx, mut data_rx) = mpsc::unbounded_channel();
 
         let mut outgoing_transfer = OutgoingFecTransfer {
             broadcast_id,
-            encoder: RaptorQEncoder::with_data(data),
+            encoder: RaptorQEncoder::with_data(&data),
             seqno: 0,
         };
+
+        // NOTE: Data is already in encoder and not needed anymore
+        drop(data);
+
         let max_seqno =
             (data_size / outgoing_transfer.encoder.params().symbol_size as u32 + 1) * 3 / 2;
 
@@ -751,14 +789,21 @@ fn process_fec_broadcast(
         Some(result) if result.len() != broadcast.data_size as usize => {
             Err(OverlayShardError::DataSizeMismatch.into())
         }
-        Some(result) => {
-            let data_hash = sha2::Sha256::digest(&result);
-            if data_hash.as_slice() == broadcast_id {
-                Ok(Some(result))
-            } else {
-                Err(OverlayShardError::DataHashMismatch.into())
+        Some(result) => match compression::decompress(&result) {
+            Some(decompressed)
+                if sha2::Sha256::digest(&decompressed).as_slice() == broadcast_id =>
+            {
+                Ok(Some(decompressed))
             }
-        }
+            _ => {
+                let data_hash = sha2::Sha256::digest(&result);
+                if data_hash.as_slice() == broadcast_id {
+                    Ok(Some(result))
+                } else {
+                    Err(OverlayShardError::DataHashMismatch.into())
+                }
+            }
+        },
         None => Ok(None),
     }
 }

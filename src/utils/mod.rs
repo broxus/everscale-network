@@ -26,6 +26,7 @@ pub use self::trigger::*;
 pub use self::updated_at::*;
 
 mod address_list;
+pub mod compression;
 mod dht;
 mod handshake;
 mod node_id;

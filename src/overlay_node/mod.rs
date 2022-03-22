@@ -281,7 +281,7 @@ impl OverlayNode {
     pub fn broadcast(
         &self,
         overlay_id: &OverlayIdShort,
-        data: &[u8],
+        data: Vec<u8>,
         source: Option<&Arc<StoredAdnlNodeKey>>,
     ) -> Result<OutgoingBroadcastInfo> {
         const ORDINARY_BROADCAST_MAX_SIZE: usize = 768;
@@ -376,7 +376,7 @@ impl OverlayNode {
         &self,
         overlay_id: &OverlayIdShort,
         peer_id: &AdnlNodeIdShort,
-        data: &[u8],
+        data: Vec<u8>,
         rldp: &Arc<RldpNode>,
         max_answer_size: Option<i64>,
         roundtrip: Option<u64>,

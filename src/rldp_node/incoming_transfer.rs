@@ -72,6 +72,10 @@ impl IncomingTransfer {
         self.data
     }
 
+    pub fn take_data(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.data)
+    }
+
     pub fn process_chunk(&mut self, message: MessagePart) -> Result<Option<&[u8]>> {
         // Check FEC type
         let fec_type = match message.fec_type {

@@ -25,6 +25,23 @@ impl AdnlPeer {
     }
 
     #[inline(always)]
+    pub fn try_reinit(&self, reinit_date: i32) -> bool {
+        let sender_reinit_date = self.sender_state.reinit_date();
+        match reinit_date.cmp(&sender_reinit_date) {
+            std::cmp::Ordering::Equal => true,
+            std::cmp::Ordering::Greater => {
+                self.sender_state.set_reinit_date(reinit_date);
+                if sender_reinit_date != 0 {
+                    self.sender_state.history().reset();
+                    self.receiver_state.history().reset();
+                }
+                true
+            }
+            std::cmp::Ordering::Less => false,
+        }
+    }
+
+    #[inline(always)]
     pub fn id(&self) -> &AdnlNodeIdFull {
         &self.id
     }

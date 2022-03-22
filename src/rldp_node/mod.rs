@@ -25,15 +25,19 @@ pub struct RldpNode {
 }
 
 #[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct RldpNodeOptions {
     /// Default: 16
     pub max_peer_queries: u32,
+    /// Default: false
+    pub force_compression: bool,
 }
 
 impl Default for RldpNodeOptions {
     fn default() -> Self {
         Self {
             max_peer_queries: 16,
+            force_compression: false,
         }
     }
 }
@@ -46,7 +50,7 @@ impl RldpNode {
     ) -> Arc<Self> {
         Arc::new(Self {
             peers: Default::default(),
-            transfers: TransfersCache::new(adnl, subscribers),
+            transfers: TransfersCache::new(adnl, subscribers, options.force_compression),
             options,
         })
     }
@@ -62,10 +66,16 @@ impl RldpNode {
         &self,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
-        data: &[u8],
+        mut data: Vec<u8>,
         max_answer_size: Option<i64>,
         roundtrip: Option<u64>,
     ) -> Result<(Option<Vec<u8>>, u64)> {
+        if self.options.force_compression {
+            if let Err(e) = compression::compress(&mut data) {
+                log::warn!("Failed to compress RLDP query: {:?}", e);
+            }
+        }
+
         let (query_id, query) = make_query(data, max_answer_size)?;
 
         let peer = self
@@ -78,7 +88,7 @@ impl RldpNode {
         let result = {
             let _guard = peer.begin_query().await;
             self.transfers
-                .query(local_id, peer_id, query.as_slice(), roundtrip)
+                .query(local_id, peer_id, query, roundtrip)
                 .await
         };
 
@@ -87,7 +97,10 @@ impl RldpNode {
                 Ok(RldpMessageView::Answer {
                     query_id: answer_id,
                     data,
-                }) if answer_id == &query_id => Ok((Some(data.to_vec()), roundtrip)),
+                }) if answer_id == &query_id => Ok((
+                    Some(compression::decompress(data).unwrap_or_else(|| data.to_vec())),
+                    roundtrip,
+                )),
                 Ok(RldpMessageView::Answer { .. }) => Err(RldpNodeError::QueryIdMismatch),
                 Ok(RldpMessageView::Message { .. }) => {
                     Err(RldpNodeError::UnexpectedAnswer("RldpMessageView::Message"))

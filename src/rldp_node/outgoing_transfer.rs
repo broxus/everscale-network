@@ -9,16 +9,16 @@ use super::encoder::*;
 use super::TransferId;
 use crate::utils::*;
 
-pub struct OutgoingTransfer<'a> {
-    data: &'a [u8],
+pub struct OutgoingTransfer {
+    data: Vec<u8>,
     buffer: Vec<u8>,
     encoder: Option<RaptorQEncoder>,
     message: ton::rldp::MessagePart,
     state: Arc<OutgoingTransferState>,
 }
 
-impl<'a> OutgoingTransfer<'a> {
-    pub fn new(data: &'a [u8], transfer_id: Option<TransferId>) -> Self {
+impl OutgoingTransfer {
+    pub fn new(data: Vec<u8>, transfer_id: Option<TransferId>) -> Self {
         let transfer_id = transfer_id.unwrap_or_else(|| rand::thread_rng().gen());
 
         let message = ton::rldp::messagepart::MessagePart {

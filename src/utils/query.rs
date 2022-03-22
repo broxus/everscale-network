@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -6,6 +7,7 @@ use ton_api::{ton, BoxedSerialize, IntoBoxed, Serializer};
 use super::node_id::*;
 use super::{deserialize_bundle, serialize};
 use crate::subscriber::*;
+use crate::utils::compression;
 
 pub fn build_query(
     prefix: Option<&[u8]>,
@@ -57,7 +59,7 @@ pub async fn process_message_adnl_query(
     query_id: &QueryId,
     query: &[u8],
 ) -> Result<QueryProcessingResult<ton::adnl::Message>> {
-    match process_query(local_id, peer_id, subscribers, query).await? {
+    match process_query(local_id, peer_id, subscribers, Cow::Borrowed(query)).await? {
         QueryProcessingResult::Processed(answer) => convert_answer(answer, |answer| {
             ton::adnl::message::message::Answer {
                 query_id: ton::int256(*query_id),
@@ -74,16 +76,33 @@ pub async fn process_message_rldp_query(
     local_id: &AdnlNodeIdShort,
     peer_id: &AdnlNodeIdShort,
     subscribers: &[Arc<dyn Subscriber>],
-    query: &ton::rldp::message::Query,
+    ton::rldp::message::Query {
+        query_id, mut data, ..
+    }: ton::rldp::message::Query,
+    force_compression: bool,
 ) -> Result<QueryProcessingResult<ton::rldp::message::Answer>> {
-    match process_query(local_id, peer_id, subscribers, query.data.as_ref()).await? {
-        QueryProcessingResult::Processed(answer) => {
-            convert_answer(answer, |answer| ton::rldp::message::Answer {
-                query_id: query.query_id,
-                data: ton::bytes(answer),
-            })
-            .map(QueryProcessingResult::Processed)
+    let answer_compression = match compression::decompress(&data.0) {
+        Some(decompressed) => {
+            data.0 = decompressed;
+            true
         }
+        None => force_compression,
+    };
+
+    match process_query(local_id, peer_id, subscribers, Cow::Owned(data.0)).await? {
+        QueryProcessingResult::Processed(answer) => convert_answer(answer, move |mut answer| {
+            if answer_compression {
+                if let Err(e) = compression::compress(&mut answer) {
+                    log::warn!("Failed to compress RLDP answer: {:?}", e);
+                }
+            }
+
+            ton::rldp::message::Answer {
+                query_id,
+                data: ton::bytes(answer),
+            }
+        })
+        .map(QueryProcessingResult::Processed),
         _ => Ok(QueryProcessingResult::Rejected),
     }
 }
@@ -92,9 +111,10 @@ async fn process_query(
     local_id: &AdnlNodeIdShort,
     peer_id: &AdnlNodeIdShort,
     subscribers: &[Arc<dyn Subscriber>],
-    query: &[u8],
+    query: Cow<'_, [u8]>,
 ) -> Result<QueryProcessingResult<QueryAnswer>> {
-    let mut queries = deserialize_bundle(query)?;
+    let mut queries = deserialize_bundle(&query)?;
+    drop(query);
 
     if queries.len() == 1 {
         let mut query = queries.remove(0);

@@ -205,14 +205,13 @@ impl OverlayClient {
 
         let mut data = self.overlay.get_query_prefix(&self.overlay_id)?;
         serialize_append(&mut data, query)?;
-        let data = Arc::new(data);
 
         let (answer, roundtrip) = self
             .overlay
             .query_via_rldp(
                 &self.overlay_id,
                 neighbour.peer_id(),
-                &data,
+                data,
                 &self.rldp,
                 Some(MAX_ANSWER_SIZE),
                 neighbour
