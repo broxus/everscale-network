@@ -26,7 +26,7 @@ thiserror = "1.0"
 tokio = { version = "1.16.1", features = ["sync", "net", "rt", "time", "io-util", "macros"] }
 tokio-io-timeout = "1.2.0"
 x25519-dalek-ng = "1.1.1"
-zstd = { version = "0.11", features = ["pkg-config"] }
+zstd = "0.11"
 
 ed25519-dalek = { git = "https://github.com/broxus/ed25519-dalek.git" }
 raptorq = { git = "https://github.com/Rexagon/raptorq.git" }
@@ -38,3 +38,6 @@ git = "https://github.com/broxus/ton-labs-tl.git"
 package = "ton_api"
 default-features = false
 features = ["ton_api"]
+
+[features]
+pkg-config = ["zstd/pkg-config"]
