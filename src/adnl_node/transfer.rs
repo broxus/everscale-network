@@ -41,7 +41,9 @@ impl Transfer {
         transfer_id: &TransferId,
     ) -> Result<Option<Vec<u8>>> {
         let length = data.len();
-        self.parts.insert(offset, data);
+        if self.parts.insert(offset, data).is_some() {
+            return Ok(None);
+        }
 
         // Increase received length.
         // This part heavily relies on ordering, so hope that it works as expected
