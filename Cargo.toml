@@ -24,6 +24,7 @@ sha2 = "0.9"
 smallvec = { version = "1.8.0", features = ["union", "const_generics"] }
 thiserror = "1.0"
 tokio = { version = "1.16.1", features = ["sync", "net", "rt", "time", "io-util", "macros"] }
+tokio-util = "0.7.0"
 tokio-io-timeout = "1.2.0"
 x25519-dalek-ng = "1.1.1"
 zstd = "0.11"

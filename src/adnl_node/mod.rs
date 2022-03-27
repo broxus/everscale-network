@@ -9,6 +9,7 @@ use parking_lot::Mutex;
 use sha2::Digest;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use ton_api::{ton, IntoBoxed};
 
 use crate::subscriber::*;
@@ -53,8 +54,7 @@ pub struct AdnlNode {
     /// Basic reinit date for all local peer states
     start_time: i32,
 
-    complete_signal: TriggerReceiver,
-    complete_trigger: Trigger,
+    cancellation_token: CancellationToken,
 }
 
 impl Drop for AdnlNode {
@@ -118,8 +118,6 @@ impl AdnlNode {
             peers.insert(*key, Default::default());
         }
 
-        let (complete_trigger, complete_signal) = trigger();
-
         Arc::new(Self {
             ip_address,
             keystore,
@@ -133,8 +131,7 @@ impl AdnlNode {
             sender_queue_tx,
             sender_queue_rx: Mutex::new(Some(sender_queue_rx)),
             start_time: now(),
-            complete_signal,
-            complete_trigger,
+            cancellation_token: Default::default(),
         })
     }
 
@@ -171,7 +168,7 @@ impl AdnlNode {
     }
 
     pub fn shutdown(&self) {
-        self.complete_trigger.trigger();
+        self.cancellation_token.cancel();
     }
 
     /// Starts a process that polls subscribers
@@ -227,13 +224,13 @@ impl AdnlNode {
     ) {
         const RECV_BUFFER_SIZE: usize = 2048;
 
-        let complete_signal = self.complete_signal.clone();
+        let complete_signal = self.cancellation_token.clone();
         let node = Arc::downgrade(self);
 
         tokio::spawn(async move {
             let mut buffer = None;
 
-            tokio::pin!(complete_signal);
+            tokio::pin!(let cancelled = complete_signal.cancelled(););
 
             loop {
                 // Receive packet
@@ -245,7 +242,7 @@ impl AdnlNode {
 
                 let data = tokio::select! {
                     data = fut => data,
-                    _ = &mut complete_signal => return,
+                    _ = &mut cancelled => return,
                 };
 
                 let len = match data {

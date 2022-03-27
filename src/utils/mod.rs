@@ -22,7 +22,6 @@ pub use self::query::*;
 pub use self::response_collector::*;
 pub use self::socket::*;
 pub use self::tl_view::*;
-pub use self::trigger::*;
 pub use self::updated_at::*;
 
 mod address_list;
@@ -40,7 +39,6 @@ mod query;
 mod response_collector;
 mod socket;
 mod tl_view;
-mod trigger;
 mod updated_at;
 
 pub type FxDashSet<K> = dashmap::DashSet<K, BuildHasherDefault<FxHasher>>;
