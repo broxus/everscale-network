@@ -11,6 +11,14 @@ pub struct BroadcastReceiver<T> {
 }
 
 impl<T: Send + 'static> BroadcastReceiver<T> {
+    pub fn data_len(&self) -> usize {
+        self.data.len()
+    }
+
+    pub fn barriers_len(&self) -> usize {
+        self.barriers.len()
+    }
+
     pub fn push(self: &Arc<Self>, data: T) {
         let receiver = self.clone();
         tokio::spawn(async move {

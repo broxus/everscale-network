@@ -165,6 +165,12 @@ impl OverlayShard {
             known_peers_len: self.known_peers.len(),
             random_peers_len: self.random_peers.len(),
             neighbours: self.neighbours.len(),
+            received_peers_data_len: self.received_peers.data_len(),
+            received_peers_barrier_count: self.received_peers.barriers_len(),
+            received_broadcasts_data_len: self.received_broadcasts.data_len(),
+            received_broadcasts_barrier_count: self.received_broadcasts.barriers_len(),
+            received_catchain_data_len: self.received_catchain.data_len(),
+            received_catchain_barrier_count: self.received_catchain.barriers_len(),
         }
     }
 
@@ -759,6 +765,12 @@ pub struct OverlayShardMetrics {
     pub known_peers_len: usize,
     pub random_peers_len: usize,
     pub neighbours: usize,
+    pub received_peers_data_len: usize,
+    pub received_peers_barrier_count: usize,
+    pub received_broadcasts_data_len: usize,
+    pub received_broadcasts_barrier_count: usize,
+    pub received_catchain_data_len: usize,
+    pub received_catchain_barrier_count: usize,
 }
 
 fn process_fec_broadcast(
