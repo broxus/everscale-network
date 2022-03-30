@@ -69,27 +69,32 @@ impl AdnlChannel {
         self.ready.store(true, Ordering::Release)
     }
 
+    #[inline(always)]
     pub fn peer_channel_public_key(&self) -> &[u8; 32] {
         &self.peer_channel_public_key
     }
 
+    #[inline(always)]
     pub fn peer_channel_date(&self) -> i32 {
         self.peer_channel_date
     }
 
-    pub fn channel_in_id(&self) -> &AdnlChannelId {
-        &self.channel_in.id
+    #[inline(always)]
+    pub fn priority_channel_in_id(&self) -> &AdnlChannelId {
+        &self.channel_in.priority.id
     }
 
-    #[allow(dead_code)]
-    pub fn channel_out_id(&self) -> &AdnlChannelId {
-        &self.channel_out.id
+    #[inline(always)]
+    pub fn ordinary_channel_in_id(&self) -> &AdnlChannelId {
+        &self.channel_in.ordinary.id
     }
 
+    #[inline(always)]
     pub fn local_id(&self) -> &AdnlNodeIdShort {
         &self.local_id
     }
 
+    #[inline(always)]
     pub fn peer_id(&self) -> &AdnlNodeIdShort {
         &self.peer_id
     }
@@ -109,12 +114,19 @@ impl AdnlChannel {
         self.drop.store(0, Ordering::Release);
     }
 
-    pub fn decrypt(&self, buffer: &mut PacketView) -> Result<()> {
+    pub fn decrypt(&self, buffer: &mut PacketView, priority: bool) -> Result<()> {
         if buffer.len() < 64 {
             return Err(AdnlChannelError::ChannelMessageIsTooShort(buffer.len()).into());
         }
 
-        process_channel_data(buffer.as_mut_slice(), &self.channel_in.secret);
+        process_channel_data(
+            buffer.as_mut_slice(),
+            if priority {
+                &self.channel_in.priority.secret
+            } else {
+                &self.channel_in.ordinary.secret
+            },
+        );
 
         if sha2::Sha256::digest(&buffer[64..]).as_slice() != &buffer[32..64] {
             return Err(AdnlChannelError::InvalidChannelMessageChecksum.into());
@@ -124,16 +136,22 @@ impl AdnlChannel {
         Ok(())
     }
 
-    pub fn encrypt(&self, buffer: &mut Vec<u8>) -> Result<()> {
+    pub fn encrypt(&self, buffer: &mut Vec<u8>, priority: bool) -> Result<()> {
         let checksum: [u8; 32] = sha2::Sha256::digest(buffer.as_slice()).into();
+
+        let channel_out = if priority {
+            &self.channel_out.priority
+        } else {
+            &self.channel_out.ordinary
+        };
 
         let len = buffer.len();
         buffer.resize(len + 64, 0);
         buffer.copy_within(..len, 64);
-        buffer[..32].copy_from_slice(&self.channel_out.id);
+        buffer[..32].copy_from_slice(&channel_out.id);
         buffer[32..64].copy_from_slice(&checksum);
 
-        process_channel_data(buffer, &self.channel_out.secret);
+        process_channel_data(buffer, &channel_out.secret);
         Ok(())
     }
 }
@@ -154,17 +172,66 @@ impl std::fmt::Display for ChannelCreationContext {
 }
 
 struct ChannelSide {
-    id: AdnlChannelId,
-    secret: [u8; 32],
+    ordinary: SubChannelSide,
+    priority: SubChannelSide,
 }
 
 impl ChannelSide {
     fn from_secret(secret: [u8; 32]) -> Result<Self> {
+        let priority_secret = build_priority_secret(secret);
         Ok(Self {
-            id: compute_channel_id(secret)?,
-            secret,
+            ordinary: SubChannelSide {
+                id: compute_channel_id(secret)?,
+                secret,
+            },
+            priority: SubChannelSide {
+                id: compute_channel_id(priority_secret)?,
+                secret: priority_secret,
+            },
         })
     }
+}
+
+struct SubChannelSide {
+    id: AdnlChannelId,
+    secret: [u8; 32],
+}
+
+fn build_priority_secret(ordinary_secret: [u8; 32]) -> [u8; 32] {
+    [
+        ordinary_secret[1],
+        ordinary_secret[0],
+        ordinary_secret[3],
+        ordinary_secret[2],
+        ordinary_secret[5],
+        ordinary_secret[4],
+        ordinary_secret[7],
+        ordinary_secret[6],
+        ordinary_secret[9],
+        ordinary_secret[8],
+        ordinary_secret[11],
+        ordinary_secret[10],
+        ordinary_secret[13],
+        ordinary_secret[12],
+        ordinary_secret[15],
+        ordinary_secret[14],
+        ordinary_secret[17],
+        ordinary_secret[16],
+        ordinary_secret[19],
+        ordinary_secret[18],
+        ordinary_secret[21],
+        ordinary_secret[20],
+        ordinary_secret[23],
+        ordinary_secret[22],
+        ordinary_secret[25],
+        ordinary_secret[24],
+        ordinary_secret[27],
+        ordinary_secret[26],
+        ordinary_secret[29],
+        ordinary_secret[28],
+        ordinary_secret[31],
+        ordinary_secret[30],
+    ]
 }
 
 pub struct ChannelKey {
@@ -249,30 +316,28 @@ mod tests {
         )
         .unwrap();
 
-        let message = "Hello world!";
+        let message = b"Hello world!";
 
         // Send 1 to 2
         {
-            let mut packet = message.as_bytes().to_vec();
-            channel12.encrypt(&mut packet).unwrap();
+            let mut packet = message.to_vec();
+            channel12.encrypt(&mut packet, false).unwrap();
 
             let mut received_packet = PacketView::from(packet.as_mut_slice());
-            channel21.decrypt(&mut received_packet).unwrap();
+            channel21.decrypt(&mut received_packet, false).unwrap();
 
-            let received_message = String::from_utf8(received_packet.as_slice().to_vec()).unwrap();
-            assert_eq!(received_message, message);
+            assert_eq!(received_packet.as_slice(), message);
         }
 
         // Send 2 to 1
         {
-            let mut packet = message.as_bytes().to_vec();
-            channel21.encrypt(&mut packet).unwrap();
+            let mut packet = message.to_vec();
+            channel21.encrypt(&mut packet, true).unwrap();
 
             let mut received_packet = PacketView::from(packet.as_mut_slice());
-            channel12.decrypt(&mut received_packet).unwrap();
+            channel12.decrypt(&mut received_packet, true).unwrap();
 
-            let received_message = String::from_utf8(received_packet.as_slice().to_vec()).unwrap();
-            assert_eq!(received_message, message);
+            assert_eq!(received_packet.as_slice(), message);
         }
     }
 }

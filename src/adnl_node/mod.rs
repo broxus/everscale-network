@@ -36,7 +36,7 @@ pub struct AdnlNode {
     peers: FxDashMap<AdnlNodeIdShort, Arc<AdnlPeers>>,
 
     /// Channels table used to fast search on incoming packets
-    channels_by_id: FxDashMap<AdnlChannelId, Arc<AdnlChannel>>,
+    channels_by_id: FxDashMap<AdnlChannelId, ChannelReceiver>,
     /// Channels table used to fast search when sending messages
     channels_by_peers: FxDashMap<AdnlNodeIdShort, Arc<AdnlChannel>>,
 
@@ -55,6 +55,11 @@ pub struct AdnlNode {
     start_time: i32,
 
     cancellation_token: CancellationToken,
+}
+
+enum ChannelReceiver {
+    Ordinary(Arc<AdnlChannel>),
+    Priority(Arc<AdnlChannel>),
 }
 
 impl Drop for AdnlNode {
@@ -287,16 +292,19 @@ impl AdnlNode {
         subscribers: &[Arc<dyn Subscriber>],
     ) -> Result<()> {
         // Decrypt packet and extract peers
-        let (local_id, peer_id) = if let Some(local_id) =
+        let (priority, local_id, peer_id) = if let Some(local_id) =
             parse_handshake_packet(self.keystore.keys(), &mut data, None)?
         {
-            (local_id, None)
+            (false, local_id, None)
         } else if let Some(channel) = self.channels_by_id.get(&data[0..32]) {
-            let channel = channel.value();
-            channel.decrypt(&mut data)?;
+            let (channel, priority) = match channel.value() {
+                ChannelReceiver::Priority(channel) => (channel, true),
+                ChannelReceiver::Ordinary(channel) => (channel, false),
+            };
+            channel.decrypt(&mut data, priority)?;
             channel.set_ready();
             channel.reset_drop_timeout();
-            (*channel.local_id(), Some(*channel.peer_id()))
+            (priority, *channel.local_id(), Some(*channel.peer_id()))
         } else {
             log::trace!(
                 "Received message to unknown key ID: {}",
@@ -319,11 +327,11 @@ impl AdnlNode {
 
         // Process message(s)
         if let Some(message) = packet.message {
-            self.process_message(&local_id, &peer_id, message, subscribers)
+            self.process_message(&local_id, &peer_id, message, subscribers, priority)
                 .await?;
         } else if let Some(messages) = packet.messages {
             for message in messages {
-                self.process_message(&local_id, &peer_id, message, subscribers)
+                self.process_message(&local_id, &peer_id, message, subscribers, priority)
                     .await?;
             }
         }
@@ -338,6 +346,7 @@ impl AdnlNode {
         peer_id: &AdnlNodeIdShort,
         message: MessageView<'_>,
         subscribers: &[Arc<dyn Subscriber>],
+        priority: bool,
     ) -> Result<()> {
         use dashmap::mapref::entry::Entry;
 
@@ -434,7 +443,7 @@ impl AdnlNode {
 
                 match result {
                     QueryProcessingResult::Processed(Some(message)) => {
-                        self.send_message(local_id, peer_id, message)
+                        self.send_message(local_id, peer_id, message, priority)
                     }
                     QueryProcessingResult::Processed(None) => Ok(()),
                     QueryProcessingResult::Rejected => {
@@ -592,7 +601,12 @@ impl AdnlNode {
             if dst_reinit_date != 0 && dst_reinit_date_cmp == Ordering::Less {
                 std::mem::drop(peer);
 
-                self.send_message(local_id, &peer_id, ton::adnl::Message::Adnl_Message_Nop)?;
+                self.send_message(
+                    local_id,
+                    &peer_id,
+                    ton::adnl::Message::Adnl_Message_Nop,
+                    false,
+                )?;
                 return Err(AdnlPacketError::DstReinitDateTooOld.into());
             }
         }
@@ -620,6 +634,7 @@ impl AdnlNode {
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
         message: ton::adnl::Message,
+        priority: bool,
     ) -> Result<()> {
         const MAX_ADNL_MESSAGE_SIZE: usize = 1024;
 
@@ -676,7 +691,10 @@ impl AdnlNode {
         };
 
         let signer = match channel.as_ref() {
-            Some(channel) => MessageSigner::Channel(channel.value()),
+            Some(channel) => MessageSigner::Channel {
+                channel: channel.value(),
+                priority,
+            },
             None => MessageSigner::Random(&local_key),
         };
 
@@ -760,11 +778,11 @@ impl AdnlNode {
         let mut packet = ton::adnl::packetcontents::PacketContents {
             rand1: ton::bytes(gen_packet_offset()),
             from: match signer {
-                MessageSigner::Channel(_) => None,
+                MessageSigner::Channel { .. } => None,
                 MessageSigner::Random(local_key) => Some(local_key.full_id().as_tl().into_boxed()),
             },
             from_short: match signer {
-                MessageSigner::Channel(_) => None,
+                MessageSigner::Channel { .. } => None,
                 MessageSigner::Random(local_key) => Some(local_key.id().as_tl()),
             },
             message,
@@ -778,11 +796,11 @@ impl AdnlNode {
             recv_addr_list_version: None,
             recv_priority_addr_list_version: None,
             reinit_date: match signer {
-                MessageSigner::Channel(_) => None,
+                MessageSigner::Channel { .. } => None,
                 MessageSigner::Random(_) => Some(peer.receiver_state().reinit_date()),
             },
             dst_reinit_date: match signer {
-                MessageSigner::Channel(_) => None,
+                MessageSigner::Channel { .. } => None,
                 MessageSigner::Random(_) => Some(peer.sender_state().reinit_date()),
             },
             signature: None,
@@ -797,7 +815,7 @@ impl AdnlNode {
         let mut data = serialize_boxed(packet)?;
 
         match signer {
-            MessageSigner::Channel(channel) => channel.encrypt(&mut data)?,
+            MessageSigner::Channel { channel, priority } => channel.encrypt(&mut data, priority)?,
             MessageSigner::Random(_) => build_handshake_packet(peer_id, peer.id(), &mut data)?,
         }
 
@@ -933,6 +951,7 @@ impl AdnlNode {
                 data: ton::bytes(data.to_vec()),
             }
             .into_boxed(),
+            false,
         )
     }
 
@@ -958,7 +977,7 @@ impl AdnlNode {
         let (query_id, message) = build_query(prefix, query)?;
         let pending_query = self.queries.add_query(query_id);
 
-        self.send_message(local_id, peer_id, message)?;
+        self.send_message(local_id, peer_id, message, true)?;
         let channel = self
             .channels_by_peers
             .get(peer_id)
@@ -1015,7 +1034,10 @@ impl AdnlNode {
 
         self.channels_by_peers
             .remove(peer_id)
-            .and_then(|(_, removed)| self.channels_by_id.remove(removed.channel_in_id()));
+            .and_then(|(_, removed)| {
+                self.channels_by_id.remove(removed.ordinary_channel_in_id());
+                self.channels_by_id.remove(removed.priority_channel_in_id())
+            });
 
         peer.reset();
 
@@ -1060,9 +1082,19 @@ impl AdnlNode {
                 )?);
 
                 let (.., old_channel) = entry.replace_entry(new_channel.clone());
-                self.channels_by_id.remove(old_channel.channel_in_id());
                 self.channels_by_id
-                    .insert(*new_channel.channel_in_id(), new_channel);
+                    .remove(old_channel.ordinary_channel_in_id());
+                self.channels_by_id
+                    .remove(old_channel.priority_channel_in_id());
+
+                self.channels_by_id.insert(
+                    *new_channel.ordinary_channel_in_id(),
+                    ChannelReceiver::Ordinary(new_channel.clone()),
+                );
+                self.channels_by_id.insert(
+                    *new_channel.priority_channel_in_id(),
+                    ChannelReceiver::Priority(new_channel),
+                );
             }
             Entry::Vacant(entry) => {
                 let new_channel = entry
@@ -1075,8 +1107,14 @@ impl AdnlNode {
                         context,
                     )?))
                     .clone();
-                self.channels_by_id
-                    .insert(*new_channel.channel_in_id(), new_channel);
+                self.channels_by_id.insert(
+                    *new_channel.ordinary_channel_in_id(),
+                    ChannelReceiver::Ordinary(new_channel.clone()),
+                );
+                self.channels_by_id.insert(
+                    *new_channel.priority_channel_in_id(),
+                    ChannelReceiver::Priority(new_channel),
+                );
             }
         }
 
@@ -1102,7 +1140,10 @@ struct PacketToSend {
 
 #[derive(Copy, Clone)]
 enum MessageSigner<'a> {
-    Channel(&'a Arc<AdnlChannel>),
+    Channel {
+        channel: &'a Arc<AdnlChannel>,
+        priority: bool,
+    },
     Random(&'a Arc<StoredAdnlNodeKey>),
 }
 

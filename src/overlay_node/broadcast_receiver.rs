@@ -20,9 +20,9 @@ impl<T: Send + 'static> BroadcastReceiver<T> {
     }
 
     pub fn push(self: &Arc<Self>, data: T) {
+        self.data.push(data);
         let receiver = self.clone();
         tokio::spawn(async move {
-            receiver.data.push(data);
             while receiver.sync_lock.load(Ordering::Acquire) > 0 {
                 if let Some(barrier) = receiver.barriers.pop() {
                     barrier.wait().await;
