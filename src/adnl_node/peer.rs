@@ -32,8 +32,10 @@ impl AdnlPeer {
             std::cmp::Ordering::Greater => {
                 self.sender_state.set_reinit_date(reinit_date);
                 if sender_reinit_date != 0 {
-                    self.sender_state.history().reset();
-                    self.receiver_state.history().reset();
+                    self.sender_state.history(false).reset();
+                    self.sender_state.history(true).reset();
+                    self.receiver_state.history(false).reset();
+                    self.receiver_state.history(true).reset();
                 }
                 true
             }
@@ -76,27 +78,35 @@ impl AdnlPeer {
 }
 
 pub struct AdnlPeerState {
-    packets_history: PacketsHistory,
+    ordinary_history: PacketsHistory,
+    priority_history: PacketsHistory,
     reinit_date: AtomicI32,
 }
 
 impl AdnlPeerState {
     fn for_receive_with_reinit_date(reinit_date: i32) -> Self {
         Self {
-            packets_history: PacketsHistory::for_recv(),
+            ordinary_history: PacketsHistory::for_recv(),
+            priority_history: PacketsHistory::for_recv(),
             reinit_date: AtomicI32::new(reinit_date),
         }
     }
 
     fn for_send() -> Self {
         Self {
-            packets_history: PacketsHistory::for_send(),
+            ordinary_history: PacketsHistory::for_send(),
+            priority_history: PacketsHistory::for_send(),
             reinit_date: Default::default(),
         }
     }
 
-    pub fn history(&self) -> &PacketsHistory {
-        &self.packets_history
+    #[inline(always)]
+    pub fn history(&self, priority: bool) -> &PacketsHistory {
+        if priority {
+            &self.priority_history
+        } else {
+            &self.ordinary_history
+        }
     }
 
     pub fn reinit_date(&self) -> i32 {

@@ -318,12 +318,13 @@ impl AdnlNode {
             .map_err(|_| AdnlNodeError::InvalidPacket)?;
 
         // Validate packet
-        let peer_id = match self.check_packet(&data, &packet, signature, &local_id, peer_id)? {
-            // New packet
-            Some(peer_id) => peer_id,
-            // Repeated packet
-            None => return Ok(()),
-        };
+        let peer_id =
+            match self.check_packet(&data, &packet, signature, &local_id, peer_id, priority)? {
+                // New packet
+                Some(peer_id) => peer_id,
+                // Repeated packet
+                None => return Ok(()),
+            };
 
         // Process message(s)
         if let Some(message) = packet.message {
@@ -503,6 +504,7 @@ impl AdnlNode {
         mut signature: Option<PacketContentsSignature>,
         local_id: &AdnlNodeIdShort,
         peer_id: Option<AdnlNodeIdShort>,
+        priority: bool,
     ) -> Result<Option<AdnlNodeIdShort>> {
         use std::cmp::Ordering;
 
@@ -613,14 +615,18 @@ impl AdnlNode {
 
         if self.options.packet_history_enabled {
             if let Some(seqno) = packet.seqno {
-                if !peer.receiver_state().history().deliver_packet(seqno) {
+                if !peer
+                    .receiver_state()
+                    .history(priority)
+                    .deliver_packet(seqno)
+                {
                     return Ok(None);
                 }
             }
         }
 
         if let Some(confirm_seqno) = packet.confirm_seqno {
-            let sender_seqno = peer.sender_state().history().seqno();
+            let sender_seqno = peer.sender_state().history(priority).seqno();
             if confirm_seqno > sender_seqno {
                 return Err(AdnlPacketError::ConfirmationSeqnoTooNew.into());
             }
@@ -767,9 +773,22 @@ impl AdnlNode {
         &self,
         peer_id: &AdnlNodeIdShort,
         peer: &AdnlPeer,
-        signer: MessageSigner,
+        mut signer: MessageSigner,
         message: MessageToSend,
     ) -> Result<()> {
+        const MAX_PRIORITY_ATTEMPTS: i64 = 10;
+
+        let priority = if let MessageSigner::Channel { priority, .. } = &mut signer {
+            if peer.receiver_state().history(*priority).seqno() == 0
+                && peer.sender_state().history(true).seqno() > MAX_PRIORITY_ATTEMPTS
+            {
+                *priority = false;
+            }
+            *priority
+        } else {
+            false
+        };
+
         let (message, messages) = match message {
             MessageToSend::Single(message) => (Some(message), None),
             MessageToSend::Multiple(messages) => (None, Some(messages.into())),
@@ -791,8 +810,8 @@ impl AdnlNode {
                 self.build_address_list(Some(now() + self.options.address_list_timeout_sec)),
             ),
             priority_address: None,
-            seqno: Some(peer.sender_state().history().bump_seqno()),
-            confirm_seqno: Some(peer.receiver_state().history().seqno()),
+            seqno: Some(peer.sender_state().history(priority).bump_seqno()),
+            confirm_seqno: Some(peer.receiver_state().history(priority).seqno()),
             recv_addr_list_version: None,
             recv_priority_addr_list_version: None,
             reinit_date: match signer {
