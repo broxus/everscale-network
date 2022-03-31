@@ -24,6 +24,7 @@ pub struct DhtNode {
     known_peers: PeersCache,
 
     buckets: Buckets,
+    bad_peers: FxDashMap<AdnlNodeIdShort, usize>,
     storage: Storage,
 
     query_prefix: Vec<u8>,
@@ -36,6 +37,8 @@ pub struct DhtNodeOptions {
     pub value_timeout_sec: u32,
     /// Default: 5
     pub max_dht_tasks: usize,
+    /// Default: 5
+    pub max_fail_count: usize,
 }
 
 impl Default for DhtNodeOptions {
@@ -43,6 +46,7 @@ impl Default for DhtNodeOptions {
         Self {
             value_timeout_sec: 3600,
             max_dht_tasks: 5,
+            max_fail_count: 5,
         }
     }
 }
@@ -57,6 +61,7 @@ impl DhtNode {
             options,
             known_peers: PeersCache::with_capacity(MAX_OVERLAY_PEERS),
             buckets: Buckets::default(),
+            bad_peers: Default::default(),
             storage: Storage::default(),
             query_prefix: Vec::new(),
         };
@@ -113,6 +118,8 @@ impl DhtNode {
 
         if self.known_peers.put(peer_id) {
             self.buckets.insert(self.node_key.id(), &peer_id, &peer);
+        } else {
+            self.set_good_peer(&peer_id);
         }
 
         Ok(Some(peer_id))
@@ -345,14 +352,27 @@ impl DhtNode {
         &self,
         external_iter: &mut Option<ExternalPeersCacheIter>,
     ) -> Option<AdnlNodeIdShort> {
-        match external_iter {
-            Some(iter) => {
-                iter.bump();
-                iter
+        loop {
+            let peer = match external_iter {
+                Some(iter) => {
+                    iter.bump();
+                    iter
+                }
+                None => external_iter.get_or_insert_with(Default::default),
             }
-            None => external_iter.get_or_insert_with(Default::default),
+            .get(&self.known_peers);
+
+            if let Some(peer) = &peer {
+                if matches!(
+                    self.bad_peers.get(peer),
+                    Some(count) if *count > self.options.max_fail_count
+                ) {
+                    continue;
+                }
+            }
+
+            break peer;
         }
-        .get(&self.known_peers)
     }
 
     pub fn get_known_peers(&self, limit: usize) -> Vec<ton::dht::node::Node> {
@@ -435,9 +455,12 @@ impl DhtNode {
     }
 
     async fn query(&self, peer_id: &AdnlNodeIdShort, query: &TLObject) -> Result<Option<TLObject>> {
-        self.adnl
+        let result = self
+            .adnl
             .query(self.node_key.id(), peer_id, query, None)
-            .await
+            .await;
+        self.update_peer_status(peer_id, result.is_ok());
+        result
     }
 
     async fn query_with_prefix(
@@ -445,7 +468,8 @@ impl DhtNode {
         peer_id: &AdnlNodeIdShort,
         query: &TLObject,
     ) -> Result<Option<TLObject>> {
-        self.adnl
+        let result = self
+            .adnl
             .query_with_prefix(
                 self.node_key.id(),
                 peer_id,
@@ -453,7 +477,9 @@ impl DhtNode {
                 query,
                 None,
             )
-            .await
+            .await;
+        self.update_peer_status(peer_id, result.is_ok());
+        result
     }
 
     async fn query_value<F>(
@@ -631,6 +657,29 @@ impl DhtNode {
             node.signature = signature;
             node
         })
+    }
+
+    fn update_peer_status(&self, peer: &AdnlNodeIdShort, is_good: bool) {
+        use dashmap::mapref::entry::Entry;
+
+        if is_good {
+            self.set_good_peer(peer);
+        } else {
+            match self.bad_peers.entry(*peer) {
+                Entry::Occupied(mut entry) => {
+                    *entry.get_mut() += 2;
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(0);
+                }
+            }
+        }
+    }
+
+    fn set_good_peer(&self, peer: &AdnlNodeIdShort) {
+        if let Some(mut count) = self.bad_peers.get_mut(peer) {
+            *count.value_mut() = count.saturating_sub(1);
+        }
     }
 }
 
