@@ -9,7 +9,7 @@ use ton_api::IntoBoxed;
 use self::overlay_shard::{
     CatchainUpdate, IncomingBroadcastInfo, OutgoingBroadcastInfo, OverlayShard,
 };
-pub use self::overlay_shard::{OverlayShardMetrics, OverlayShardOptions};
+pub use self::overlay_shard::{OverlayShardMetrics, OverlayShardOptions, ReceivedPeersMap};
 use crate::adnl_node::*;
 use crate::rldp_node::*;
 use crate::subscriber::*;
@@ -251,12 +251,8 @@ impl OverlayNode {
         Ok(shard.wait_for_broadcast().await)
     }
 
-    pub async fn wait_for_peers(
-        &self,
-        overlay_id: &OverlayIdShort,
-    ) -> Result<Vec<ton::overlay::node::Node>> {
-        let shard = self.get_overlay_shard(overlay_id)?.clone();
-        Ok(shard.wait_for_peers().await)
+    pub fn take_new_peers(&self, overlay_id: &OverlayIdShort) -> Result<ReceivedPeersMap> {
+        Ok(self.get_overlay_shard(overlay_id)?.take_new_peers())
     }
 
     pub async fn wait_for_catchain(&self, overlay_id: &OverlayIdShort) -> Result<CatchainUpdate> {

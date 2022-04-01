@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use crossbeam_queue::SegQueue;
+use parking_lot::Mutex;
 use sha2::Digest;
 use tokio::sync::mpsc;
 use ton_api::{ton, IntoBoxed};
@@ -24,7 +25,7 @@ pub struct OverlayShard {
     finished_broadcasts: SegQueue<BroadcastId>,
     finished_broadcast_count: AtomicU32,
 
-    received_peers: Arc<BroadcastReceiver<Vec<ton::overlay::node::Node>>>,
+    received_peers: Arc<Mutex<ReceivedPeersMap>>,
     received_broadcasts: Arc<BroadcastReceiver<IncomingBroadcastInfo>>,
     received_catchain: Arc<BroadcastReceiver<CatchainUpdate>>,
 
@@ -106,7 +107,7 @@ impl OverlayShard {
             owned_broadcasts: FxDashMap::default(),
             finished_broadcasts: SegQueue::new(),
             finished_broadcast_count: AtomicU32::new(0),
-            received_peers: Arc::new(BroadcastReceiver::default()),
+            received_peers: Arc::new(Default::default()),
             received_broadcasts: Arc::new(BroadcastReceiver::default()),
             received_catchain: Arc::new(BroadcastReceiver::default()),
             nodes: FxDashMap::default(),
@@ -165,8 +166,6 @@ impl OverlayShard {
             known_peers_len: self.known_peers.len(),
             random_peers_len: self.random_peers.len(),
             neighbours: self.neighbours.len(),
-            received_peers_data_len: self.received_peers.data_len(),
-            received_peers_barrier_count: self.received_peers.barriers_len(),
             received_broadcasts_data_len: self.received_broadcasts.data_len(),
             received_broadcasts_barrier_count: self.received_broadcasts.barriers_len(),
             received_catchain_data_len: self.received_catchain.data_len(),
@@ -262,12 +261,27 @@ impl OverlayShard {
         self.received_broadcasts.pop().await
     }
 
-    pub async fn wait_for_peers(&self) -> Vec<ton::overlay::node::Node> {
-        self.received_peers.pop().await
+    pub fn take_new_peers(&self) -> ReceivedPeersMap {
+        let mut peers = self.received_peers.lock();
+        std::mem::take(&mut *peers)
     }
 
     pub fn push_peers(&self, peers: Vec<ton::overlay::node::Node>) {
-        self.received_peers.push(peers);
+        use std::collections::hash_map::Entry;
+
+        let mut known_peers = self.received_peers.lock();
+        for node in peers {
+            match known_peers.entry(node.id.clone()) {
+                Entry::Occupied(mut entry) => {
+                    if entry.get().version < node.version {
+                        entry.insert(node);
+                    }
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(node);
+                }
+            }
+        }
     }
 
     pub async fn wait_for_catchain(&self) -> CatchainUpdate {
@@ -765,8 +779,6 @@ pub struct OverlayShardMetrics {
     pub known_peers_len: usize,
     pub random_peers_len: usize,
     pub neighbours: usize,
-    pub received_peers_data_len: usize,
-    pub received_peers_barrier_count: usize,
     pub received_broadcasts_data_len: usize,
     pub received_broadcasts_barrier_count: usize,
     pub received_catchain_data_len: usize,
@@ -923,6 +935,8 @@ struct BroadcastFec {
     date: i32,
     signature: [u8; 64],
 }
+
+pub type ReceivedPeersMap = FxHashMap<ton_api::ton::PublicKey, ton::overlay::node::Node>;
 
 type BroadcastFecTx = mpsc::UnboundedSender<BroadcastFec>;
 
