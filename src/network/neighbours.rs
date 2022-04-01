@@ -1,5 +1,5 @@
 use std::convert::TryFrom;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -25,6 +25,8 @@ pub struct Neighbours {
     all_attempts: AtomicU64,
 
     start: Instant,
+
+    peer_search_task_count: Arc<AtomicUsize>,
 }
 
 #[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
@@ -83,6 +85,7 @@ impl Neighbours {
             failed_attempts: Default::default(),
             all_attempts: Default::default(),
             start: Instant::now(),
+            peer_search_task_count: Arc::new(Default::default()),
         })
     }
 
@@ -195,6 +198,12 @@ impl Neighbours {
         self.cache.is_empty()
     }
 
+    pub fn metrics(&self) -> NeighboursMetrics {
+        NeighboursMetrics {
+            peer_search_task_count: self.peer_search_task_count.load(Ordering::Acquire),
+        }
+    }
+
     pub fn contains(&self, peer_id: &AdnlNodeIdShort) -> bool {
         self.cache.contains(peer_id)
     }
@@ -290,6 +299,9 @@ impl Neighbours {
     pub fn add_new_peers(self: &Arc<Self>, peers: Vec<AdnlNodeIdShort>) {
         let neighbours = self.clone();
 
+        self.peer_search_task_count.fetch_add(1, Ordering::Release);
+        let peer_search_task_count = self.peer_search_task_count.clone();
+
         tokio::spawn(async move {
             for peer_id in peers.into_iter() {
                 log::trace!(
@@ -306,6 +318,8 @@ impl Neighbours {
                     }
                 }
             }
+
+            peer_search_task_count.fetch_sub(1, Ordering::Release);
         });
     }
 
@@ -409,6 +423,11 @@ impl Neighbours {
     fn elapsed(&self) -> u64 {
         self.start.elapsed().as_millis() as u64
     }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct NeighboursMetrics {
+    pub peer_search_task_count: usize,
 }
 
 #[derive(thiserror::Error, Debug)]

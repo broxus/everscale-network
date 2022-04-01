@@ -1,5 +1,5 @@
 pub use neighbour::Neighbour;
-pub use neighbours::{Neighbours, NeighboursOptions};
+pub use neighbours::{Neighbours, NeighboursMetrics, NeighboursOptions};
 pub use overlay_client::OverlayClient;
 
 mod neighbour;
