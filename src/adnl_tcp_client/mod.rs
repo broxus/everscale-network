@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use aes::cipher::{NewCipher, StreamCipher};
+use aes::cipher::{KeyIvInit, StreamCipher};
 use anyhow::Result;
 use rand::Rng;
 use sha2::Digest;
@@ -117,11 +117,11 @@ impl AdnlTcpClient {
         let mut rng = rand::thread_rng();
         let mut initial_buffer: Vec<u8> = (0..160).map(|_| rng.gen()).collect();
 
-        let mut cipher_receive = aes::Aes256Ctr::new(
+        let mut cipher_receive = Aes256Ctr::new(
             generic_array::GenericArray::from_slice(&initial_buffer[0..32]),
             generic_array::GenericArray::from_slice(&initial_buffer[64..80]),
         );
-        let mut cipher_send = aes::Aes256Ctr::new(
+        let mut cipher_send = Aes256Ctr::new(
             generic_array::GenericArray::from_slice(&initial_buffer[32..64]),
             generic_array::GenericArray::from_slice(&initial_buffer[80..96]),
         );

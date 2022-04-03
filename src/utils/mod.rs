@@ -47,6 +47,8 @@ pub type FxDashMap<K, V> = dashmap::DashMap<K, V, BuildHasherDefault<FxHasher>>;
 pub type FxHashSet<K> = HashSet<K, BuildHasherDefault<FxHasher>>;
 pub type FxHashMap<K, V> = HashMap<K, V, BuildHasherDefault<FxHasher>>;
 
+pub type Aes256Ctr = ctr::Ctr64BE<aes::Aes256>;
+
 pub fn gen_packet_offset() -> Vec<u8> {
     use rand::Rng;
 
@@ -57,15 +59,15 @@ pub fn gen_packet_offset() -> Vec<u8> {
     result
 }
 
-pub fn build_packet_cipher(shared_secret: &[u8; 32], checksum: &[u8; 32]) -> aes::Aes256Ctr {
-    use aes::cipher::NewCipher;
+pub fn build_packet_cipher(shared_secret: &[u8; 32], checksum: &[u8; 32]) -> Aes256Ctr {
+    use aes::cipher::KeyIvInit;
 
     let mut aes_key_bytes: [u8; 32] = *shared_secret;
     aes_key_bytes[16..32].copy_from_slice(&checksum[16..32]);
     let mut aes_ctr_bytes: [u8; 16] = checksum[0..16].try_into().unwrap();
     aes_ctr_bytes[4..16].copy_from_slice(&shared_secret[20..32]);
 
-    aes::Aes256Ctr::new(
+    Aes256Ctr::new(
         &generic_array::GenericArray::from(aes_key_bytes),
         &generic_array::GenericArray::from(aes_ctr_bytes),
     )

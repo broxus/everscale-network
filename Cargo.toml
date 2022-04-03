@@ -2,20 +2,21 @@
 name = "tiny-adnl"
 version = "0.1.0"
 authors = ["Ivan Kalinin <i.kalinin@dexpa.io>"]
-edition = "2018"
+edition = "2021"
 
 [dependencies]
-aes = { version = "0.7", features = ["ctr"] }
-async-trait = "0.1"
+aes = "0.8.1"
 anyhow = "1.0"
+async-trait = "0.1"
 base64 = "0.13"
-curve25519-dalek-ng = "4.1"
 crossbeam-queue = "0.3"
-dashmap = "5.1.0"
+ctr = "0.9.1"
+curve25519-dalek-ng = "4.1"
+dashmap = "5.2.0"
 generic-array = "0.14.5"
 hex = "0.4"
-log = "0.4"
 libc = "0.2"
+log = "0.4"
 parking_lot = "0.12.0"
 rand = "0.8"
 rustc-hash = "1.1.0"
@@ -24,8 +25,8 @@ sha2 = "0.9"
 smallvec = { version = "1.8.0", features = ["union", "const_generics"] }
 thiserror = "1.0"
 tokio = { version = "1.16.1", features = ["sync", "net", "rt", "time", "io-util", "macros"] }
-tokio-util = "0.7.0"
 tokio-io-timeout = "1.2.0"
+tokio-util = "0.7.0"
 x25519-dalek-ng = "1.1.1"
 zstd = "0.11"
 
