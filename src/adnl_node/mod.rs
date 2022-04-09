@@ -196,16 +196,20 @@ impl AdnlNode {
 
     /// Starts a process that forwards packets from the sender queue to the UDP socket
     fn start_sender(self: &Arc<Self>, socket: Arc<UdpSocket>, mut sender_queue_rx: SenderQueueRx) {
-        let node = Arc::downgrade(self);
+        use futures_util::future::{select, Either};
+
+        let complete_signal = self.cancellation_token.clone();
 
         tokio::spawn(async move {
-            while let Some(packet) = sender_queue_rx.recv().await {
-                // Check if node is still alive
-                let _node = match node.upgrade() {
-                    Some(node) => node,
-                    None => return,
-                };
+            tokio::pin!(let cancelled = complete_signal.cancelled(););
 
+            while let Some(packet) = {
+                tokio::pin!(let recv = sender_queue_rx.recv(););
+                match select(recv, &mut cancelled).await {
+                    Either::Left((packet, _)) => packet,
+                    Either::Right(_) => return,
+                }
+            } {
                 // Send packet
                 let target: SocketAddrV4 = packet.destination.into();
                 match socket.send_to(&packet.data, target).await {
@@ -227,10 +231,12 @@ impl AdnlNode {
         socket: Arc<UdpSocket>,
         subscribers: Arc<Vec<Arc<dyn Subscriber>>>,
     ) {
+        use futures_util::future::{select, Either};
+
         const RECV_BUFFER_SIZE: usize = 2048;
 
         let complete_signal = self.cancellation_token.clone();
-        let node = Arc::downgrade(self);
+        let node = self.clone();
 
         tokio::spawn(async move {
             let mut buffer = None;
@@ -238,19 +244,21 @@ impl AdnlNode {
             tokio::pin!(let cancelled = complete_signal.cancelled(););
 
             loop {
-                // Receive packet
-                let fut = socket.recv_from(
-                    buffer
-                        .get_or_insert_with(|| vec![0u8; RECV_BUFFER_SIZE])
-                        .as_mut_slice(),
-                );
-
-                let data = tokio::select! {
-                    data = fut => data,
-                    _ = &mut cancelled => return,
+                // SAFETY: buffer capacity is always `RECV_BUFFER_SIZE` at the point of creating slice
+                // NOTE: we don't need to initialize it before writing to it
+                let raw_buffer = unsafe {
+                    let buffer = buffer.get_or_insert_with(|| Vec::with_capacity(RECV_BUFFER_SIZE));
+                    std::slice::from_raw_parts_mut(buffer.as_mut_ptr(), buffer.capacity())
                 };
 
-                let len = match data {
+                // Receive packet
+                tokio::pin!(let recv = socket.recv_from(raw_buffer););
+                let result = match select(recv, &mut cancelled).await {
+                    Either::Left((left, _)) => left,
+                    Either::Right(_) => return,
+                };
+
+                let len = match result {
                     Ok((len, _)) if len == 0 => continue,
                     Ok((len, _)) => len,
                     Err(e) => {
@@ -260,18 +268,17 @@ impl AdnlNode {
                 };
 
                 let mut buffer = match buffer.take() {
-                    Some(buffer) => buffer,
+                    Some(mut buffer) => {
+                        // SAFETY: at this point we have initialized at least `len` bytes of partially
+                        // initialized data of len `RECV_BUFFER_SIZE`
+                        unsafe { buffer.set_len(len) };
+                        buffer
+                    }
                     None => continue,
-                };
-                buffer.truncate(len);
-
-                // Check if node is still alive
-                let node = match node.upgrade() {
-                    Some(node) => node,
-                    None => return,
                 };
 
                 // Process packet
+                let node = node.clone();
                 let subscribers = subscribers.clone();
                 tokio::spawn(async move {
                     if let Err(e) = node

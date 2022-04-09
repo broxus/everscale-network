@@ -109,6 +109,7 @@ pub fn serialize_boxed<T: IntoBoxed>(object: T) -> Result<Vec<u8>> {
     serialize(&object)
 }
 
+#[allow(clippy::ptr_arg)] // https://github.com/rust-lang/rust-clippy/issues/8482
 pub fn serialize_append<T>(buffer: &mut Vec<u8>, object: &T) -> Result<()>
 where
     T: BoxedSerialize,
