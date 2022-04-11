@@ -62,9 +62,9 @@ where
             Entry::Vacant(entry) => entry.insert(Operation::new(true)).clone(),
         };
 
-        log::trace!("{}: started operation {}", self.name, id);
+        // log::trace!("{}: started operation {}", self.name, id);
         let result = operation.await;
-        log::trace!("{}: done operation {}", self.name, id);
+        // log::trace!("{}: done operation {}", self.name, id);
 
         self.operations.remove(id);
 
@@ -108,7 +108,7 @@ where
         let mut result_rx = operation.result_rx.clone();
 
         loop {
-            log::trace!("{}: waiting operation {}", self.name, id);
+            // log::trace!("{}: waiting operation {}", self.name, id);
 
             let possible_result =
                 tokio::time::timeout(Duration::from_millis(1), result_rx.changed()).await;
@@ -136,7 +136,7 @@ where
                 None => continue,
             };
 
-            log::trace!("{}: waited for operation {}", self.name, id);
+            // log::trace!("{}: waited for operation {}", self.name, id);
             break result;
         }
     }
