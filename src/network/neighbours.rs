@@ -224,6 +224,10 @@ impl Neighbours {
         self.overlay_peers.remove(peer_id);
     }
 
+    pub fn get(&self, peer_id: &AdnlNodeIdShort) -> Option<Arc<Neighbour>> {
+        self.cache.get(peer_id)
+    }
+
     pub fn choose_neighbour(&self) -> Option<Arc<Neighbour>> {
         let mut rng = rand::thread_rng();
 

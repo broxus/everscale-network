@@ -12,12 +12,12 @@ use super::{hash, serialize, serialize_boxed};
 pub struct AdnlNodeIdFull(ed25519_dalek::PublicKey);
 
 impl AdnlNodeIdFull {
-    pub fn new(public_key: ed25519_dalek::PublicKey) -> Self {
+    pub const fn new(public_key: ed25519_dalek::PublicKey) -> Self {
         Self(public_key)
     }
 
     #[inline(always)]
-    pub fn public_key(&self) -> &ed25519_dalek::PublicKey {
+    pub const fn public_key(&self) -> &ed25519_dalek::PublicKey {
         &self.0
     }
 
@@ -94,7 +94,7 @@ impl<'a> TryFrom<PublicKeyView<'a>> for AdnlNodeIdFull {
 pub struct AdnlNodeIdShort([u8; 32]);
 
 impl AdnlNodeIdShort {
-    pub fn new(hash: [u8; 32]) -> Self {
+    pub const fn new(hash: [u8; 32]) -> Self {
         Self(hash)
     }
 
@@ -102,20 +102,15 @@ impl AdnlNodeIdShort {
         Self(rand::thread_rng().gen())
     }
 
-    pub fn as_slice(&self) -> &[u8; 32] {
+    pub const fn as_slice(&self) -> &[u8; 32] {
         &self.0
     }
 
     pub fn is_zero(&self) -> bool {
-        for b in &self.0 {
-            if b != &0 {
-                return false;
-            }
-        }
-        true
+        self == &[0; 32]
     }
 
-    pub fn as_tl(&self) -> ton::adnl::id::short::Short {
+    pub const fn as_tl(&self) -> ton::adnl::id::short::Short {
         ton::adnl::id::short::Short {
             id: ton::int256(self.0),
         }

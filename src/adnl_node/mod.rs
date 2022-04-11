@@ -1057,7 +1057,7 @@ impl AdnlNode {
         let peers = self.get_peers(local_id)?;
         let mut peer = peers.get_mut(peer_id).ok_or(AdnlNodeError::UnknownPeer)?;
 
-        log::warn!("Resetting peer pair {} -> {}", local_id, peer_id);
+        log::debug!("Resetting peer pair {} -> {}", local_id, peer_id);
 
         self.channels_by_peers
             .remove(peer_id)

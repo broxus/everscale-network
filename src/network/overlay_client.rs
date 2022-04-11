@@ -96,7 +96,7 @@ impl OverlayClient {
         query: Q,
         attempts: Option<u32>,
         timeout: Option<u64>,
-        active_peers: Option<&Arc<FxDashSet<AdnlNodeIdShort>>>,
+        explicit_neighbour: Option<&Arc<Neighbour>>,
     ) -> Result<(A, Arc<Neighbour>)>
     where
         Q: ton_api::AnyBoxedSerialize,
@@ -108,34 +108,22 @@ impl OverlayClient {
         let attempts = attempts.unwrap_or(DEFAULT_ADNL_ATTEMPTS);
 
         for _ in 0..attempts {
-            let neighbour = match self.neighbours.choose_neighbour() {
-                Some(neighbour) => neighbour,
-                None => {
-                    tokio::time::sleep(Duration::from_millis(NO_NEIGHBOURS_DELAY)).await;
-                    return Err(OverlayClientError::NeNeighboursFound.into());
-                }
+            let neighbour = match explicit_neighbour {
+                Some(neighbour) => neighbour.clone(),
+                None => match self.neighbours.choose_neighbour() {
+                    Some(neighbour) => neighbour,
+                    None => {
+                        tokio::time::sleep(Duration::from_millis(NO_NEIGHBOURS_DELAY)).await;
+                        return Err(OverlayClientError::NeNeighboursFound.into());
+                    }
+                },
             };
 
-            if let Some(active_peers) = active_peers {
-                active_peers.insert(*neighbour.peer_id());
-            }
-
-            match self
+            if let Some(answer) = self
                 .send_adnl_query_to_neighbour::<Q, A>(&neighbour, &query, timeout)
-                .await
+                .await?
             {
-                Ok(Some(answer)) => return Ok((answer, neighbour)),
-                Ok(None) => {
-                    if let Some(active_peers) = active_peers {
-                        active_peers.remove(neighbour.peer_id());
-                    }
-                }
-                Err(e) => {
-                    if let Some(active_peers) = active_peers {
-                        active_peers.remove(neighbour.peer_id());
-                    }
-                    return Err(e);
-                }
+                return Ok((answer, neighbour));
             }
         }
 
