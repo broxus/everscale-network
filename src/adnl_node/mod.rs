@@ -666,19 +666,20 @@ impl AdnlNode {
         let peer = peer.value();
 
         let local_key = self.keystore.key_by_id(local_id)?;
-        let channel = self.channels_by_peers.get(peer_id);
+        let mut channel = self.channels_by_peers.get(peer_id);
         let (mut size, additional_message) = match &channel {
             Some(channel) if channel.ready() => (0, None),
-            Some(channel) => {
+            Some(channel_data) => {
                 log::debug!("Confirm channel {} -> {}", local_id, peer_id);
 
                 let message = ton::adnl::message::message::ConfirmChannel {
-                    key: ton::int256(*channel.peer_channel_public_key()),
-                    peer_key: ton::int256(peer.channel_key().public_key().to_bytes()),
-                    date: channel.peer_channel_date(),
+                    key: ton::int256(peer.channel_key().public_key().to_bytes()),
+                    peer_key: ton::int256(*channel_data.peer_channel_public_key()),
+                    date: channel_data.peer_channel_date(),
                 }
                 .into_boxed();
 
+                channel = None;
                 (MSG_CONFIRM_CHANNEL_SIZE, Some(message))
             }
             None => {
