@@ -965,6 +965,16 @@ impl AdnlNode {
         Ok(peers.remove(peer_id).is_some())
     }
 
+    pub fn get_peer_ip(
+        &self,
+        local_id: &AdnlNodeIdShort,
+        peer_id: &AdnlNodeIdShort,
+    ) -> Option<AdnlAddressUdp> {
+        let peers = self.get_peers(local_id).ok()?;
+        let peer = peers.get(peer_id)?;
+        Some(peer.ip_address())
+    }
+
     pub fn send_custom_message(
         &self,
         local_id: &AdnlNodeIdShort,

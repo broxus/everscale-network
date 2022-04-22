@@ -1,47 +1,51 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::OutgoingBroadcastInfo;
 use anyhow::Result;
 use ton_api::ton::TLObject;
 
 use super::neighbour::Neighbour;
 use super::neighbours::Neighbours;
-use crate::overlay_node::OverlayNode;
+use crate::overlay_node::{IncomingBroadcastInfo, OverlayShard};
 use crate::rldp_node::RldpNode;
 use crate::utils::*;
 
 pub struct OverlayClient {
-    overlay_id: OverlayIdShort,
-    overlay: Arc<OverlayNode>,
     rldp: Arc<RldpNode>,
     neighbours: Arc<Neighbours>,
+    overlay_shard: Arc<OverlayShard>,
 }
 
 impl OverlayClient {
     pub fn new(
-        overlay: Arc<OverlayNode>,
         rldp: Arc<RldpNode>,
         neighbours: Arc<Neighbours>,
-        overlay_id: OverlayIdShort,
+        overlay_shard: Arc<OverlayShard>,
     ) -> Self {
         Self {
-            overlay_id,
-            overlay,
             rldp,
             neighbours,
+            overlay_shard,
         }
     }
 
     pub fn overlay_id(&self) -> &OverlayIdShort {
-        &self.overlay_id
-    }
-
-    pub fn overlay(&self) -> &Arc<OverlayNode> {
-        &self.overlay
+        self.overlay_shard.id()
     }
 
     pub fn neighbours(&self) -> &Arc<Neighbours> {
         &self.neighbours
+    }
+
+    pub fn overlay_shard(&self) -> &Arc<OverlayShard> {
+        &self.overlay_shard
+    }
+
+    pub fn resolve_ip(&self, neighbour: &Neighbour) -> Option<AdnlAddressUdp> {
+        self.overlay_shard
+            .adnl()
+            .get_peer_ip(self.overlay_shard.overlay_key().id(), neighbour.peer_id())
     }
 
     pub async fn send_rldp_query<Q, A>(
@@ -130,6 +134,18 @@ impl OverlayClient {
         Err(OverlayClientError::AdnlQueryFailed(query, attempts).into())
     }
 
+    pub fn broadcast(
+        &self,
+        data: Vec<u8>,
+        source: Option<&Arc<StoredAdnlNodeKey>>,
+    ) -> Result<OutgoingBroadcastInfo> {
+        self.overlay_shard.broadcast(data, source)
+    }
+
+    pub async fn wait_for_broadcast(&self) -> IncomingBroadcastInfo {
+        self.overlay_shard.wait_for_broadcast().await
+    }
+
     async fn send_adnl_query_to_neighbour<Q, A>(
         &self,
         neighbour: &Neighbour,
@@ -143,16 +159,13 @@ impl OverlayClient {
         let now = Instant::now();
         let timeout = timeout.or_else(|| {
             Some(
-                self.overlay
+                self.overlay_shard
                     .adnl()
                     .compute_query_timeout(neighbour.roundtrip_adnl()),
             )
         });
-
-        let answer = self
-            .overlay
-            .query(&self.overlay_id, neighbour.peer_id(), query, timeout)
-            .await?;
+        let peer_id = neighbour.peer_id();
+        let answer = self.overlay_shard.query(peer_id, query, timeout).await?;
 
         let roundtrip = now.elapsed().as_millis() as u64;
 
@@ -163,19 +176,20 @@ impl OverlayClient {
             }
             Some(Err(answer)) => {
                 log::warn!(
-                    "Wrong answer {:?} to {:?} from {}",
-                    answer,
-                    query,
-                    neighbour.peer_id()
+                    "Wrong answer {answer:?} to {query:?} from {peer_id} ({})",
+                    ResolvedIp(self.resolve_ip(neighbour))
                 );
             }
             None => {
-                log::warn!("No reply to {:?} from {}", query, neighbour.peer_id());
+                log::warn!(
+                    "No reply to {query:?} from {peer_id} ({})",
+                    ResolvedIp(self.resolve_ip(neighbour))
+                );
             }
         }
 
         self.neighbours
-            .update_neighbour_stats(neighbour.peer_id(), roundtrip, false, false, true);
+            .update_neighbour_stats(peer_id, roundtrip, false, false, true);
         Ok(None)
     }
 
@@ -191,13 +205,12 @@ impl OverlayClient {
         const MAX_ANSWER_SIZE: i64 = 10 * 1024 * 1024; // 10 MB
         const ATTEMPT_INTERVAL: u64 = 50; // Milliseconds
 
-        let mut data = self.overlay.get_query_prefix(&self.overlay_id)?;
+        let mut data = self.overlay_shard.query_prefix().clone();
         serialize_append(&mut data, query)?;
 
         let (answer, roundtrip) = self
-            .overlay
+            .overlay_shard
             .query_via_rldp(
-                &self.overlay_id,
                 neighbour.peer_id(),
                 data,
                 &self.rldp,
@@ -225,6 +238,17 @@ impl OverlayClient {
 }
 
 const DEFAULT_ADNL_ATTEMPTS: u32 = 50;
+
+struct ResolvedIp(Option<AdnlAddressUdp>);
+
+impl std::fmt::Display for ResolvedIp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            Some(ip) => ip.fmt(f),
+            None => f.write_str("unknown"),
+        }
+    }
+}
 
 #[derive(thiserror::Error, Debug)]
 enum OverlayClientError {

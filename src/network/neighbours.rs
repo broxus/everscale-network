@@ -14,8 +14,7 @@ use crate::utils::*;
 
 pub struct Neighbours {
     dht: Arc<DhtNode>,
-    overlay: Arc<OverlayNode>,
-    overlay_id: OverlayIdShort,
+    overlay_shard: Arc<OverlayShard>,
     options: NeighboursOptions,
 
     cache: Arc<NeighboursCache>,
@@ -68,8 +67,7 @@ impl Default for NeighboursOptions {
 impl Neighbours {
     pub fn new(
         dht: &Arc<DhtNode>,
-        overlay: &Arc<OverlayNode>,
-        overlay_id: &OverlayIdShort,
+        overlay_shard: &Arc<OverlayShard>,
         initial_peers: &[AdnlNodeIdShort],
         options: NeighboursOptions,
     ) -> Arc<Self> {
@@ -77,8 +75,7 @@ impl Neighbours {
 
         Arc::new(Self {
             dht: dht.clone(),
-            overlay: overlay.clone(),
-            overlay_id: *overlay_id,
+            overlay_shard: overlay_shard.clone(),
             options,
             cache,
             overlay_peers: Default::default(),
@@ -91,6 +88,10 @@ impl Neighbours {
 
     pub fn options(&self) -> &NeighboursOptions {
         &self.options
+    }
+
+    pub fn overlay_shard(&self) -> &Arc<OverlayShard> {
+        &self.overlay_shard
     }
 
     pub fn start_reloading_neighbours(self: &Arc<Self>) {
@@ -114,7 +115,7 @@ impl Neighbours {
                     None => return,
                 };
 
-                if let Err(e) = neighbours.reload_neighbours(&neighbours.overlay_id) {
+                if let Err(e) = neighbours.reload_neighbours() {
                     log::warn!("Failed to reload neighbours: {}", e);
                 }
             }
@@ -157,8 +158,8 @@ impl Neighbours {
                 external_iter.bump();
 
                 match neighbours
-                    .overlay
-                    .get_random_peers(&neighbours.overlay_id, &peer_id, None)
+                    .overlay_shard
+                    .get_random_peers(&peer_id, None)
                     .await
                 {
                     Ok(Some(peers)) => {
@@ -237,26 +238,32 @@ impl Neighbours {
         self.cache.choose_neighbour(&mut rng, average_failures)
     }
 
-    pub fn reload_neighbours(&self, overlay_id: &OverlayIdShort) -> Result<()> {
-        log::trace!("Start reload_neighbours (overlay: {})", overlay_id);
+    pub fn reload_neighbours(&self) -> Result<()> {
+        log::trace!(
+            "Start reload_neighbours (overlay: {})",
+            self.overlay_shard.id()
+        );
 
         let peers = PeersCache::with_capacity(self.options.max_neighbours * 2 + 1);
-        self.overlay
-            .write_cached_peers(overlay_id, self.options.max_neighbours * 2, &peers)?;
+        self.overlay_shard
+            .write_cached_peers(self.options.max_neighbours * 2, &peers);
         self.process_neighbours(peers)?;
 
-        log::trace!("Finish reload_neighbours (overlay: {})", overlay_id);
+        log::trace!(
+            "Finish reload_neighbours (overlay: {})",
+            self.overlay_shard.id()
+        );
         Ok(())
     }
 
     pub async fn ping_neighbours(self: &Arc<Self>) -> Result<()> {
         let neighbour_count = self.cache.len();
         if neighbour_count == 0 {
-            return Err(NeighboursError::NoPeersInOverlay(self.overlay_id).into());
+            return Err(NeighboursError::NoPeersInOverlay(*self.overlay_shard.id()).into());
         } else {
             log::trace!(
                 "Pinging neighbours in overlay {} (count: {})",
-                self.overlay_id,
+                *self.overlay_shard.id(),
                 neighbour_count,
             )
         }
@@ -360,14 +367,11 @@ impl Neighbours {
     }
 
     async fn update_capabilities(self: &Arc<Self>, neighbour: Arc<Neighbour>) -> Result<()> {
-        let now = Instant::now();
-        neighbour.set_last_ping(self.elapsed());
-
         let query = TLObject::new(ton::rpc::ton_node::GetCapabilities);
         log::trace!(
             "Query capabilities from {} in {}",
             neighbour.peer_id(),
-            self.overlay_id
+            self.overlay_shard.id()
         );
 
         let timeout = Some(
@@ -376,9 +380,12 @@ impl Neighbours {
                 .compute_query_timeout(neighbour.roundtrip_adnl()),
         );
 
+        let now = Instant::now();
+        neighbour.set_last_ping(self.elapsed());
+
         match self
-            .overlay
-            .query(&self.overlay_id, neighbour.peer_id(), &query, timeout)
+            .overlay_shard
+            .query(neighbour.peer_id(), &query, timeout)
             .await
         {
             Ok(Some(answer)) => {
@@ -386,7 +393,7 @@ impl Neighbours {
                 log::debug!(
                     "Got capabilities from {} {}: {:?}",
                     neighbour.peer_id(),
-                    self.overlay_id,
+                    self.overlay_shard.id(),
                     capabilities
                 );
 
@@ -411,8 +418,7 @@ impl Neighbours {
 
             let (hint, unreliable_peer) = cache.insert_or_replace_unreliable(&mut rng, peer_id);
             if let Some(unreliable_peer) = unreliable_peer {
-                self.overlay
-                    .delete_public_peer(&self.overlay_id, &unreliable_peer)?;
+                self.overlay_shard.delete_public_peer(&unreliable_peer);
                 self.overlay_peers.remove(&unreliable_peer);
             }
 

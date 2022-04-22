@@ -18,6 +18,7 @@ use crate::utils::*;
 pub struct OverlayShard {
     adnl: Arc<AdnlNode>,
     overlay_id: OverlayIdShort,
+    node_key: Arc<StoredAdnlNodeKey>,
     overlay_key: Option<Arc<StoredAdnlNodeKey>>,
     options: OverlayShardOptions,
 
@@ -87,6 +88,7 @@ impl Default for OverlayShardOptions {
 impl OverlayShard {
     pub fn new(
         adnl: Arc<AdnlNode>,
+        node_key: Arc<StoredAdnlNodeKey>,
         overlay_id: OverlayIdShort,
         overlay_key: Option<Arc<StoredAdnlNodeKey>>,
         options: OverlayShardOptions,
@@ -102,6 +104,7 @@ impl OverlayShard {
         let overlay = Arc::new(Self {
             adnl,
             overlay_id,
+            node_key,
             overlay_key,
             options,
             owned_broadcasts: FxDashMap::default(),
@@ -173,6 +176,10 @@ impl OverlayShard {
         }
     }
 
+    pub fn adnl(&self) -> &Arc<AdnlNode> {
+        &self.adnl
+    }
+
     pub fn id(&self) -> &OverlayIdShort {
         &self.overlay_id
     }
@@ -181,8 +188,11 @@ impl OverlayShard {
         self.overlay_key.is_some()
     }
 
-    pub fn overlay_key(&self) -> &Option<Arc<StoredAdnlNodeKey>> {
-        &self.overlay_key
+    pub fn overlay_key(&self) -> &Arc<StoredAdnlNodeKey> {
+        match &self.overlay_key {
+            Some(overlay_key) => overlay_key,
+            None => &self.node_key,
+        }
     }
 
     pub fn add_known_peers(&self, peers: &[AdnlNodeIdShort]) {
@@ -199,30 +209,71 @@ impl OverlayShard {
         self.update_neighbours(self.options.max_shard_neighbours);
     }
 
-    pub fn add_public_peer(&self, peer_id: &AdnlNodeIdShort, node: ton::overlay::node::Node) {
-        use dashmap::mapref::entry::Entry;
-
-        self.ignored_peers.remove(peer_id);
-        self.known_peers.put(*peer_id);
-
-        if self.random_peers.len() < self.options.max_shard_peers {
-            self.random_peers.put(*peer_id);
+    pub fn add_public_peer(
+        &self,
+        ip_address: AdnlAddressUdp,
+        node: ton::overlay::node::Node,
+    ) -> Result<Option<AdnlNodeIdShort>> {
+        if self.is_private() {
+            return Err(OverlayShardError::PublicPeerToPrivateOverlay.into());
         }
 
-        if self.neighbours.len() < self.options.max_shard_neighbours {
-            self.neighbours.put(*peer_id);
+        if let Err(e) = verify_node(&self.overlay_id, &node) {
+            log::warn!("Error during overlay peer verification: {:?}", e);
+            return Ok(None);
         }
 
-        match self.nodes.entry(*peer_id) {
-            Entry::Occupied(entry) => {
-                if entry.get().version < node.version {
-                    entry.replace_entry(node);
-                }
+        let peer_id_full = AdnlNodeIdFull::try_from(&node.id)?;
+        let peer_id = peer_id_full.compute_short_id()?;
+
+        let is_new_peer = self.adnl.add_peer(
+            PeerContext::PublicOverlay,
+            self.node_key.id(),
+            &peer_id,
+            ip_address,
+            peer_id_full,
+        )?;
+        if is_new_peer {
+            self.insert_public_peer(&peer_id, node);
+            Ok(Some(peer_id))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn add_public_peers<I>(&self, nodes: I) -> Result<Vec<AdnlNodeIdShort>>
+    where
+        I: IntoIterator<Item = (AdnlAddressUdp, ton::overlay::node::Node)>,
+    {
+        if self.is_private() {
+            return Err(OverlayShardError::PublicPeerToPrivateOverlay.into());
+        }
+
+        let mut result = Vec::new();
+        for (ip_address, node) in nodes {
+            if let Err(e) = verify_node(&self.overlay_id, &node) {
+                log::debug!("Error during overlay peer verification: {e:?}");
+                continue;
             }
-            Entry::Vacant(entry) => {
-                entry.insert(node);
+
+            let peer_id_full = AdnlNodeIdFull::try_from(&node.id)?;
+            let peer_id = peer_id_full.compute_short_id()?;
+
+            let is_new_peer = self.adnl.add_peer(
+                PeerContext::PublicOverlay,
+                self.node_key.id(),
+                &peer_id,
+                ip_address,
+                peer_id_full,
+            )?;
+            if is_new_peer {
+                self.insert_public_peer(&peer_id, node);
+                result.push(peer_id);
+                log::trace!("Node id: {}, address: {}", peer_id, ip_address);
             }
         }
+
+        Ok(result)
     }
 
     pub fn delete_public_peer(&self, peer_id: &AdnlNodeIdShort) -> bool {
@@ -239,22 +290,42 @@ impl OverlayShard {
         dst.randomly_fill_from(&self.known_peers, amount, Some(&self.ignored_peers));
     }
 
-    pub fn write_random_peers(&self, amount: usize, nodes: &mut Vec<ton::overlay::node::Node>) {
-        let peers = PeersCache::with_capacity(amount);
-        peers.randomly_fill_from(&self.random_peers, amount, None);
-        for peer_id in &peers {
-            if let Some(node) = self.nodes.get(peer_id) {
-                nodes.push(node.clone());
-            }
-        }
-    }
-
     pub fn query_prefix(&self) -> &Vec<u8> {
         &self.query_prefix
     }
 
     pub fn message_prefix(&self) -> &Vec<u8> {
         &self.message_prefix
+    }
+
+    pub fn send_message(&self, peer_id: &AdnlNodeIdShort, data: &[u8]) -> Result<()> {
+        let local_id = self.overlay_key().id();
+
+        let mut buffer = Vec::with_capacity(self.message_prefix().len() + data.len());
+        buffer.extend_from_slice(self.message_prefix());
+        buffer.extend_from_slice(data);
+        self.adnl.send_custom_message(local_id, peer_id, &buffer)
+    }
+
+    pub fn broadcast(
+        self: &Arc<Self>,
+        data: Vec<u8>,
+        source: Option<&Arc<StoredAdnlNodeKey>>,
+    ) -> Result<OutgoingBroadcastInfo> {
+        const ORDINARY_BROADCAST_MAX_SIZE: usize = 768;
+
+        let local_id = self.overlay_key().id();
+
+        let key = match source {
+            Some(key) => key,
+            None => &self.node_key,
+        };
+
+        if data.len() <= ORDINARY_BROADCAST_MAX_SIZE {
+            self.send_broadcast(local_id, data, key)
+        } else {
+            self.send_fec_broadcast(local_id, data, key)
+        }
     }
 
     pub async fn wait_for_broadcast(&self) -> IncomingBroadcastInfo {
@@ -579,6 +650,124 @@ impl OverlayShard {
         Ok(info)
     }
 
+    pub async fn query(
+        &self,
+        peer_id: &AdnlNodeIdShort,
+        query: &ton::TLObject,
+        timeout: Option<u64>,
+    ) -> Result<Option<ton::TLObject>> {
+        let local_id = self.overlay_key().id();
+        self.adnl
+            .query_with_prefix(local_id, peer_id, Some(self.query_prefix()), query, timeout)
+            .await
+    }
+
+    pub async fn query_via_rldp(
+        &self,
+        peer_id: &AdnlNodeIdShort,
+        data: Vec<u8>,
+        rldp: &Arc<RldpNode>,
+        max_answer_size: Option<i64>,
+        roundtrip: Option<u64>,
+    ) -> Result<(Option<Vec<u8>>, u64)> {
+        let local_id = self.overlay_key().id();
+        rldp.query(local_id, peer_id, data, max_answer_size, roundtrip)
+            .await
+    }
+
+    pub async fn get_random_peers(
+        &self,
+        peer_id: &AdnlNodeIdShort,
+        timeout: Option<u64>,
+    ) -> Result<Option<Vec<ton::overlay::node::Node>>> {
+        let query = ton::TLObject::new(ton::rpc::overlay::GetRandomPeers {
+            peers: self.prepare_random_peers()?,
+        });
+        match self.query(peer_id, &query, timeout).await? {
+            Some(answer) => {
+                let answer: ton::overlay::Nodes = parse_answer(answer)?;
+                log::trace!("Got random peers from {peer_id}");
+                Ok(Some(self.process_nodes(answer.only())))
+            }
+            None => {
+                log::trace!("No random peers from {peer_id}");
+                Ok(None)
+            }
+        }
+    }
+
+    pub fn process_get_random_peers(
+        &self,
+        query: ton::rpc::overlay::GetRandomPeers,
+    ) -> Result<ton::overlay::nodes::Nodes> {
+        let peers = self.process_nodes(query.peers);
+        self.push_peers(peers);
+        self.prepare_random_peers()
+    }
+
+    pub fn sign_local_node(&self) -> Result<ton::overlay::node::Node> {
+        let key = self.overlay_key();
+        let version = now();
+
+        let signature = serialize_boxed(ton::overlay::node::tosign::ToSign {
+            id: key.id().as_tl(),
+            overlay: ton::int256(self.id().into()),
+            version,
+        })?;
+        let signature = key.sign(&signature);
+
+        Ok(ton::overlay::node::Node {
+            id: key.full_id().as_tl().into_boxed(),
+            overlay: ton::int256(self.id().into()),
+            version,
+            signature: ton::bytes(signature.to_bytes().to_vec()),
+        })
+    }
+
+    fn process_nodes(&self, nodes: ton::overlay::nodes::Nodes) -> Vec<ton::overlay::node::Node> {
+        log::trace!("-------- Got random peers");
+
+        let mut result = Vec::new();
+
+        for node in nodes.nodes.0 {
+            if !matches!(
+                &node.id,
+                ton::PublicKey::Pub_Ed25519(id)
+                if &id.key.0 != self.node_key.full_id().public_key().as_bytes()
+            ) {
+                continue;
+            }
+
+            log::trace!("{node:?}");
+            if let Err(e) = verify_node(&self.overlay_id, &node) {
+                log::warn!("Error during overlay peer verification: {e:?}");
+                continue;
+            }
+
+            result.push(node);
+        }
+
+        result
+    }
+
+    fn prepare_random_peers(&self) -> Result<ton::overlay::nodes::Nodes> {
+        let mut result = vec![self.sign_local_node()?];
+
+        let amount = MAX_RANDOM_PEERS;
+
+        let peers = PeersCache::with_capacity(amount);
+        peers.randomly_fill_from(&self.random_peers, amount, None);
+        for peer_id in &peers {
+            if let Some(node) = self.nodes.get(peer_id) {
+                result.push(node.clone());
+            }
+        }
+
+        Ok(ton::overlay::nodes::Nodes {
+            nodes: result.into(),
+        })
+    }
+
     fn update_random_peers(&self, amount: usize) {
         self.random_peers
             .randomly_fill_from(&self.known_peers, amount, Some(&self.ignored_peers));
@@ -594,6 +783,32 @@ impl OverlayShard {
                 amount,
                 Some(&self.ignored_peers),
             );
+        }
+    }
+
+    fn insert_public_peer(&self, peer_id: &AdnlNodeIdShort, node: ton::overlay::node::Node) {
+        use dashmap::mapref::entry::Entry;
+
+        self.ignored_peers.remove(peer_id);
+        self.known_peers.put(*peer_id);
+
+        if self.random_peers.len() < self.options.max_shard_peers {
+            self.random_peers.put(*peer_id);
+        }
+
+        if self.neighbours.len() < self.options.max_shard_neighbours {
+            self.neighbours.put(*peer_id);
+        }
+
+        match self.nodes.entry(*peer_id) {
+            Entry::Occupied(entry) => {
+                if entry.get().version < node.version {
+                    entry.replace_entry(node);
+                }
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(node);
+            }
         }
     }
 
@@ -882,10 +1097,6 @@ fn make_fec_part_to_sign(
     })
 }
 
-const BROADCAST_FLAG_ANY_SENDER: i32 = 1; // Any sender
-
-const TRANSFER_LOOP_INTERVAL: u64 = 10; // Milliseconds
-
 pub struct IncomingBroadcastInfo {
     pub packets: u32,
     pub data: Vec<u8>,
@@ -952,4 +1163,12 @@ enum OverlayShardError {
     DataSizeMismatch,
     #[error("Data hash mismatch")]
     DataHashMismatch,
+    #[error("Cannot add public peer to private overlay")]
+    PublicPeerToPrivateOverlay,
 }
+
+const MAX_RANDOM_PEERS: usize = 4;
+
+const BROADCAST_FLAG_ANY_SENDER: i32 = 1; // Any sender
+
+const TRANSFER_LOOP_INTERVAL: u64 = 10; // Milliseconds
