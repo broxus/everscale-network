@@ -83,6 +83,8 @@ pub struct AdnlNodeOptions {
     pub address_list_timeout_sec: i32,
     /// Default: false
     pub packet_history_enabled: bool,
+    /// Default: None
+    pub version: Option<u16>,
 }
 
 impl Default for AdnlNodeOptions {
@@ -94,6 +96,7 @@ impl Default for AdnlNodeOptions {
             clock_tolerance_sec: 60,
             address_list_timeout_sec: 1000,
             packet_history_enabled: false,
+            version: None,
         }
     }
 }
@@ -299,19 +302,24 @@ impl AdnlNode {
         subscribers: &[Arc<dyn Subscriber>],
     ) -> Result<()> {
         // Decrypt packet and extract peers
-        let (priority, local_id, peer_id) = if let Some(local_id) =
-            parse_handshake_packet(self.keystore.keys(), &mut data, None)?
+        let (priority, local_id, peer_id, version) = if let Some((local_id, version)) =
+            parse_handshake_packet(self.keystore.keys(), &mut data)?
         {
-            (false, local_id, None)
+            (false, local_id, None, version)
         } else if let Some(channel) = self.channels_by_id.get(&data[0..32]) {
             let (channel, priority) = match channel.value() {
                 ChannelReceiver::Priority(channel) => (channel, true),
                 ChannelReceiver::Ordinary(channel) => (channel, false),
             };
-            channel.decrypt(&mut data, priority)?;
+            let version = channel.decrypt(&mut data, priority)?;
             channel.set_ready();
             channel.reset_drop_timeout();
-            (priority, *channel.local_id(), Some(*channel.peer_id()))
+            (
+                priority,
+                *channel.local_id(),
+                Some(*channel.peer_id()),
+                version,
+            )
         } else {
             log::trace!(
                 "Received message to unknown key ID: {}",
@@ -319,6 +327,12 @@ impl AdnlNode {
             );
             return Ok(());
         };
+
+        if let Some(version) = version {
+            if version != ADNL_INITIAL_VERSION {
+                return Err(AdnlNodeError::UnsupportedVersion.into());
+            }
+        }
 
         // Parse packet
         let (packet, signature) = PacketContentsView::read_from_packet(data.as_slice())
@@ -842,8 +856,12 @@ impl AdnlNode {
         let mut data = serialize_boxed(packet)?;
 
         match signer {
-            MessageSigner::Channel { channel, priority } => channel.encrypt(&mut data, priority)?,
-            MessageSigner::Random(_) => build_handshake_packet(peer_id, peer.id(), &mut data)?,
+            MessageSigner::Channel { channel, priority } => {
+                channel.encrypt(&mut data, priority, self.options.version)?
+            }
+            MessageSigner::Random(_) => {
+                build_handshake_packet(peer_id, peer.id(), &mut data, self.options.version)?
+            }
         }
 
         self.sender_queue_tx
@@ -1216,6 +1234,8 @@ enum AdnlNodeError {
     UnexpectedMessageToSend,
     #[error("Failed to send ADNL packet")]
     FailedToSendPacket,
+    #[error("Unsupported version")]
+    UnsupportedVersion,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -1245,3 +1265,5 @@ enum AdnlPacketError {
     #[error("Signature not found")]
     SignatureNotFound,
 }
+
+const ADNL_INITIAL_VERSION: u16 = 0;

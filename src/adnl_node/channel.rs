@@ -3,7 +3,6 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 use aes::cipher::StreamCipher;
 use anyhow::Result;
-use sha2::Digest;
 use ton_api::ton;
 
 use crate::utils::*;
@@ -114,44 +113,94 @@ impl AdnlChannel {
         self.drop.store(0, Ordering::Release);
     }
 
-    pub fn decrypt(&self, buffer: &mut PacketView, priority: bool) -> Result<()> {
+    /// Decrypts data from the channel. Returns the version of the ADNL version
+    pub fn decrypt(&self, buffer: &mut PacketView, priority: bool) -> Result<Option<u16>> {
         if buffer.len() < 64 {
             return Err(AdnlChannelError::ChannelMessageIsTooShort(buffer.len()).into());
         }
 
-        process_channel_data(
-            buffer.as_mut_slice(),
-            if priority {
-                &self.channel_in.priority.secret
-            } else {
-                &self.channel_in.ordinary.secret
-            },
-        );
+        let shared_secret = if priority {
+            &self.channel_in.priority.secret
+        } else {
+            &self.channel_in.ordinary.secret
+        };
 
-        if sha2::Sha256::digest(&buffer[64..]).as_slice() != &buffer[32..64] {
-            return Err(AdnlChannelError::InvalidChannelMessageChecksum.into());
+        // NOTE: macros is used here to avoid useless bound checks, saving the `.len()` context
+        macro_rules! process {
+            ($buffer:ident, $shared_secret:ident, $version:expr, $start:literal .. $end:literal) => {
+                build_packet_cipher($shared_secret, &$buffer[$start..$end].try_into().unwrap())
+                    .apply_keystream(&mut $buffer[$end..]);
+
+                // Check checksum
+                if compute_packet_data_hash($version, &$buffer[$end..]).as_slice()
+                    != &$buffer[$start..$end]
+                {
+                    return Err(AdnlChannelError::InvalidChannelMessageChecksum.into());
+                }
+
+                // Leave only data in the buffer
+                $buffer.remove_prefix($end);
+            };
         }
 
-        buffer.remove_prefix(64);
-        Ok(())
+        if buffer.len() > 68 {
+            if let Some(version) = decode_version((&buffer[..68]).try_into().unwrap()) {
+                process!(buffer, shared_secret, Some(version), 36..68);
+                return Ok(Some(version));
+            }
+        }
+
+        process!(buffer, shared_secret, None, 32..64);
+        Ok(None)
     }
 
-    pub fn encrypt(&self, buffer: &mut Vec<u8>, priority: bool) -> Result<()> {
-        let checksum: [u8; 32] = sha2::Sha256::digest(buffer.as_slice()).into();
-
+    /// Modifies `buffer` in-place to contain the channel packet
+    pub fn encrypt(
+        &self,
+        buffer: &mut Vec<u8>,
+        priority: bool,
+        version: Option<u16>,
+    ) -> Result<()> {
+        let checksum: [u8; 32] = compute_packet_data_hash(version, buffer.as_slice());
         let channel_out = if priority {
             &self.channel_out.priority
         } else {
             &self.channel_out.ordinary
         };
 
-        let len = buffer.len();
-        buffer.resize(len + 64, 0);
-        buffer.copy_within(..len, 64);
-        buffer[..32].copy_from_slice(&channel_out.id);
-        buffer[32..64].copy_from_slice(&checksum);
+        let prefix_len = 64 + if version.is_some() { 4 } else { 0 };
+        let buffer_len = buffer.len();
+        buffer.resize(prefix_len + buffer_len, 0);
+        buffer.copy_within(..buffer_len, prefix_len);
 
-        process_channel_data(buffer, &channel_out.secret);
+        buffer[..32].copy_from_slice(&channel_out.id);
+
+        match version {
+            Some(version) => {
+                let mut xor = [
+                    (version >> 8) as u8,
+                    version as u8,
+                    (version >> 8) as u8,
+                    version as u8,
+                ];
+                for (i, byte) in buffer[..32].iter().enumerate() {
+                    xor[i % 4] ^= *byte;
+                }
+                for (i, byte) in checksum.iter().enumerate() {
+                    xor[i % 4] ^= *byte;
+                }
+                buffer[32..36].copy_from_slice(&xor);
+                buffer[36..68].copy_from_slice(&checksum);
+                build_packet_cipher(&channel_out.secret, &checksum)
+                    .apply_keystream(&mut buffer[68..]);
+            }
+            None => {
+                buffer[32..64].copy_from_slice(&checksum);
+                build_packet_cipher(&channel_out.secret, &checksum)
+                    .apply_keystream(&mut buffer[64..]);
+            }
+        }
+
         Ok(())
     }
 }
@@ -269,9 +318,19 @@ fn compute_channel_id(secret: [u8; 32]) -> Result<AdnlChannelId> {
     })
 }
 
-fn process_channel_data(buffer: &mut [u8], secret: &[u8; 32]) {
-    build_packet_cipher(secret, buffer[32..64].try_into().unwrap())
-        .apply_keystream(&mut buffer[64..])
+fn decode_version(prefix: &[u8; 68]) -> Option<u16> {
+    let mut xor: [u8; 4] = prefix[32..36].try_into().unwrap();
+    for (i, byte) in prefix[..32].iter().enumerate() {
+        xor[i % 4] ^= *byte;
+    }
+    for (i, byte) in prefix[36..].iter().enumerate() {
+        xor[i % 4] ^= *byte;
+    }
+    if xor[0] == xor[2] && xor[1] == xor[3] {
+        Some(u16::from_be_bytes(xor[..2].try_into().unwrap()))
+    } else {
+        None
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -318,26 +377,30 @@ mod tests {
 
         let message = b"Hello world!";
 
-        // Send 1 to 2
-        {
-            let mut packet = message.to_vec();
-            channel12.encrypt(&mut packet, false).unwrap();
+        for version in [None, Some(0)] {
+            // Send 1 to 2
+            {
+                let mut packet = message.to_vec();
+                channel12.encrypt(&mut packet, false, version).unwrap();
 
-            let mut received_packet = PacketView::from(packet.as_mut_slice());
-            channel21.decrypt(&mut received_packet, false).unwrap();
+                let mut received_packet = PacketView::from(packet.as_mut_slice());
+                let parsed_version = channel21.decrypt(&mut received_packet, false).unwrap();
+                assert_eq!(parsed_version, version);
 
-            assert_eq!(received_packet.as_slice(), message);
-        }
+                assert_eq!(received_packet.as_slice(), message);
+            }
 
-        // Send 2 to 1
-        {
-            let mut packet = message.to_vec();
-            channel21.encrypt(&mut packet, true).unwrap();
+            // Send 2 to 1
+            {
+                let mut packet = message.to_vec();
+                channel21.encrypt(&mut packet, true, version).unwrap();
 
-            let mut received_packet = PacketView::from(packet.as_mut_slice());
-            channel12.decrypt(&mut received_packet, true).unwrap();
+                let mut received_packet = PacketView::from(packet.as_mut_slice());
+                let parsed_version = channel12.decrypt(&mut received_packet, true).unwrap();
+                assert_eq!(parsed_version, version);
 
-            assert_eq!(received_packet.as_slice(), message);
+                assert_eq!(received_packet.as_slice(), message);
+            }
         }
     }
 }

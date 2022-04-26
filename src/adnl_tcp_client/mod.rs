@@ -247,7 +247,7 @@ impl AdnlTcpClient {
 
         log::info!("Created connection. Sending init packet...");
 
-        build_handshake_packet(&peer_id, &peer_id_full, &mut initial_buffer)?;
+        build_handshake_packet(&peer_id, &peer_id_full, &mut initial_buffer, None)?;
         let _ = client.sender.send(PacketToSend {
             data: initial_buffer,
             should_encrypt: false,

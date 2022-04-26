@@ -91,6 +91,7 @@ impl<'a> TryFrom<PublicKeyView<'a>> for AdnlNodeIdFull {
 }
 
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[repr(transparent)]
 pub struct AdnlNodeIdShort([u8; 32]);
 
 impl AdnlNodeIdShort {

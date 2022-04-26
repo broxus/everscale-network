@@ -118,20 +118,24 @@ mod tests {
 
         let text = "Hello world";
 
-        let mut packet = text.as_bytes().to_vec();
-        println!("Packet decoded: {}", hex::encode(&packet));
+        for version in [None, Some(0)] {
+            let mut packet = text.as_bytes().to_vec();
+            println!("Packet decoded: {}", hex::encode(&packet));
 
-        build_handshake_packet(&first_peer_id, first_peer.full_id(), &mut packet)?;
-        println!("Packet encoded: {}", hex::encode(&packet));
+            build_handshake_packet(&first_peer_id, first_peer.full_id(), &mut packet, version)?;
+            println!("Packet encoded: {}", hex::encode(&packet));
 
-        println!("Packet decoded: {}", hex::encode(packet.as_slice()));
+            println!("Packet decoded: {}", hex::encode(packet.as_slice()));
 
-        let mut buffer = packet.as_mut_slice().into();
-        parse_handshake_packet(first_peer_config.keys(), &mut buffer, None)?;
+            let mut buffer = packet.as_mut_slice().into();
+            let (_, parsed_version) =
+                parse_handshake_packet(first_peer_config.keys(), &mut buffer)?.unwrap();
+            assert_eq!(parsed_version, version);
 
-        println!("Packet decoded: {}", hex::encode(buffer.as_slice()));
+            println!("Packet decoded: {}", hex::encode(buffer.as_slice()));
 
-        assert_eq!(buffer.as_slice(), text.as_bytes());
+            assert_eq!(buffer.as_slice(), text.as_bytes());
+        }
 
         Ok(())
     }

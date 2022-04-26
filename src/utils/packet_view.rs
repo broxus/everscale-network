@@ -1,10 +1,15 @@
-use std::ops::{Index, IndexMut, Range, RangeFrom};
+use std::ops::{Index, IndexMut, Range, RangeFrom, RangeTo};
 
 pub struct PacketView<'a> {
     bytes: &'a mut [u8],
 }
 
 impl<'a> PacketView<'a> {
+    #[inline(always)]
+    pub const fn as_ptr(&self) -> *const u8 {
+        self.bytes.as_ptr()
+    }
+
     #[inline(always)]
     pub const fn as_slice(&self) -> &[u8] {
         self.bytes
@@ -31,6 +36,14 @@ impl<'a> PacketView<'a> {
         // SAFETY: `bytes` is already a reference bounded by a lifetime
         self.bytes =
             unsafe { std::slice::from_raw_parts_mut(ptr.add(prefix_len), len - prefix_len) };
+    }
+}
+
+impl Index<RangeTo<usize>> for PacketView<'_> {
+    type Output = [u8];
+
+    fn index(&self, index: RangeTo<usize>) -> &Self::Output {
+        self.bytes.index(index)
     }
 }
 
