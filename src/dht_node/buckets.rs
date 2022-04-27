@@ -3,7 +3,7 @@ use ton_api::ton;
 use crate::utils::*;
 
 pub struct Buckets {
-    buckets: Vec<FxDashMap<AdnlNodeIdShort, ton::dht::node::Node>>,
+    buckets: Box<[FxDashMap<AdnlNodeIdShort, ton::dht::node::Node>; 256]>,
 }
 
 impl Buckets {
@@ -105,7 +105,7 @@ impl<'a> IntoIterator for &'a Buckets {
 impl Default for Buckets {
     fn default() -> Self {
         Self {
-            buckets: std::iter::repeat_with(Default::default).take(256).collect(),
+            buckets: Box::new([(); 256].map(|_| Default::default())),
         }
     }
 }
