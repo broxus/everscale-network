@@ -21,7 +21,7 @@ impl NeighboursCache {
         for peer_id in initial_peers.iter().take(max_len) {
             state.insert(*peer_id);
         }
-        std::mem::drop(state);
+        drop(state);
 
         result
     }

@@ -49,7 +49,7 @@ where
             Entry::Occupied(entry) => {
                 let operation = entry.get().clone();
                 let started = operation.stared.swap(true, Ordering::SeqCst);
-                std::mem::drop(entry);
+                drop(entry);
 
                 if started {
                     return self

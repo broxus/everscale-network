@@ -161,6 +161,11 @@ impl OverlayShard {
         Ok(overlay)
     }
 
+    #[inline(always)]
+    pub fn options(&self) -> &OverlayShardOptions {
+        &self.options
+    }
+
     pub fn metrics(&self) -> OverlayShardMetrics {
         OverlayShardMetrics {
             owned_broadcasts_len: self.owned_broadcasts.len(),

@@ -58,13 +58,14 @@ where
 pub fn parse_dht_value_address(
     key: ton::dht::keydescription::KeyDescription,
     value: TLObject,
+    clock_tolerance_sec: i32,
 ) -> Result<(AdnlAddressUdp, AdnlNodeIdFull)> {
     let address_list = match value.downcast::<ton::adnl::AddressList>() {
         Ok(address_list) => address_list,
         Err(_) => return Err(DhtError::ValueTypeMismatch.into()),
     };
 
-    let ip_address = parse_address_list(&address_list.only())?;
+    let ip_address = parse_address_list(&address_list.only(), clock_tolerance_sec)?;
     let full_id = AdnlNodeIdFull::try_from(&key.id)?;
 
     Ok((ip_address, full_id))

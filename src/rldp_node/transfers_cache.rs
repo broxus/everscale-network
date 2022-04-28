@@ -191,7 +191,7 @@ impl TransfersCache {
                         }
                         // Blindly confirm receiving in case of other states
                         _ => {
-                            std::mem::drop(item); // drop item ref to prevent DashMap deadlocks
+                            drop(item); // drop item ref to prevent DashMap deadlocks
 
                             // Send confirm message
                             let reply = serialize_boxed(ton::rldp::messagepart::Confirm {

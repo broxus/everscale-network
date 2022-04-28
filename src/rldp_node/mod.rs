@@ -55,6 +55,11 @@ impl RldpNode {
         })
     }
 
+    #[inline(always)]
+    pub fn options(&self) -> &RldpNodeOptions {
+        &self.options
+    }
+
     pub fn metrics(&self) -> RldpNodeMetrics {
         RldpNodeMetrics {
             peer_count: self.peers.len(),

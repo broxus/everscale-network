@@ -83,6 +83,10 @@ pub struct AdnlNodeOptions {
     pub address_list_timeout_sec: i32,
     /// Default: false
     pub packet_history_enabled: bool,
+    /// Default: true
+    pub packet_signature_required: bool,
+    /// Default: true
+    pub force_use_priority_channels: bool,
     /// Default: None
     pub version: Option<u16>,
 }
@@ -96,6 +100,8 @@ impl Default for AdnlNodeOptions {
             clock_tolerance_sec: 60,
             address_list_timeout_sec: 1000,
             packet_history_enabled: false,
+            packet_signature_required: true,
+            force_use_priority_channels: true,
             version: None,
         }
     }
@@ -141,6 +147,11 @@ impl AdnlNode {
             start_time: now(),
             cancellation_token: Default::default(),
         })
+    }
+
+    #[inline(always)]
+    pub fn options(&self) -> &AdnlNodeOptions {
+        &self.options
     }
 
     pub fn metrics(&self) -> AdnlNodeMetrics {
@@ -562,10 +573,15 @@ impl AdnlNode {
                 return Err(AdnlPacketError::InvalidPeerId.into());
             }
 
-            verify(raw_packet, &mut signature, full_id.public_key(), true)?;
+            verify(
+                raw_packet,
+                &mut signature,
+                full_id.public_key(),
+                self.options.packet_signature_required,
+            )?;
 
             if let Some(list) = &packet.address {
-                let ip_address = parse_address_list_view(list)?;
+                let ip_address = parse_address_list_view(list, self.options.clock_tolerance_sec)?;
                 self.add_peer(
                     PeerContext::AdnlPacket,
                     local_id,
@@ -622,7 +638,7 @@ impl AdnlNode {
             }
 
             if dst_reinit_date != 0 && dst_reinit_date_cmp == Ordering::Less {
-                std::mem::drop(peer);
+                drop(peer);
 
                 self.send_message(
                     local_id,
@@ -1006,7 +1022,7 @@ impl AdnlNode {
                 data: ton::bytes(data.to_vec()),
             }
             .into_boxed(),
-            false,
+            self.options.force_use_priority_channels,
         )
     }
 

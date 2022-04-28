@@ -169,11 +169,14 @@ impl std::fmt::Display for AdnlAddressUdp {
     }
 }
 
-pub fn parse_address_list_view(list: &AddressListView<'_>) -> Result<AdnlAddressUdp> {
+pub fn parse_address_list_view(
+    list: &AddressListView<'_>,
+    clock_tolerance: i32,
+) -> Result<AdnlAddressUdp> {
     let address = list.address.ok_or(AdnlAddressListError::ListIsEmpty)?;
 
     let version = now();
-    if (list.version > version) || (list.reinit_date > version) {
+    if list.reinit_date > version + clock_tolerance {
         return Err(AdnlAddressListError::TooNewVersion.into());
     }
 
@@ -189,13 +192,16 @@ pub fn parse_address_list_view(list: &AddressListView<'_>) -> Result<AdnlAddress
     }
 }
 
-pub fn parse_address_list(list: &ton::adnl::addresslist::AddressList) -> Result<AdnlAddressUdp> {
+pub fn parse_address_list(
+    list: &ton::adnl::addresslist::AddressList,
+    clock_tolerance: i32,
+) -> Result<AdnlAddressUdp> {
     if list.addrs.is_empty() {
         return Err(AdnlAddressListError::ListIsEmpty.into());
     }
 
     let version = now();
-    if (list.version > version) || (list.reinit_date > version) {
+    if list.reinit_date > version + clock_tolerance {
         return Err(AdnlAddressListError::TooNewVersion.into());
     }
 

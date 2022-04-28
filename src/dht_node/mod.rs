@@ -74,6 +74,11 @@ impl DhtNode {
         Ok(Arc::new(dht_node))
     }
 
+    #[inline(always)]
+    pub fn options(&self) -> &DhtNodeOptions {
+        &self.options
+    }
+
     pub fn metrics(&self) -> DhtNodeMetrics {
         DhtNodeMetrics {
             peers_cache_len: self.known_peers.len(),
@@ -85,10 +90,6 @@ impl DhtNode {
 
     pub fn adnl(&self) -> &Arc<AdnlNode> {
         &self.adnl
-    }
-
-    pub fn options(&self) -> &DhtNodeOptions {
-        &self.options
     }
 
     pub fn add_peer(&self, peer: ton::dht::node::Node) -> Result<Option<AdnlNodeIdShort>> {
@@ -103,7 +104,8 @@ impl DhtNode {
         }
 
         let peer_id = peer_full_id.compute_short_id()?;
-        let peer_ip_address = parse_address_list(&peer.addr_list)?;
+        let peer_ip_address =
+            parse_address_list(&peer.addr_list, self.adnl.options().clock_tolerance_sec)?;
 
         let is_new_peer = self.adnl.add_peer(
             PeerContext::Dht,
@@ -287,7 +289,9 @@ impl DhtNode {
             .await?;
 
         match address_list.pop() {
-            Some((key, value)) => parse_dht_value_address(key, value),
+            Some((key, value)) => {
+                parse_dht_value_address(key, value, self.adnl.options().clock_tolerance_sec)
+            }
             None => Err(DhtNodeError::NoAddressFound.into()),
         }
     }
@@ -309,7 +313,10 @@ impl DhtNode {
                 while let Some((_, value)) = values.pop() {
                     match value.downcast::<ton::adnl::AddressList>() {
                         Ok(address_list) => {
-                            let ip = parse_address_list(&address_list.only())?;
+                            let ip = parse_address_list(
+                                &address_list.only(),
+                                self.adnl.options().clock_tolerance_sec,
+                            )?;
                             if ip == self.adnl.ip_address() {
                                 return Ok(true);
                             } else {
@@ -338,7 +345,11 @@ impl DhtNode {
         Ok(match self.storage.get(&hash(key)?) {
             Some(stored) => {
                 let value = deserialize(&stored.value)?;
-                Some(parse_dht_value_address(stored.key, value)?)
+                Some(parse_dht_value_address(
+                    stored.key,
+                    value,
+                    self.adnl.options().clock_tolerance_sec,
+                )?)
             }
             None => None,
         })
