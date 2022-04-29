@@ -959,7 +959,7 @@ impl AdnlNode {
     ) -> Result<bool> {
         use dashmap::mapref::entry::Entry;
 
-        if peer_id == local_id {
+        if peer_id == local_id && peer_ip_address == self.ip_address {
             return Ok(false);
         }
 
