@@ -243,7 +243,7 @@ impl Neighbours {
             .choose_neighbour(&mut rand::thread_rng(), self.average_failures())
     }
 
-    pub fn choose_neighbours(&self, count: usize) -> impl AsRef<[Arc<Neighbour>]> {
+    pub fn choose_neighbours(&self, count: usize) -> MultipleNeighbours {
         self.cache
             .choose_neighbours(&mut rand::thread_rng(), self.average_failures(), count)
     }

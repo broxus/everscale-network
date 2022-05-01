@@ -59,12 +59,12 @@ impl NeighboursCache {
         rng: &mut impl Rng,
         average_failures: f64,
         count: usize,
-    ) -> impl AsRef<[Arc<Neighbour>]> {
+    ) -> MultipleNeighbours {
         self.state
             .read()
             .choose_neighbours(rng, average_failures, count)
             .cloned()
-            .collect::<SmallVec<[Arc<Neighbour>; 4]>>()
+            .collect::<MultipleNeighbours>()
     }
 
     pub fn insert(&self, peer_id: AdnlNodeIdShort) -> bool {
@@ -312,6 +312,8 @@ impl ExternalNeighboursCacheIter {
         self.0 += 1;
     }
 }
+
+pub type MultipleNeighbours = SmallVec<[Arc<Neighbour>; 4]>;
 
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub enum NeighboursCacheHint {
