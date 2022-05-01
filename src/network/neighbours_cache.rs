@@ -3,6 +3,7 @@ use std::time::Instant;
 
 use parking_lot::{RwLock, RwLockWriteGuard};
 use rand::Rng;
+use smallvec::SmallVec;
 
 use super::neighbour::Neighbour;
 use crate::utils::*;
@@ -43,7 +44,23 @@ impl NeighboursCache {
         rng: &mut impl Rng,
         average_failures: f64,
     ) -> Option<Arc<Neighbour>> {
-        self.state.read().choose_neighbour(rng, average_failures)
+        self.state
+            .read()
+            .choose_neighbour(rng, average_failures)
+            .cloned()
+    }
+
+    pub fn choose_neighbours(
+        &self,
+        rng: &mut impl Rng,
+        average_failures: f64,
+        count: usize,
+    ) -> impl AsRef<[Arc<Neighbour>]> {
+        self.state
+            .read()
+            .choose_neighbours(rng, average_failures, count)
+            .cloned()
+            .collect::<SmallVec<[Arc<Neighbour>; 4]>>()
     }
 
     pub fn insert(&self, peer_id: AdnlNodeIdShort) -> bool {
@@ -96,10 +113,10 @@ impl NeighboursCacheState {
         &self,
         rng: &mut impl Rng,
         average_failures: f64,
-    ) -> Option<Arc<Neighbour>> {
+    ) -> Option<&Arc<Neighbour>> {
         if self.indices.len() == 1 {
             let first = self.indices.first();
-            return first.and_then(|peer_id| self.values.get(peer_id)).cloned();
+            return first.and_then(|peer_id| self.values.get(peer_id));
         }
 
         let mut best_neighbour = None;
@@ -115,7 +132,40 @@ impl NeighboursCacheState {
             }
         }
 
-        best_neighbour.cloned()
+        best_neighbour
+    }
+
+    pub fn choose_neighbours<'a>(
+        &'a self,
+        rng: &'a mut impl Rng,
+        average_failures: f64,
+        count: usize,
+    ) -> impl Iterator<Item = &'a Arc<Neighbour>> + 'a {
+        if count == 0 {
+            return either::Left(None.into_iter());
+        }
+
+        if self.indices.len() == 1 {
+            return either::Left(
+                self.indices
+                    .first()
+                    .and_then(|peer_id| self.values.get(peer_id))
+                    .into_iter(),
+            );
+        }
+
+        let mut total_weight = 0;
+        let mut neighbours = self.indices.iter();
+        either::Right(std::iter::from_fn(move || loop {
+            match self.values.get(neighbours.next()?) {
+                Some(neighbour)
+                    if neighbour.try_select(rng, &mut total_weight, average_failures) =>
+                {
+                    break Some(neighbour)
+                }
+                _ => continue,
+            }
+        }))
     }
 
     pub fn get(&self, peer_id: &AdnlNodeIdShort) -> Option<Arc<Neighbour>> {

@@ -230,12 +230,18 @@ impl Neighbours {
     }
 
     pub fn choose_neighbour(&self) -> Option<Arc<Neighbour>> {
-        let mut rng = rand::thread_rng();
+        self.cache
+            .choose_neighbour(&mut rand::thread_rng(), self.average_failures())
+    }
 
-        let average_failures = self.failed_attempts.load(Ordering::Acquire) as f64
-            / std::cmp::max(self.all_attempts.load(Ordering::Acquire), 1) as f64;
+    pub fn choose_neighbours(&self, count: usize) -> impl AsRef<[Arc<Neighbour>]> {
+        self.cache
+            .choose_neighbours(&mut rand::thread_rng(), self.average_failures(), count)
+    }
 
-        self.cache.choose_neighbour(&mut rng, average_failures)
+    pub fn average_failures(&self) -> f64 {
+        self.failed_attempts.load(Ordering::Acquire) as f64
+            / std::cmp::max(self.all_attempts.load(Ordering::Acquire), 1) as f64
     }
 
     pub fn reload_neighbours(&self) -> Result<()> {
