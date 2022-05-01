@@ -45,6 +45,8 @@ pub struct NeighboursOptions {
     pub ping_min_timeout_ms: u64,
     /// Default: 1000
     pub ping_max_timeout_ms: u64,
+    /// Default: 2000
+    pub default_rldp_roundtrip_ms: u64,
     /// Default: 6
     pub max_ping_tasks: usize,
 }
@@ -59,6 +61,7 @@ impl Default for NeighboursOptions {
             search_interval_ms: 1000,
             ping_min_timeout_ms: 10,
             ping_max_timeout_ms: 1000,
+            default_rldp_roundtrip_ms: 2000,
             max_ping_tasks: 6,
         }
     }
@@ -71,7 +74,13 @@ impl Neighbours {
         initial_peers: &[AdnlNodeIdShort],
         options: NeighboursOptions,
     ) -> Arc<Self> {
-        let cache = Arc::new(NeighboursCache::new(initial_peers, options.max_neighbours));
+        let cache = Arc::new(NeighboursCache::new(
+            initial_peers,
+            options.max_neighbours,
+            NeighbourOptions {
+                default_rldp_roundtrip_ms: options.default_rldp_roundtrip_ms,
+            },
+        ));
 
         Arc::new(Self {
             dht: dht.clone(),

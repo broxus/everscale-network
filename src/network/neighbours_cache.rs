@@ -5,7 +5,7 @@ use parking_lot::{RwLock, RwLockWriteGuard};
 use rand::Rng;
 use smallvec::SmallVec;
 
-use super::neighbour::Neighbour;
+use super::neighbour::{Neighbour, NeighbourOptions};
 use crate::utils::*;
 
 pub struct NeighboursCache {
@@ -13,9 +13,13 @@ pub struct NeighboursCache {
 }
 
 impl NeighboursCache {
-    pub fn new(initial_peers: &[AdnlNodeIdShort], max_len: usize) -> Self {
+    pub fn new(
+        initial_peers: &[AdnlNodeIdShort],
+        max_len: usize,
+        neighbour_options: NeighbourOptions,
+    ) -> Self {
         let result = Self {
-            state: RwLock::new(NeighboursCacheState::new(max_len)),
+            state: RwLock::new(NeighboursCacheState::new(max_len, neighbour_options)),
         };
 
         let mut state = result.state.write();
@@ -82,15 +86,17 @@ impl NeighboursCache {
 
 pub struct NeighboursCacheState {
     max_len: usize,
+    neighbour_options: NeighbourOptions,
     next: usize,
     values: FxHashMap<AdnlNodeIdShort, Arc<Neighbour>>,
     indices: Vec<AdnlNodeIdShort>,
 }
 
 impl NeighboursCacheState {
-    fn new(max_len: usize) -> Self {
+    fn new(max_len: usize, neighbour_options: NeighbourOptions) -> Self {
         Self {
             max_len,
+            neighbour_options,
             next: 0,
             values: Default::default(),
             indices: Vec::with_capacity(max_len),
@@ -217,7 +223,7 @@ impl NeighboursCacheState {
 
         match self.values.entry(peer_id) {
             Entry::Vacant(entry) => {
-                entry.insert(Arc::new(Neighbour::new(peer_id)));
+                entry.insert(Arc::new(Neighbour::new(peer_id, self.neighbour_options)));
                 self.indices.push(peer_id);
                 true
             }
@@ -237,7 +243,7 @@ impl NeighboursCacheState {
         if self.indices.len() < self.max_len {
             return match self.values.entry(peer_id) {
                 Entry::Vacant(entry) => {
-                    entry.insert(Arc::new(Neighbour::new(peer_id)));
+                    entry.insert(Arc::new(Neighbour::new(peer_id, self.neighbour_options)));
                     self.indices.push(peer_id);
                     if self.indices.len() == self.max_len {
                         (NeighboursCacheHint::MaybeHasUnreliable, None)
@@ -280,7 +286,7 @@ impl NeighboursCacheState {
 
         match self.values.entry(peer_id) {
             Entry::Vacant(entry) => {
-                entry.insert(Arc::new(Neighbour::new(peer_id)));
+                entry.insert(Arc::new(Neighbour::new(peer_id, self.neighbour_options)));
                 self.values.remove(&self.indices[replaced_index]);
                 self.indices[replaced_index] = peer_id;
                 (hint, unreliable_peer)

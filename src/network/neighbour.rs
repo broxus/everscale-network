@@ -23,15 +23,20 @@ pub struct Neighbour {
     unreliability: AtomicU32,
 }
 
+#[derive(Default, Copy, Clone)]
+pub struct NeighbourOptions {
+    pub default_rldp_roundtrip_ms: u64,
+}
+
 impl Neighbour {
-    pub fn new(peer_id: AdnlNodeIdShort) -> Self {
+    pub(crate) fn new(peer_id: AdnlNodeIdShort, options: NeighbourOptions) -> Self {
         Self {
             peer_id,
             last_ping: Default::default(),
             proto_version: Default::default(),
             capabilities: Default::default(),
             roundtrip_adnl: Default::default(),
-            roundtrip_rldp: Default::default(),
+            roundtrip_rldp: AtomicU64::new(options.default_rldp_roundtrip_ms),
             all_attempts: Default::default(),
             failed_attempts: Default::default(),
             penalty_points: Default::default(),
