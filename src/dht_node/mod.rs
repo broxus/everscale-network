@@ -99,7 +99,7 @@ impl DhtNode {
             .verify_boxed(&peer, |p| &mut p.signature)
             .is_err()
         {
-            log::warn!("Error when verifying DHT peer");
+            tracing::warn!("Error when verifying DHT peer");
             return Ok(None);
         }
 
@@ -190,11 +190,11 @@ impl DhtNode {
                 tokio::spawn(async move {
                     match dht.find_address(&peer_id).await {
                         Ok((ip, _)) => {
-                            log::debug!("---- Got overlay node {}", ip);
+                            tracing::debug!("---- Got overlay node {ip}");
                             response_tx.send(Some((Some(ip), node)));
                         }
                         Err(_) => {
-                            log::debug!("---- Overlay node {} not found", peer_id);
+                            tracing::debug!("---- Overlay node {peer_id} not found");
                             response_tx.send(Some((None, node)));
                         }
                     }
@@ -320,9 +320,8 @@ impl DhtNode {
                             if ip == self.adnl.ip_address() {
                                 return Ok(true);
                             } else {
-                                log::warn!(
-                                    "Found another stored address {}, expected {}",
-                                    ip,
+                                tracing::warn!(
+                                    "Found another stored address {ip}, expected {}",
                                     self.adnl.ip_address()
                                 );
                                 continue;
@@ -564,7 +563,7 @@ impl DhtNode {
                     match dht.query_value(&peer_id, &query, check).await {
                         Ok(found) => response_tx.send(found),
                         Err(e) => {
-                            log::warn!("find_value error: {}", e);
+                            tracing::warn!("find_value error: {e}");
                             response_tx.send(None);
                         }
                     }
@@ -729,7 +728,7 @@ impl Subscriber for DhtNode {
             Err(query) => query,
         };
 
-        log::warn!("Unexpected DHT query");
+        tracing::warn!("Unexpected DHT query");
         Ok(QueryConsumingResult::Rejected(query))
     }
 

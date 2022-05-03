@@ -94,11 +94,7 @@ impl PacketsHistory {
             let index_normalized = index & !INDEX_MASK;
 
             if index_normalized > seqno_normalized + INDEX_MASK + 1 {
-                log::debug!(
-                    "Peer packet with seqno {} is too old {}",
-                    seqno,
-                    index_normalized
-                );
+                tracing::debug!("Peer packet with seqno {seqno} is too old {index_normalized}");
                 return false;
             }
 
@@ -119,7 +115,7 @@ impl PacketsHistory {
                     }
 
                     if already_delivered != 0 {
-                        log::trace!("Peer packet with seqno {} was already received", seqno);
+                        tracing::trace!("Peer packet with seqno {seqno} was already received");
                         return false;
                     }
 

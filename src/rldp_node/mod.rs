@@ -67,6 +67,7 @@ impl RldpNode {
         }
     }
 
+    #[tracing::instrument(level = "debug", name = "rldp_query", skip(self, data))]
     pub async fn query(
         &self,
         local_id: &AdnlNodeIdShort,
@@ -77,7 +78,7 @@ impl RldpNode {
     ) -> Result<(Option<Vec<u8>>, u64)> {
         if self.options.force_compression {
             if let Err(e) = compression::compress(&mut data) {
-                log::warn!("Failed to compress RLDP query: {:?}", e);
+                tracing::warn!("Failed to compress RLDP query: {e:?}");
             }
         }
 

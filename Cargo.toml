@@ -18,7 +18,6 @@ futures-util = "0.3.21"
 generic-array = "0.14.5"
 hex = "0.4"
 libc = "0.2"
-log = "0.4"
 parking_lot = { version = "0.12.0", features = ["hardware-lock-elision"] }
 rand = "0.8"
 rustc-hash = "1.1.0"
@@ -29,13 +28,12 @@ thiserror = "1.0"
 tokio = { version = "1.16.1", features = ["sync", "net", "rt", "time", "io-util", "macros"] }
 tokio-io-timeout = "1.2.0"
 tokio-util = "0.7.0"
+tracing = "0.1"
 x25519-dalek-ng = "1.1.1"
 zstd = "0.11"
 
 ed25519-dalek = { git = "https://github.com/broxus/ed25519-dalek.git" }
 raptorq = { git = "https://github.com/Rexagon/raptorq.git" }
-
-ton_types = { git = "https://github.com/broxus/ton-labs-types" }
 
 [dependencies.ton_api]
 git = "https://github.com/broxus/ton-labs-tl.git"
@@ -44,4 +42,6 @@ default-features = false
 features = ["ton_api"]
 
 [features]
+default = ["log"]
+log = ["tracing/log"]
 pkg-config = ["zstd/pkg-config"]

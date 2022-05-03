@@ -52,8 +52,8 @@ impl AdnlTcpClient {
                 tokio::time::sleep(timeout).await;
 
                 match ping_cache.update_query(seqno, false).await {
-                    Ok(true) => log::info!("Dropped ping query"),
-                    Err(_) => log::info!("Failed to drop ping query"),
+                    Ok(true) => tracing::info!("Dropped ping query"),
+                    Err(_) => tracing::info!("Failed to drop ping query"),
                     _ => {}
                 }
             }
@@ -86,8 +86,8 @@ impl AdnlTcpClient {
                 tokio::time::sleep(timeout).await;
 
                 match queries_cache.update_query(query_id, None).await {
-                    Ok(true) => log::info!("Dropped query"),
-                    Err(_) => log::info!("Failed to drop query"),
+                    Ok(true) => tracing::info!("Dropped query"),
+                    Err(_) => tracing::info!("Failed to drop query"),
                     _ => {}
                 }
             }
@@ -155,7 +155,7 @@ impl AdnlTcpClient {
                 }
 
                 if let Err(e) = socket_tx.get_mut().write_all(&packet.data).await {
-                    log::error!("Failed to send packet: {}", e);
+                    tracing::error!("Failed to send packet: {e}");
                     has_broken.store(true, Ordering::Release);
                     return;
                 }
@@ -176,7 +176,7 @@ impl AdnlTcpClient {
 
                     let mut length = [0; 4];
                     if let Err(e) = socket_rx.get_mut().read_exact(&mut length).await {
-                        log::error!("Failed to read packet length: {}", e);
+                        tracing::error!("Failed to read packet length: {e}");
                         client.has_broken.store(true, Ordering::Release);
                         return;
                     }
@@ -184,13 +184,13 @@ impl AdnlTcpClient {
 
                     let length = u32::from_le_bytes(length) as usize;
                     if length < 64 {
-                        log::warn!("Too small size for ADNL packet: {}", length);
+                        tracing::warn!("Too small size for ADNL packet: {length}");
                         continue;
                     }
 
                     let mut buffer = vec![0; length];
                     if let Err(e) = socket_rx.get_mut().read_exact(&mut buffer).await {
-                        log::error!("Failed to read buffer of length {}: {}", length, e);
+                        tracing::error!("Failed to read buffer of length {length}: {e}");
                         client.has_broken.store(true, Ordering::Release);
                         return;
                     }
@@ -200,7 +200,7 @@ impl AdnlTcpClient {
                         .as_slice()
                         .eq(&buffer[length - 32..length])
                     {
-                        log::error!("Invalid ADNL packet checksum");
+                        tracing::error!("Invalid ADNL packet checksum");
                         continue;
                     }
 
@@ -214,7 +214,7 @@ impl AdnlTcpClient {
                     let data = match deserialize(&buffer) {
                         Ok(data) => data,
                         Err(e) => {
-                            log::error!("Got invalid ADNL packet: {}", e);
+                            tracing::error!("Got invalid ADNL packet: {e}");
                             continue;
                         }
                     };
@@ -227,10 +227,10 @@ impl AdnlTcpClient {
                                 .await
                             {
                                 Ok(true) => {}
-                                _ => log::error!("Failed to resolve query"),
+                                _ => tracing::error!("Failed to resolve query"),
                             }
                         }
-                        Ok(_) => log::error!("Got unknown ADNL message"),
+                        Ok(_) => tracing::error!("Got unknown ADNL message"),
                         Err(message) => match message.downcast::<ton::tcp::Pong>() {
                             Ok(pong) => {
                                 let _ = client
@@ -238,14 +238,14 @@ impl AdnlTcpClient {
                                     .update_query(*pong.random_id(), true)
                                     .await;
                             }
-                            _ => log::error!("Got unknown TL response object"),
+                            _ => tracing::error!("Got unknown TL response object"),
                         },
                     }
                 }
             }
         });
 
-        log::info!("Created connection. Sending init packet...");
+        tracing::info!("Created connection. Sending init packet...");
 
         build_handshake_packet(&peer_id, &peer_id_full, &mut initial_buffer, None)?;
         let _ = client.sender.send(PacketToSend {

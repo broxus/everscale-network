@@ -50,12 +50,6 @@ impl AdnlNodeIdFull {
     }
 }
 
-impl std::fmt::Display for AdnlNodeIdFull {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str(&hex::encode(&self.0))
-    }
-}
-
 impl From<ed25519_dalek::PublicKey> for AdnlNodeIdFull {
     fn from(key: ed25519_dalek::PublicKey) -> Self {
         Self::new(key)
@@ -90,7 +84,7 @@ impl<'a> TryFrom<PublicKeyView<'a>> for AdnlNodeIdFull {
     }
 }
 
-#[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(Default, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 #[repr(transparent)]
 pub struct AdnlNodeIdShort([u8; 32]);
 
@@ -119,8 +113,20 @@ impl AdnlNodeIdShort {
 }
 
 impl std::fmt::Display for AdnlNodeIdShort {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str(&hex::encode(&self.0))
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut output = [0u8; 64];
+        hex::encode_to_slice(&self.0, &mut output).ok();
+
+        // SAFETY: output is guaranteed to contain only [0-9a-f]
+        let output = unsafe { std::str::from_utf8_unchecked(&output) };
+        f.write_str(output)
+    }
+}
+
+impl std::fmt::Debug for AdnlNodeIdShort {
+    #[inline(always)]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
     }
 }
 

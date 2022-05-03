@@ -224,7 +224,7 @@ impl OverlayShard {
         }
 
         if let Err(e) = verify_node(&self.overlay_id, &node) {
-            log::warn!("Error during overlay peer verification: {:?}", e);
+            tracing::warn!("Error during overlay peer verification: {e:?}");
             return Ok(None);
         }
 
@@ -257,7 +257,7 @@ impl OverlayShard {
         let mut result = Vec::new();
         for (ip_address, node) in nodes {
             if let Err(e) = verify_node(&self.overlay_id, &node) {
-                log::debug!("Error during overlay peer verification: {e:?}");
+                tracing::debug!("Error during overlay peer verification: {e:?}");
                 continue;
             }
 
@@ -274,7 +274,7 @@ impl OverlayShard {
             if is_new_peer {
                 self.insert_public_peer(&peer_id, node);
                 result.push(peer_id);
-                log::trace!("Node id: {}, address: {}", peer_id, ip_address);
+                tracing::trace!("Node id: {peer_id}, address: {ip_address}");
             }
         }
 
@@ -482,7 +482,7 @@ impl OverlayShard {
 
         transfer.updated_at.refresh();
         if transfer.source != source {
-            log::trace!("Same broadcast but parts from different sources");
+            tracing::trace!("Same broadcast but parts from different sources");
             return Ok(());
         }
 
@@ -524,7 +524,7 @@ impl OverlayShard {
         let broadcast_id = match self.create_broadcast(&broadcast_to_sign) {
             Some(broadcast_id) => broadcast_id,
             None => {
-                log::warn!("Trying to send duplicated broadcast");
+                tracing::warn!("Trying to send duplicated broadcast");
                 return Ok(Default::default());
             }
         };
@@ -532,7 +532,7 @@ impl OverlayShard {
 
         if self.options.force_compression {
             if let Err(e) = compression::compress(&mut data) {
-                log::warn!("Failed to compress overlay broadcast: {:?}", e);
+                tracing::warn!("Failed to compress overlay broadcast: {e:?}");
             }
         }
 
@@ -569,14 +569,14 @@ impl OverlayShard {
         let broadcast_id = match self.create_broadcast(&data) {
             Some(id) => id,
             None => {
-                log::warn!("Trying to send duplicated broadcast");
+                tracing::warn!("Trying to send duplicated broadcast");
                 return Ok(Default::default());
             }
         };
 
         if self.options.force_compression {
             if let Err(e) = compression::compress(&mut data) {
-                log::warn!("Failed to compress overlay FEC broadcast: {:?}", e);
+                tracing::warn!("Failed to compress overlay FEC broadcast: {e:?}");
             }
         }
 
@@ -612,7 +612,7 @@ impl OverlayShard {
                             });
 
                         if let Err(e) = result {
-                            log::warn!("Failed to send overlay broadcast: {}", e);
+                            tracing::warn!("Failed to send overlay broadcast: {e}");
                             return;
                         }
 
@@ -691,11 +691,11 @@ impl OverlayShard {
         match self.query(peer_id, &query, timeout).await? {
             Some(answer) => {
                 let answer: ton::overlay::Nodes = parse_answer(answer)?;
-                log::trace!("Got random peers from {peer_id}");
+                tracing::trace!("Got random peers from {peer_id}");
                 Ok(Some(self.process_nodes(answer.only())))
             }
             None => {
-                log::trace!("No random peers from {peer_id}");
+                tracing::trace!("No random peers from {peer_id}");
                 Ok(None)
             }
         }
@@ -730,7 +730,7 @@ impl OverlayShard {
     }
 
     fn process_nodes(&self, nodes: ton::overlay::nodes::Nodes) -> Vec<ton::overlay::node::Node> {
-        log::trace!("-------- Got random peers");
+        tracing::trace!("-------- Got random peers");
 
         let mut result = Vec::new();
 
@@ -743,9 +743,9 @@ impl OverlayShard {
                 continue;
             }
 
-            log::trace!("{node:?}");
+            tracing::trace!("{node:?}");
             if let Err(e) = verify_node(&self.overlay_id, &node) {
-                log::warn!("Error during overlay peer verification: {e:?}");
+                tracing::warn!("Error during overlay peer verification: {e:?}");
                 continue;
             }
 
@@ -863,7 +863,7 @@ impl OverlayShard {
                         }
                         Ok(None) => continue,
                         Err(e) => {
-                            log::warn!("Error when receiving overlay broadcast: {}", e);
+                            tracing::warn!("Error when receiving overlay broadcast: {e}");
                         }
                     }
                     break;
@@ -875,7 +875,7 @@ impl OverlayShard {
                             transfer.completed.store(true, Ordering::Release);
                         }
                         _ => {
-                            log::error!("Incoming fec broadcast mismatch");
+                            tracing::error!("Incoming fec broadcast mismatch");
                         }
                     }
                 }
@@ -901,7 +901,7 @@ impl OverlayShard {
                                 }
                             }
                             _ => {
-                                log::error!("Incoming fec broadcast mismatch");
+                                tracing::error!("Incoming fec broadcast mismatch");
                             }
                         }
                     }
@@ -971,7 +971,7 @@ impl OverlayShard {
     ) {
         for peer_id in neighbours {
             if let Err(e) = self.adnl.send_custom_message(local_id, peer_id, data) {
-                log::warn!("Failed to distribute broadcast: {}", e);
+                tracing::warn!("Failed to distribute broadcast: {e}");
             }
         }
     }
@@ -1152,7 +1152,7 @@ struct BroadcastFec {
     signature: [u8; 64],
 }
 
-pub type ReceivedPeersMap = FxHashMap<ton_api::ton::PublicKey, ton::overlay::node::Node>;
+pub type ReceivedPeersMap = FxHashMap<ton::PublicKey, ton::overlay::node::Node>;
 
 type BroadcastFecTx = mpsc::UnboundedSender<BroadcastFec>;
 

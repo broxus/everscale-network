@@ -125,7 +125,7 @@ impl Neighbours {
                 };
 
                 if let Err(e) = neighbours.reload_neighbours() {
-                    log::warn!("Failed to reload neighbours: {}", e);
+                    tracing::warn!("Failed to reload neighbours: {e}");
                 }
             }
         });
@@ -143,7 +143,7 @@ impl Neighbours {
                 };
 
                 if let Err(e) = neighbours.ping_neighbours().await {
-                    log::warn!("Failed to ping neighbours: {}", e);
+                    tracing::warn!("Failed to ping neighbours: {e}");
                     tokio::time::sleep(interval).await;
                 }
             }
@@ -183,7 +183,7 @@ impl Neighbours {
                                         new_peers.push(peer_id);
                                     }
                                 }
-                                Err(e) => log::warn!("Failed to process peer: {}", e),
+                                Err(e) => tracing::warn!("Failed to process peer: {e}"),
                             }
                         }
 
@@ -192,7 +192,7 @@ impl Neighbours {
                         }
                     }
                     Err(e) => {
-                        log::warn!("Failed to get random peers: {}", e);
+                        tracing::warn!("Failed to get random peers: {e}");
                     }
                     _ => {}
                 }
@@ -254,7 +254,7 @@ impl Neighbours {
     }
 
     pub fn reload_neighbours(&self) -> Result<()> {
-        log::trace!(
+        tracing::trace!(
             "Start reload_neighbours (overlay: {})",
             self.overlay_shard.id()
         );
@@ -264,7 +264,7 @@ impl Neighbours {
             .write_cached_peers(self.options.max_neighbours * 2, &peers);
         self.process_neighbours(peers)?;
 
-        log::trace!(
+        tracing::trace!(
             "Finish reload_neighbours (overlay: {})",
             self.overlay_shard.id()
         );
@@ -276,10 +276,9 @@ impl Neighbours {
         if neighbour_count == 0 {
             return Err(NeighboursError::NoPeersInOverlay(*self.overlay_shard.id()).into());
         } else {
-            log::trace!(
-                "Pinging neighbours in overlay {} (count: {})",
+            tracing::trace!(
+                "Pinging neighbours in overlay {} (count: {neighbour_count})",
                 *self.overlay_shard.id(),
-                neighbour_count,
             )
         }
 
@@ -289,7 +288,7 @@ impl Neighbours {
             let neighbour = match self.cache.get_next_for_ping(&self.start) {
                 Some(neighbour) => neighbour,
                 None => {
-                    log::trace!("No neighbours to ping");
+                    tracing::trace!("No neighbours to ping");
                     tokio::time::sleep(Duration::from_millis(self.options.ping_min_timeout_ms))
                         .await;
                     continue;
@@ -310,7 +309,7 @@ impl Neighbours {
                 let neighbours = self.clone();
                 tokio::spawn(async move {
                     if let Err(e) = neighbours.update_capabilities(neighbour).await {
-                        log::debug!("Failed to ping peer: {}", e);
+                        tracing::debug!("Failed to ping peer: {e}");
                     }
                     response_tx.send(Some(()));
                 });
@@ -330,17 +329,14 @@ impl Neighbours {
 
         tokio::spawn(async move {
             for peer_id in peers.into_iter() {
-                log::trace!(
-                    "add_new_peers: start searching address for peer {}",
-                    peer_id
-                );
+                tracing::trace!("add_new_peers: start searching address for peer {peer_id}");
                 match neighbours.dht.find_address(&peer_id).await {
                     Ok((ip, _)) => {
-                        log::info!("add_new_peers: found overlay peer address: {}", ip);
+                        tracing::info!("add_new_peers: found overlay peer address: {ip}");
                         neighbours.add_overlay_peer(peer_id);
                     }
                     Err(e) => {
-                        log::warn!("add_new_peers: failed to find overlay peer address: {}", e);
+                        tracing::warn!("add_new_peers: failed to find overlay peer address: {e}");
                     }
                 }
             }
@@ -383,7 +379,7 @@ impl Neighbours {
 
     async fn update_capabilities(self: &Arc<Self>, neighbour: Arc<Neighbour>) -> Result<()> {
         let query = TLObject::new(ton::rpc::ton_node::GetCapabilities);
-        log::trace!(
+        tracing::trace!(
             "Query capabilities from {} in {}",
             neighbour.peer_id(),
             self.overlay_shard.id()
@@ -405,11 +401,10 @@ impl Neighbours {
         {
             Ok(Some(answer)) => {
                 let capabilities = parse_answer::<ton::ton_node::Capabilities>(answer)?;
-                log::debug!(
-                    "Got capabilities from {} {}: {:?}",
+                tracing::debug!(
+                    "Got capabilities from {} {}: {capabilities:?}",
                     neighbour.peer_id(),
                     self.overlay_shard.id(),
-                    capabilities
                 );
 
                 let roundtrip = now.elapsed().as_millis() as u64;

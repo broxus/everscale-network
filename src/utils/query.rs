@@ -93,7 +93,7 @@ pub async fn process_message_rldp_query(
         QueryProcessingResult::Processed(answer) => convert_answer(answer, move |mut answer| {
             if answer_compression {
                 if let Err(e) = compression::compress(&mut answer) {
-                    log::warn!("Failed to compress RLDP answer: {:?}", e);
+                    tracing::warn!("Failed to compress RLDP answer: {e:?}");
                 }
             }
 

@@ -64,11 +64,7 @@ impl Transfer {
         // Handle part
         match received.cmp(&self.total_len) {
             std::cmp::Ordering::Equal => {
-                log::debug!(
-                    "Finished ADNL transfer ({} of {})",
-                    received,
-                    self.total_len
-                );
+                tracing::debug!("Finished ADNL transfer ({received} of {})", self.total_len);
 
                 // Combine all parts
                 received = 0;
@@ -94,9 +90,8 @@ impl Transfer {
             }
             std::cmp::Ordering::Greater => Err(TransferError::ReceivedTooMuch.into()),
             std::cmp::Ordering::Less => {
-                log::debug!(
-                    "Received ADNL transfer part ({} of {})",
-                    received,
+                tracing::debug!(
+                    "Received ADNL transfer part ({received} of {})",
                     self.total_len
                 );
                 Ok(None)

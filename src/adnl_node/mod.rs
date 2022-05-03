@@ -228,10 +228,10 @@ impl AdnlNode {
                 let target: SocketAddrV4 = packet.destination.into();
                 match socket.send_to(&packet.data, target).await {
                     Ok(len) if len != packet.data.len() => {
-                        log::warn!("Incomplete send: {} of {}", len, packet.data.len());
+                        tracing::warn!("Incomplete send: {len} of {}", packet.data.len());
                     }
                     Err(e) => {
-                        log::warn!("Failed to send data: {}", e);
+                        tracing::warn!("Failed to send data: {e}");
                     }
                     _ => {}
                 };
@@ -276,7 +276,7 @@ impl AdnlNode {
                     Ok((len, _)) if len == 0 => continue,
                     Ok((len, _)) => len,
                     Err(e) => {
-                        log::warn!("Failed to receive data: {}", e);
+                        tracing::warn!("Failed to receive data: {e}");
                         continue;
                     }
                 };
@@ -299,7 +299,7 @@ impl AdnlNode {
                         .handle_received_data(PacketView::from(buffer.as_mut_slice()), &subscribers)
                         .await
                     {
-                        log::debug!("Failed to handle received data: {}", e);
+                        tracing::debug!("Failed to handle received data: {e}");
                     }
                 });
             }
@@ -332,7 +332,7 @@ impl AdnlNode {
                 version,
             )
         } else {
-            log::trace!(
+            tracing::trace!(
                 "Received message to unknown key ID: {}",
                 hex::encode(&data[0..32])
             );
@@ -411,7 +411,7 @@ impl AdnlNode {
                                 }
 
                                 if incoming_transfers.remove(&transfer_id).is_some() {
-                                    log::debug!(
+                                    tracing::debug!(
                                         "ADNL transfer {} timed out",
                                         hex::encode(&transfer_id)
                                     );
@@ -700,7 +700,7 @@ impl AdnlNode {
         let (mut size, additional_message) = match &channel {
             Some(channel) if channel.ready() => (0, None),
             Some(channel_data) => {
-                log::debug!("Confirm channel {} -> {}", local_id, peer_id);
+                tracing::debug!("Confirm channel {local_id} -> {peer_id}");
 
                 let message = ton::adnl::message::message::ConfirmChannel {
                     key: ton::int256(peer.channel_key().public_key().to_bytes()),
@@ -713,7 +713,7 @@ impl AdnlNode {
                 (MSG_CONFIRM_CHANNEL_SIZE, Some(message))
             }
             None => {
-                log::debug!("Create channel {} -> {}", local_id, peer_id);
+                tracing::debug!("Create channel {local_id} -> {peer_id}");
 
                 let message = ton::adnl::message::message::CreateChannel {
                     key: ton::int256(peer.channel_key().public_key().to_bytes()),
@@ -978,11 +978,8 @@ impl AdnlNode {
                     peer_full_id,
                 ));
 
-                log::debug!(
-                    "Added ADNL peer {}. PEER ID {} -> LOCAL ID {}",
-                    peer_ip_address,
-                    peer_id,
-                    local_id
+                tracing::debug!(
+                    "Added ADNL peer {peer_ip_address}. PEER ID {peer_id} -> LOCAL ID {local_id}"
                 );
             }
         };
@@ -1037,6 +1034,7 @@ impl AdnlNode {
             .await
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(local_id, peer_id, query))]
     pub async fn query_with_prefix(
         &self,
         local_id: &AdnlNodeIdShort,
@@ -1065,7 +1063,7 @@ impl AdnlNode {
                 match queries.update_query(query_id, None).await {
                     Ok(true) => { /* dropped query */ }
                     Err(e) => {
-                        log::warn!("Failed to drop query {} ({})", ShortQueryId(&query_id), e)
+                        tracing::warn!("Failed to drop query {} ({e})", ShortQueryId(&query_id))
                     }
                     _ => { /* do nothing */ }
                 }
@@ -1102,7 +1100,7 @@ impl AdnlNode {
         let peers = self.get_peers(local_id)?;
         let mut peer = peers.get_mut(peer_id).ok_or(AdnlNodeError::UnknownPeer)?;
 
-        log::debug!("Resetting peer pair {} -> {}", local_id, peer_id);
+        tracing::debug!("Resetting peer pair {local_id} -> {peer_id}");
 
         self.channels_by_peers
             .remove(peer_id)
@@ -1190,7 +1188,7 @@ impl AdnlNode {
             }
         }
 
-        log::debug!("Channel {}: {} -> {}", context, local_id, peer_id);
+        tracing::debug!("Channel {context}: {local_id} -> {peer_id}");
 
         Ok(())
     }

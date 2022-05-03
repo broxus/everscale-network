@@ -80,7 +80,7 @@ impl Storage {
             .into_iter()
             .filter(|node| {
                 if verify_node(&overlay_id, node).is_err() {
-                    log::warn!("Bad overlay node: {:?}", node);
+                    tracing::warn!("Bad overlay node: {node:?}");
                     false
                 } else {
                     true

@@ -346,6 +346,7 @@ pub fn make_query(data: Vec<u8>, max_answer_size: Option<i64>) -> Result<(QueryI
     Ok((query_id, data))
 }
 
+#[tracing::instrument(level = "debug", skip_all)]
 async fn receive_loop(
     incoming_context: &mut IncomingContext,
     mut outgoing_transfer_state: Option<Arc<OutgoingTransferState>>,
@@ -362,10 +363,10 @@ async fn receive_loop(
                     &incoming_context.peer_id,
                     reply,
                 ) {
-                    log::warn!("RLDP query error: {}", e);
+                    tracing::warn!("RLDP query error: {e}");
                 }
             }
-            Err(e) => log::warn!("RLDP error: {}", e),
+            Err(e) => tracing::warn!("RLDP error: {e}"),
             _ => {}
         }
 
@@ -383,7 +384,7 @@ async fn receive_loop(
                 break;
             }
             None => {
-                log::warn!("total size mismatch");
+                tracing::warn!("total size mismatch");
             }
             _ => {}
         }
@@ -394,6 +395,7 @@ async fn receive_loop(
     while incoming_context.parts_rx.recv().await.is_some() {}
 }
 
+#[tracing::instrument(level = "debug", skip_all)]
 async fn send_loop(
     mut outgoing_context: OutgoingContext,
     roundtrip: Option<u64>,
@@ -451,6 +453,7 @@ async fn send_loop(
     Ok((true, roundtrip))
 }
 
+#[tracing::instrument(level = "debug", skip_all)]
 async fn answer_loop(
     mut incoming_context: IncomingContext,
     transfers: Arc<FxDashMap<TransferId, RldpTransfer>>,

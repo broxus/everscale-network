@@ -175,13 +175,13 @@ impl OverlayClient {
                 return Ok(Some(answer));
             }
             Some(Err(answer)) => {
-                log::warn!(
+                tracing::warn!(
                     "Wrong answer {answer:?} to {query:?} from {peer_id} ({})",
                     ResolvedIp(self.resolve_ip(neighbour))
                 );
             }
             None => {
-                log::warn!(
+                tracing::warn!(
                     "No reply to {query:?} from {peer_id} ({})",
                     ResolvedIp(self.resolve_ip(neighbour))
                 );
