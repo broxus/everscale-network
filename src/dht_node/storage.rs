@@ -68,7 +68,7 @@ impl Storage {
         }
 
         let overlay_id = match value.key.id {
-            ton::PublicKey::Pub_Overlay(_) => OverlayIdShort::from(hash_boxed(&value.key.id)?),
+            ton::PublicKey::Pub_Overlay(_) => OverlayIdShort::from(hash_boxed(&value.key.id)),
             _ => return Err(StorageError::InvalidKeyDescription.into()),
         };
 
@@ -102,10 +102,10 @@ impl Storage {
                     }
                 };
 
-                entry.insert(make_overlay_nodes_value(value, new_nodes, old_nodes)?);
+                entry.insert(make_overlay_nodes_value(value, new_nodes, old_nodes));
             }
             Entry::Vacant(entry) => {
-                entry.insert(make_overlay_nodes_value(value, new_nodes, None)?);
+                entry.insert(make_overlay_nodes_value(value, new_nodes, None));
             }
         }
 
@@ -117,7 +117,7 @@ fn make_overlay_nodes_value(
     mut value: ton::dht::value::Value,
     new_nodes: Vec<ton::overlay::node::Node>,
     old_nodes: Option<Vec<ton::overlay::node::Node>>,
-) -> Result<ton::dht::value::Value> {
+) -> ton::dht::value::Value {
     use std::collections::hash_map::Entry;
 
     let mut result = match old_nodes {
@@ -147,9 +147,9 @@ fn make_overlay_nodes_value(
             .map(|(_, node)| node)
             .collect::<Vec<_>>()
             .into(),
-    })?);
+    }));
 
-    Ok(value)
+    value
 }
 
 fn deserialize_overlay_nodes(data: &[u8]) -> Result<Vec<ton::overlay::node::Node>> {

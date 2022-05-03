@@ -176,7 +176,7 @@ impl Neighbours {
 
                         for peer in peers.into_iter() {
                             match AdnlNodeIdFull::try_from(&peer.id)
-                                .and_then(|full_id| full_id.compute_short_id())
+                                .map(|full_id| full_id.compute_short_id())
                             {
                                 Ok(peer_id) => {
                                     if !neighbours.contains_overlay_peer(&peer_id) {

@@ -92,14 +92,14 @@ impl OverlayShard {
         overlay_id: OverlayIdShort,
         overlay_key: Option<Arc<StoredAdnlNodeKey>>,
         options: OverlayShardOptions,
-    ) -> Result<Arc<Self>> {
+    ) -> Arc<Self> {
         let query_prefix = serialize(&ton::rpc::overlay::Query {
             overlay: ton::int256(overlay_id.into()),
-        })?;
+        });
 
         let message_prefix = serialize_boxed(ton::overlay::message::Message {
             overlay: ton::int256(overlay_id.into()),
-        })?;
+        });
 
         let overlay = Arc::new(Self {
             adnl,
@@ -158,7 +158,7 @@ impl OverlayShard {
             }
         });
 
-        Ok(overlay)
+        overlay
     }
 
     #[inline(always)]
@@ -229,7 +229,7 @@ impl OverlayShard {
         }
 
         let peer_id_full = AdnlNodeIdFull::try_from(&node.id)?;
-        let peer_id = peer_id_full.compute_short_id()?;
+        let peer_id = peer_id_full.compute_short_id();
 
         let is_new_peer = self.adnl.add_peer(
             PeerContext::PublicOverlay,
@@ -262,7 +262,7 @@ impl OverlayShard {
             }
 
             let peer_id_full = AdnlNodeIdFull::try_from(&node.id)?;
-            let peer_id = peer_id_full.compute_short_id()?;
+            let peer_id = peer_id_full.compute_short_id();
 
             let is_new_peer = self.adnl.add_peer(
                 PeerContext::PublicOverlay,
@@ -316,7 +316,7 @@ impl OverlayShard {
         self: &Arc<Self>,
         data: Vec<u8>,
         source: Option<&Arc<StoredAdnlNodeKey>>,
-    ) -> Result<OutgoingBroadcastInfo> {
+    ) -> OutgoingBroadcastInfo {
         const ORDINARY_BROADCAST_MAX_SIZE: usize = 768;
 
         let local_id = self.overlay_key().id();
@@ -381,7 +381,7 @@ impl OverlayShard {
         }
 
         let node_id = AdnlNodeIdFull::try_from(broadcast.src)?;
-        let node_peer_id = node_id.compute_short_id()?;
+        let node_peer_id = node_id.compute_short_id();
         let source = match broadcast.flags {
             flags if flags & BROADCAST_FLAG_ANY_SENDER == 0 => Some(node_peer_id),
             _ => None,
@@ -390,7 +390,7 @@ impl OverlayShard {
         let broadcast_data = match compression::decompress(broadcast.data) {
             Some(decompressed) => {
                 let broadcast_to_sign =
-                    make_broadcast_to_sign(&decompressed, broadcast.date, source.as_ref())?;
+                    make_broadcast_to_sign(&decompressed, broadcast.date, source.as_ref());
                 match node_id.verify(&broadcast_to_sign, broadcast.signature) {
                     Ok(()) => match self.create_broadcast(&broadcast_to_sign) {
                         Some(broadcast_id) => Some((broadcast_id, decompressed)),
@@ -406,7 +406,7 @@ impl OverlayShard {
             Some((id, data)) => (id, data),
             None => {
                 let broadcast_to_sign =
-                    make_broadcast_to_sign(broadcast.data, broadcast.date, source.as_ref())?;
+                    make_broadcast_to_sign(broadcast.data, broadcast.date, source.as_ref());
                 node_id.verify(&broadcast_to_sign, broadcast.signature)?;
                 match self.create_broadcast(&broadcast_to_sign) {
                     Some(broadcast_id) => (broadcast_id, broadcast.data.to_vec()),
@@ -445,7 +445,7 @@ impl OverlayShard {
 
         let broadcast_id = *broadcast.data_hash;
         let node_id = AdnlNodeIdFull::try_from(broadcast.src)?;
-        let source = node_id.compute_short_id()?;
+        let source = node_id.compute_short_id();
 
         let fec_type = match broadcast.fec {
             FecTypeView::RaptorQ {
@@ -518,14 +518,14 @@ impl OverlayShard {
         local_id: &AdnlNodeIdShort,
         mut data: Vec<u8>,
         key: &Arc<StoredAdnlNodeKey>,
-    ) -> Result<OutgoingBroadcastInfo> {
+    ) -> OutgoingBroadcastInfo {
         let date = now();
-        let broadcast_to_sign = make_broadcast_to_sign(&data, date, None)?;
+        let broadcast_to_sign = make_broadcast_to_sign(&data, date, None);
         let broadcast_id = match self.create_broadcast(&broadcast_to_sign) {
             Some(broadcast_id) => broadcast_id,
             None => {
                 tracing::warn!("Trying to send duplicated broadcast");
-                return Ok(Default::default());
+                return Default::default();
             }
         };
         let signature = key.sign(&broadcast_to_sign);
@@ -546,7 +546,7 @@ impl OverlayShard {
         }
         .into_boxed();
         let mut buffer = self.message_prefix.clone();
-        serialize_append(&mut buffer, &broadcast)?;
+        serialize_append(&mut buffer, &broadcast);
 
         let neighbours = self
             .neighbours
@@ -554,10 +554,10 @@ impl OverlayShard {
         self.distribute_broadcast(local_id, &neighbours, &buffer);
         self.spawn_broadcast_gc_task(broadcast_id);
 
-        Ok(OutgoingBroadcastInfo {
+        OutgoingBroadcastInfo {
             packets: 1,
             recipient_count: neighbours.len(),
-        })
+        }
     }
 
     pub fn send_fec_broadcast(
@@ -565,12 +565,12 @@ impl OverlayShard {
         local_id: &AdnlNodeIdShort,
         mut data: Vec<u8>,
         key: &Arc<StoredAdnlNodeKey>,
-    ) -> Result<OutgoingBroadcastInfo> {
+    ) -> OutgoingBroadcastInfo {
         let broadcast_id = match self.create_broadcast(&data) {
             Some(id) => id,
             None => {
                 tracing::warn!("Trying to send duplicated broadcast");
-                return Ok(Default::default());
+                return Default::default();
             }
         };
 
@@ -652,7 +652,7 @@ impl OverlayShard {
         });
 
         // Done
-        Ok(info)
+        info
     }
 
     pub async fn query(
@@ -686,7 +686,7 @@ impl OverlayShard {
         timeout: Option<u64>,
     ) -> Result<Option<Vec<ton::overlay::node::Node>>> {
         let query = ton::TLObject::new(ton::rpc::overlay::GetRandomPeers {
-            peers: self.prepare_random_peers()?,
+            peers: self.prepare_random_peers(),
         });
         match self.query(peer_id, &query, timeout).await? {
             Some(answer) => {
@@ -704,13 +704,13 @@ impl OverlayShard {
     pub fn process_get_random_peers(
         &self,
         query: ton::rpc::overlay::GetRandomPeers,
-    ) -> Result<ton::overlay::nodes::Nodes> {
+    ) -> ton::overlay::nodes::Nodes {
         let peers = self.process_nodes(query.peers);
         self.push_peers(peers);
         self.prepare_random_peers()
     }
 
-    pub fn sign_local_node(&self) -> Result<ton::overlay::node::Node> {
+    pub fn sign_local_node(&self) -> ton::overlay::node::Node {
         let key = self.overlay_key();
         let version = now();
 
@@ -718,15 +718,15 @@ impl OverlayShard {
             id: key.id().as_tl(),
             overlay: ton::int256(self.id().into()),
             version,
-        })?;
+        });
         let signature = key.sign(&signature);
 
-        Ok(ton::overlay::node::Node {
+        ton::overlay::node::Node {
             id: key.full_id().as_tl().into_boxed(),
             overlay: ton::int256(self.id().into()),
             version,
             signature: ton::bytes(signature.to_bytes().to_vec()),
-        })
+        }
     }
 
     fn process_nodes(&self, nodes: ton::overlay::nodes::Nodes) -> Vec<ton::overlay::node::Node> {
@@ -755,8 +755,8 @@ impl OverlayShard {
         result
     }
 
-    fn prepare_random_peers(&self) -> Result<ton::overlay::nodes::Nodes> {
-        let mut result = vec![self.sign_local_node()?];
+    fn prepare_random_peers(&self) -> ton::overlay::nodes::Nodes {
+        let mut result = vec![self.sign_local_node()];
 
         let amount = MAX_RANDOM_PEERS;
 
@@ -768,9 +768,9 @@ impl OverlayShard {
             }
         }
 
-        Ok(ton::overlay::nodes::Nodes {
+        ton::overlay::nodes::Nodes {
             nodes: result.into(),
-        })
+        }
     }
 
     fn update_random_peers(&self, amount: usize) {
@@ -939,7 +939,7 @@ impl OverlayShard {
             &chunk,
             transfer.seqno as i32,
             None,
-        )?;
+        );
         let signature = key.sign(&signature);
 
         let broadcast = ton::overlay::broadcast::BroadcastFec {
@@ -958,7 +958,7 @@ impl OverlayShard {
 
         transfer.seqno += 1;
         let mut buffer = self.message_prefix.clone();
-        serialize_append(&mut buffer, &broadcast)?;
+        serialize_append(&mut buffer, &broadcast);
 
         Ok(buffer)
     }
@@ -1020,11 +1020,11 @@ fn process_fec_broadcast(
         &broadcast.data,
         broadcast.seqno,
         if broadcast.flags & BROADCAST_FLAG_ANY_SENDER == 0 {
-            Some(broadcast.node_id.compute_short_id()?)
+            Some(broadcast.node_id.compute_short_id())
         } else {
             None
         },
-    )?;
+    );
     broadcast
         .node_id
         .verify(&broadcast_to_sign, &broadcast.signature)?;
@@ -1052,17 +1052,13 @@ fn process_fec_broadcast(
     }
 }
 
-fn make_broadcast_to_sign(
-    data: &[u8],
-    date: i32,
-    source: Option<&AdnlNodeIdShort>,
-) -> Result<Vec<u8>> {
+fn make_broadcast_to_sign(data: &[u8], date: i32, source: Option<&AdnlNodeIdShort>) -> Vec<u8> {
     let broadcast_id = ton::overlay::broadcast::id::Id {
         src: ton::int256(source.map(|id| *id.as_slice()).unwrap_or_default()),
         data_hash: ton::int256(sha2::Sha256::digest(data).into()),
         flags: BROADCAST_FLAG_ANY_SENDER,
     };
-    let broadcast_hash = hash(broadcast_id)?;
+    let broadcast_hash = hash(broadcast_id);
 
     serialize_boxed(ton::overlay::broadcast::tosign::ToSign {
         hash: ton::int256(broadcast_hash),
@@ -1079,22 +1075,22 @@ fn make_fec_part_to_sign(
     part: &[u8],
     seqno: i32,
     source: Option<AdnlNodeIdShort>,
-) -> Result<Vec<u8>> {
+) -> Vec<u8> {
     let broadcast_id = ton::overlay::broadcast_fec::id::Id {
         src: ton::int256(source.map(|id| id.into()).unwrap_or_default()),
-        type_: ton::int256(hash(params.clone())?),
+        type_: ton::int256(hash(params.clone())),
         data_hash: ton::int256(*data_hash),
         size: data_size,
         flags,
     };
-    let broadcast_hash = hash(broadcast_id)?;
+    let broadcast_hash = hash(broadcast_id);
 
     let part_id = ton::overlay::broadcast_fec::partid::PartId {
         broadcast_hash: ton::int256(broadcast_hash),
         data_hash: ton::int256(sha2::Sha256::digest(part).into()),
         seqno,
     };
-    let part_hash = hash(part_id)?;
+    let part_hash = hash(part_id);
 
     serialize_boxed(ton::overlay::broadcast::tosign::ToSign {
         hash: ton::int256(part_hash),

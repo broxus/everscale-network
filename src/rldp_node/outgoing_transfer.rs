@@ -108,7 +108,7 @@ impl OutgoingTransfer {
             self.state.set_seqno_out(seqno_out);
         }
 
-        serialize_inplace(&mut self.buffer, &self.message)?;
+        serialize_inplace(&mut self.buffer, &self.message);
 
         Ok(&self.buffer)
     }

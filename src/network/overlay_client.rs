@@ -138,7 +138,7 @@ impl OverlayClient {
         &self,
         data: Vec<u8>,
         source: Option<&Arc<StoredAdnlNodeKey>>,
-    ) -> Result<OutgoingBroadcastInfo> {
+    ) -> OutgoingBroadcastInfo {
         self.overlay_shard.broadcast(data, source)
     }
 
@@ -206,7 +206,7 @@ impl OverlayClient {
         const ATTEMPT_INTERVAL: u64 = 50; // Milliseconds
 
         let mut data = self.overlay_shard.query_prefix().clone();
-        serialize_append(&mut data, query)?;
+        serialize_append(&mut data, query);
 
         let (answer, roundtrip) = self
             .overlay_shard

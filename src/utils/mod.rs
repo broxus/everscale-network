@@ -89,35 +89,35 @@ pub fn compute_shared_secret(
 #[error("Bad public key data")]
 struct BadPublicKeyData;
 
-pub fn hash<T: IntoBoxed>(object: T) -> Result<[u8; 32]> {
+pub fn hash<T: IntoBoxed>(object: T) -> [u8; 32] {
     hash_boxed(&object.into_boxed())
 }
 
 /// Calculates hash of TL object
-pub fn hash_boxed<T: BoxedSerialize>(object: &T) -> Result<[u8; 32]> {
-    Ok(sha2::Sha256::digest(&serialize(object)?).into())
+pub fn hash_boxed<T: BoxedSerialize>(object: &T) -> [u8; 32] {
+    sha2::Sha256::digest(&serialize(object)).into()
 }
 
-pub fn serialize<T: BoxedSerialize>(object: &T) -> Result<Vec<u8>> {
+pub fn serialize<T: BoxedSerialize>(object: &T) -> Vec<u8> {
     let mut ret = Vec::new();
-    Serializer::new(&mut ret).write_boxed(object)?;
-    Ok(ret)
+    Serializer::new(&mut ret).write_boxed(object);
+    ret
 }
 
-pub fn serialize_boxed<T: IntoBoxed>(object: T) -> Result<Vec<u8>> {
+pub fn serialize_boxed<T: IntoBoxed>(object: T) -> Vec<u8> {
     let object = object.into_boxed();
     serialize(&object)
 }
 
 #[allow(clippy::ptr_arg)] // https://github.com/rust-lang/rust-clippy/issues/8482
-pub fn serialize_append<T>(buffer: &mut Vec<u8>, object: &T) -> Result<()>
+pub fn serialize_append<T>(buffer: &mut Vec<u8>, object: &T)
 where
     T: BoxedSerialize,
 {
     Serializer::new(buffer).write_boxed(object)
 }
 
-pub fn serialize_inplace<T>(buffer: &mut Vec<u8>, object: &T) -> Result<()>
+pub fn serialize_inplace<T>(buffer: &mut Vec<u8>, object: &T)
 where
     T: BoxedSerialize,
 {

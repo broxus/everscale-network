@@ -41,8 +41,8 @@ impl AdnlChannel {
 
         Ok(Self {
             ready: AtomicBool::new(context == ChannelCreationContext::ConfirmChannel),
-            channel_out: ChannelSide::from_secret(out_secret)?,
-            channel_in: ChannelSide::from_secret(in_secret)?,
+            channel_out: ChannelSide::from_secret(out_secret),
+            channel_in: ChannelSide::from_secret(in_secret),
             local_id,
             peer_id,
             peer_channel_public_key: *channel_public_key,
@@ -226,18 +226,18 @@ struct ChannelSide {
 }
 
 impl ChannelSide {
-    fn from_secret(secret: [u8; 32]) -> Result<Self> {
+    fn from_secret(secret: [u8; 32]) -> Self {
         let priority_secret = build_priority_secret(secret);
-        Ok(Self {
+        Self {
             ordinary: SubChannelSide {
-                id: compute_channel_id(secret)?,
+                id: compute_channel_id(secret),
                 secret,
             },
             priority: SubChannelSide {
-                id: compute_channel_id(priority_secret)?,
+                id: compute_channel_id(priority_secret),
                 secret: priority_secret,
             },
-        })
+        }
     }
 }
 
@@ -312,7 +312,7 @@ impl ChannelKey {
 
 pub type AdnlChannelId = [u8; 32];
 
-fn compute_channel_id(secret: [u8; 32]) -> Result<AdnlChannelId> {
+fn compute_channel_id(secret: [u8; 32]) -> AdnlChannelId {
     hash(ton::pub_::publickey::Aes {
         key: ton::int256(secret),
     })

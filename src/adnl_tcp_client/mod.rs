@@ -39,7 +39,7 @@ impl AdnlTcpClient {
         }
 
         let (seqno, pending_ping) = self.ping_cache.add_query();
-        let message = serialize(&TLObject::new(pending_ping.as_tl()))?;
+        let message = serialize(&TLObject::new(pending_ping.as_tl()));
         let _ = self.sender.send(PacketToSend {
             data: message,
             should_encrypt: true,
@@ -69,8 +69,8 @@ impl AdnlTcpClient {
             return Err(AdnlTcpClientError::SocketClosed.into());
         }
 
-        let (query_id, message) = build_query(query)?;
-        let message = serialize(&message)?;
+        let (query_id, message) = build_query(query);
+        let message = serialize(&message);
 
         let pending_query = self.queries_cache.add_query(query_id);
         let _ = self.sender.send(PacketToSend {
@@ -100,7 +100,7 @@ impl AdnlTcpClient {
     }
 
     pub async fn connect(config: AdnlTcpClientConfig) -> Result<Arc<Self>> {
-        let (peer_id_full, peer_id) = config.server_key.compute_node_ids()?;
+        let (peer_id_full, peer_id) = config.server_key.compute_node_ids();
 
         let socket = tokio::net::TcpSocket::new_v4()?;
         socket.set_reuseaddr(true)?;
@@ -257,18 +257,18 @@ impl AdnlTcpClient {
     }
 }
 
-fn build_query(query: &TLObject) -> Result<(QueryId, ton::adnl::Message)> {
+fn build_query(query: &TLObject) -> (QueryId, ton::adnl::Message) {
     let query_id: QueryId = rand::thread_rng().gen();
-    let query = serialize(query)?;
+    let query = serialize(query);
 
-    Ok((
+    (
         query_id,
         ton::adnl::message::message::Query {
             query_id: ton::int256(query_id),
             query: ton::bytes(query),
         }
         .into_boxed(),
-    ))
+    )
 }
 
 struct PacketToSend {

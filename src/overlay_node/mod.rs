@@ -70,7 +70,7 @@ impl OverlayNode {
         let mut new_peers = Vec::new();
 
         for (peer_ip_address, public_key) in peers {
-            let (peer_full_id, peer_id) = public_key.compute_node_ids()?;
+            let (peer_full_id, peer_id) = public_key.compute_node_ids();
 
             let is_new_peer = self.adnl.add_peer(
                 PeerContext::PrivateOverlay,
@@ -104,7 +104,7 @@ impl OverlayNode {
         &self,
         overlay_id: &OverlayIdShort,
         options: OverlayShardOptions,
-    ) -> Result<(Arc<OverlayShard>, bool)> {
+    ) -> (Arc<OverlayShard>, bool) {
         self.add_overlay_shard(overlay_id, None, options)
     }
 
@@ -114,15 +114,12 @@ impl OverlayNode {
         overlay_key: &Arc<StoredAdnlNodeKey>,
         peers: &[AdnlNodeIdShort],
         options: OverlayShardOptions,
-    ) -> Result<bool> {
-        let (shard, new) =
-            self.add_overlay_shard(overlay_id, Some(overlay_key.clone()), options)?;
-        if !new {
-            return Ok(false);
+    ) -> bool {
+        let (shard, new) = self.add_overlay_shard(overlay_id, Some(overlay_key.clone()), options);
+        if new {
+            shard.add_known_peers(peers);
         }
-
-        shard.add_known_peers(peers);
-        Ok(true)
+        new
     }
 
     pub fn delete_private_overlay(&self, overlay_id: &OverlayIdShort) -> Result<bool> {
@@ -140,13 +137,12 @@ impl OverlayNode {
         }
     }
 
-    pub fn compute_overlay_id(&self, workchain: i32, shard: i64) -> Result<OverlayIdFull> {
+    pub fn compute_overlay_id(&self, workchain: i32, shard: i64) -> OverlayIdFull {
         compute_overlay_id(workchain, shard, self.zero_state_file_hash)
     }
 
-    pub fn compute_overlay_short_id(&self, workchain: i32, shard: i64) -> Result<OverlayIdShort> {
-        self.compute_overlay_id(workchain, shard)
-            .and_then(|id| id.compute_short_id())
+    pub fn compute_overlay_short_id(&self, workchain: i32, shard: i64) -> OverlayIdShort {
+        self.compute_overlay_id(workchain, shard).compute_short_id()
     }
 
     pub fn get_overlay_shard(&self, overlay_id: &OverlayIdShort) -> Result<Arc<OverlayShard>> {
@@ -161,10 +157,10 @@ impl OverlayNode {
         overlay_id: &OverlayIdShort,
         overlay_key: Option<Arc<StoredAdnlNodeKey>>,
         options: OverlayShardOptions,
-    ) -> Result<(Arc<OverlayShard>, bool)> {
+    ) -> (Arc<OverlayShard>, bool) {
         use dashmap::mapref::entry::Entry;
 
-        Ok(match self.shards.entry(*overlay_id) {
+        match self.shards.entry(*overlay_id) {
             Entry::Vacant(entry) => {
                 let overlay_shard = entry
                     .insert(OverlayShard::new(
@@ -173,12 +169,12 @@ impl OverlayNode {
                         *overlay_id,
                         overlay_key,
                         options,
-                    )?)
+                    ))
                     .clone();
                 (overlay_shard, true)
             }
             Entry::Occupied(entry) => (entry.get().clone(), false),
-        })
+        }
     }
 }
 
@@ -269,7 +265,7 @@ impl Subscriber for OverlayNode {
         {
             Ok(query) => {
                 let shard = self.get_overlay_shard(&overlay_id)?;
-                return QueryBundleConsumingResult::consume(shard.process_get_random_peers(query)?);
+                return QueryBundleConsumingResult::consume(shard.process_get_random_peers(query));
             }
             Err(query) => query,
         };

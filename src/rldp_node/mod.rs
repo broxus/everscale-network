@@ -82,7 +82,7 @@ impl RldpNode {
             }
         }
 
-        let (query_id, query) = make_query(data, max_answer_size)?;
+        let (query_id, query) = make_query(data, max_answer_size);
 
         let peer = self
             .peers

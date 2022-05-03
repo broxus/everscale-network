@@ -198,14 +198,14 @@ impl TransfersCache {
                                 transfer_id: ton::int256(*transfer_id),
                                 part,
                                 seqno,
-                            })?;
+                            });
                             self.adnl.send_custom_message(local_id, peer_id, &reply)?;
 
                             // Send complete message
                             let reply = serialize_boxed(ton::rldp::messagepart::Complete {
                                 transfer_id: ton::int256(*transfer_id),
                                 part,
-                            })?;
+                            });
                             self.adnl.send_custom_message(local_id, peer_id, &reply)?;
 
                             // Done
@@ -332,7 +332,7 @@ impl TransfersCache {
     }
 }
 
-pub fn make_query(data: Vec<u8>, max_answer_size: Option<i64>) -> Result<(QueryId, Vec<u8>)> {
+pub fn make_query(data: Vec<u8>, max_answer_size: Option<i64>) -> (QueryId, Vec<u8>) {
     use rand::Rng;
 
     let query_id: QueryId = rand::thread_rng().gen();
@@ -341,9 +341,9 @@ pub fn make_query(data: Vec<u8>, max_answer_size: Option<i64>) -> Result<(QueryI
         max_answer_size: max_answer_size.unwrap_or(128 * 1024),
         timeout: now() + MAX_TIMEOUT as i32 / 1000,
         data: ton::bytes(data),
-    })?;
+    });
 
-    Ok((query_id, data))
+    (query_id, data)
 }
 
 #[tracing::instrument(level = "debug", skip_all)]
@@ -491,7 +491,7 @@ async fn answer_loop(
     }
 
     // Create outgoing transfer
-    let answer = serialize_boxed(answer)?;
+    let answer = serialize_boxed(answer);
     let outgoing_transfer_id = negate_id(incoming_context.transfer_id);
     let outgoing_transfer = OutgoingTransfer::new(answer, Some(outgoing_transfer_id));
     transfers.insert(

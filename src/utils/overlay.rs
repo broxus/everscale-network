@@ -14,10 +14,10 @@ pub fn verify_node(overlay_id: &OverlayIdShort, node: &ton::overlay::node::Node)
     let node_id = AdnlNodeIdFull::try_from(&node.id)?;
 
     let node_to_sign = serialize_boxed(ton::overlay::node::tosign::ToSign {
-        id: node_id.compute_short_id()?.as_tl(),
+        id: node_id.compute_short_id().as_tl(),
         overlay: node.overlay,
         version: node.version,
-    })?;
+    });
 
     node_id.verify(&node_to_sign, &node.signature)?;
 
@@ -28,23 +28,23 @@ pub fn compute_overlay_id(
     workchain: i32,
     _shard: i64,
     zero_state_file_hash: FileHash,
-) -> Result<OverlayIdFull> {
+) -> OverlayIdFull {
     let overlay = ton::ton_node::shardpublicoverlayid::ShardPublicOverlayId {
         workchain,
         shard: 1i64 << 63, // WHY?!!
         zero_state_file_hash: ton::int256(zero_state_file_hash),
     };
-    hash(overlay).map(OverlayIdFull)
+    OverlayIdFull(hash(overlay))
 }
 
 pub fn compute_private_overlay_short_id(
     first_block: &ton::catchain::FirstBlock,
-) -> Result<PrivateOverlayIdShort> {
-    let first_block = serialize(first_block)?;
+) -> PrivateOverlayIdShort {
+    let first_block = serialize(first_block);
     let overlay_id = ton::pub_::publickey::Overlay {
         name: first_block.into(),
     };
-    hash(overlay_id).map(PrivateOverlayIdShort)
+    PrivateOverlayIdShort(hash(overlay_id))
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -55,11 +55,11 @@ impl OverlayIdFull {
         &self.0
     }
 
-    pub fn compute_short_id(&self) -> Result<OverlayIdShort> {
+    pub fn compute_short_id(&self) -> OverlayIdShort {
         let overlay = ton::pub_::publickey::Overlay {
             name: ton::bytes(self.0.to_vec()),
         };
-        hash(overlay).map(OverlayIdShort)
+        OverlayIdShort(hash(overlay))
     }
 }
 

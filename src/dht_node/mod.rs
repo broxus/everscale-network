@@ -67,9 +67,9 @@ impl DhtNode {
         };
 
         let query = ton::rpc::dht::Query {
-            node: dht_node.sign_local_node()?,
+            node: dht_node.sign_local_node(),
         };
-        serialize_inplace(&mut dht_node.query_prefix, &query)?;
+        serialize_inplace(&mut dht_node.query_prefix, &query);
 
         Ok(Arc::new(dht_node))
     }
@@ -103,7 +103,7 @@ impl DhtNode {
             return Ok(None);
         }
 
-        let peer_id = peer_full_id.compute_short_id()?;
+        let peer_id = peer_full_id.compute_short_id();
         let peer_ip_address =
             parse_address_list(&peer.addr_list, self.adnl.options().clock_tolerance_sec)?;
 
@@ -179,7 +179,7 @@ impl DhtNode {
             let cache = PeersCache::with_capacity(MAX_OVERLAY_PEERS);
             while let Some(node) = nodes.pop() {
                 let peer_full_id = AdnlNodeIdFull::try_from(&node.id)?;
-                let peer_id = peer_full_id.compute_short_id()?;
+                let peer_id = peer_full_id.compute_short_id();
                 if !cache.put(peer_id) {
                     continue;
                 }
@@ -229,7 +229,7 @@ impl DhtNode {
         let overlay_full_id = ton::pub_::publickey::Overlay {
             name: ton::bytes(overlay_full_id.as_slice().to_vec()),
         };
-        let overlay_id = hash(overlay_full_id.clone())?.into();
+        let overlay_id = hash(overlay_full_id.clone()).into();
 
         verify_node(&overlay_id, node)?;
 
@@ -243,13 +243,13 @@ impl DhtNode {
             },
             value: ton::bytes(serialize_boxed(ton::overlay::nodes::Nodes {
                 nodes: vec![node.clone()].into(),
-            })?),
+            })),
             ttl: now() + self.options.value_timeout_sec as i32,
             signature: Default::default(),
         };
 
         self.storage
-            .insert_overlay_nodes(hash(key.clone())?, value.clone())?;
+            .insert_overlay_nodes(hash(key.clone()), value.clone())?;
 
         self.store_value(
             key,
@@ -297,12 +297,12 @@ impl DhtNode {
     }
 
     pub async fn store_ip_address(self: &Arc<Self>, key: &StoredAdnlNodeKey) -> Result<bool> {
-        let value = serialize_boxed(self.adnl.build_address_list(None))?;
-        let value = sign_dht_value(key, DHT_KEY_ADDRESS, &value, self.options.value_timeout_sec)?;
+        let value = serialize_boxed(self.adnl.build_address_list(None));
+        let value = sign_dht_value(key, DHT_KEY_ADDRESS, &value, self.options.value_timeout_sec);
         let key = make_dht_key(key.id(), DHT_KEY_ADDRESS);
 
         self.storage
-            .insert_signed_value(hash(key.clone())?, value.clone())?;
+            .insert_signed_value(hash(key.clone()), value.clone())?;
 
         self.store_value(
             key,
@@ -341,7 +341,7 @@ impl DhtNode {
         peer_id: &AdnlNodeIdShort,
     ) -> Result<Option<(AdnlAddressUdp, AdnlNodeIdFull)>> {
         let key = make_dht_key(peer_id, DHT_KEY_ADDRESS);
-        Ok(match self.storage.get(&hash(key)?) {
+        Ok(match self.storage.get(&hash(key)) {
             Some(stored) => {
                 let value = deserialize(&stored.value)?;
                 Some(parse_dht_value_address(
@@ -440,7 +440,7 @@ impl DhtNode {
         Ok(result)
     }
 
-    fn process_get_signed_address_list(&self) -> Result<ton::dht::node::Node> {
+    fn process_get_signed_address_list(&self) -> ton::dht::node::Node {
         self.sign_local_node()
     }
 
@@ -449,7 +449,7 @@ impl DhtNode {
             return Err(DhtNodeError::InsertedValueExpired.into());
         }
 
-        let key_id = hash(query.value.key.key.clone())?;
+        let key_id = hash(query.value.key.key.clone());
 
         match query.value.key.update_rule {
             ton::dht::UpdateRule::Dht_UpdateRule_Signature => {
@@ -533,7 +533,7 @@ impl DhtNode {
     where
         F: Fn(&TLObject) -> bool + Copy + Send + 'static,
     {
-        let key_id = hash(key)?;
+        let key_id = hash(key);
         let iter = external_iter.get_or_insert_with(|| ExternalDhtIter::with_key_id(self, key_id));
         if iter.key_id != key_id {
             return Err(DhtNodeError::KeyMismatch.into());
@@ -655,7 +655,7 @@ impl DhtNode {
         Ok(false)
     }
 
-    fn sign_local_node(&self) -> Result<ton::dht::node::Node> {
+    fn sign_local_node(&self) -> ton::dht::node::Node {
         let node = ton::dht::node::Node {
             id: self.node_key.full_id().as_tl().into_boxed(),
             addr_list: self.adnl.build_address_list(None),
@@ -719,7 +719,7 @@ impl Subscriber for DhtNode {
         };
 
         let query = match query.downcast::<ton::rpc::dht::GetSignedAddressList>() {
-            Ok(_) => return QueryConsumingResult::consume(self.process_get_signed_address_list()?),
+            Ok(_) => return QueryConsumingResult::consume(self.process_get_signed_address_list()),
             Err(query) => query,
         };
 

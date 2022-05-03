@@ -52,7 +52,7 @@ impl AdnlKeystore {
         key: ed25519_dalek::SecretKey,
         tag: usize,
     ) -> Result<AdnlNodeIdShort> {
-        let (full_id, short_id) = key.compute_node_ids()?;
+        let (full_id, short_id) = key.compute_node_ids();
 
         match self.tags.entry(tag) {
             hash_map::Entry::Vacant(entry) => {

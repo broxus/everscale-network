@@ -40,13 +40,12 @@ impl AdnlNodeIdFull {
     {
         let mut data = data.clone();
         let signature = std::mem::take(&mut extractor(&mut data).0);
-        let buffer = serialize_boxed(data)?;
+        let buffer = serialize_boxed(data);
         self.verify(&buffer, &signature)
     }
 
-    pub fn compute_short_id(&self) -> Result<AdnlNodeIdShort> {
-        let hash = hash(self.as_tl())?;
-        Ok(AdnlNodeIdShort::new(hash))
+    pub fn compute_short_id(&self) -> AdnlNodeIdShort {
+        AdnlNodeIdShort::new(hash(self.as_tl()))
     }
 }
 
@@ -161,23 +160,23 @@ impl AsRef<[u8; 32]> for AdnlNodeIdShort {
 }
 
 pub trait ComputeNodeIds {
-    fn compute_node_ids(&self) -> Result<(AdnlNodeIdFull, AdnlNodeIdShort)>;
+    fn compute_node_ids(&self) -> (AdnlNodeIdFull, AdnlNodeIdShort);
 }
 
 impl ComputeNodeIds for ed25519_dalek::SecretKey {
-    fn compute_node_ids(&self) -> Result<(AdnlNodeIdFull, AdnlNodeIdShort)> {
+    fn compute_node_ids(&self) -> (AdnlNodeIdFull, AdnlNodeIdShort) {
         let public_key = ed25519_dalek::PublicKey::from(self);
         let full_id = AdnlNodeIdFull::new(public_key);
-        let short_id = full_id.compute_short_id()?;
-        Ok((full_id, short_id))
+        let short_id = full_id.compute_short_id();
+        (full_id, short_id)
     }
 }
 
 impl ComputeNodeIds for ed25519_dalek::PublicKey {
-    fn compute_node_ids(&self) -> Result<(AdnlNodeIdFull, AdnlNodeIdShort)> {
+    fn compute_node_ids(&self) -> (AdnlNodeIdFull, AdnlNodeIdShort) {
         let full_id = AdnlNodeIdFull::new(*self);
-        let short_id = full_id.compute_short_id()?;
-        Ok((full_id, short_id))
+        let short_id = full_id.compute_short_id();
+        (full_id, short_id)
     }
 }
 
@@ -235,16 +234,16 @@ impl StoredAdnlNodeKey {
         self.private_key.sign(data, self.full_id.public_key())
     }
 
-    pub fn sign_boxed<T, F, R>(&self, data: T, inserter: F) -> Result<R>
+    pub fn sign_boxed<T, F, R>(&self, data: T, inserter: F) -> R
     where
         T: IntoBoxed,
         F: FnOnce(T::Boxed, ton::bytes) -> R,
     {
         let data = data.into_boxed();
-        let mut buffer = serialize(&data)?;
+        let mut buffer = serialize(&data);
         let signature = self.sign(&buffer);
         buffer.truncate(0);
         buffer.extend_from_slice(signature.as_ref());
-        Ok(inserter(data, ton::bytes(buffer)))
+        inserter(data, ton::bytes(buffer))
     }
 }

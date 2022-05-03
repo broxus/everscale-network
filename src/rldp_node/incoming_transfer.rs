@@ -110,7 +110,7 @@ impl IncomingTransfer {
             },
             std::cmp::Ordering::Less => {
                 self.complete().part = message.part;
-                serialize_inplace(&mut self.buffer, &self.complete)?;
+                serialize_inplace(&mut self.buffer, &self.complete);
                 return Ok(Some(self.buffer.as_slice()));
             }
             std::cmp::Ordering::Greater => return Ok(None),
@@ -132,7 +132,7 @@ impl IncomingTransfer {
                 }
 
                 self.complete().part = message.part;
-                serialize_inplace(&mut self.buffer, &self.complete)?;
+                serialize_inplace(&mut self.buffer, &self.complete);
                 Ok(Some(self.buffer.as_slice()))
             }
             None if self.confirm_count == 9 => {
@@ -141,7 +141,7 @@ impl IncomingTransfer {
                 confirm.part = message.part;
                 confirm.seqno = max_seqno;
                 self.confirm_count = 0;
-                serialize_inplace(&mut self.buffer, &self.confirm)?;
+                serialize_inplace(&mut self.buffer, &self.confirm);
                 Ok(Some(self.buffer.as_slice()))
             }
             None => {

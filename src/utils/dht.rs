@@ -13,9 +13,9 @@ pub fn sign_dht_value(
     name: &str,
     value: &[u8],
     timeout: u32,
-) -> Result<ton::dht::value::Value> {
+) -> ton::dht::value::Value {
     let value = ton::dht::value::Value {
-        key: sign_dht_key_description(key, name)?,
+        key: sign_dht_key_description(key, name),
         value: ton::bytes(value.to_vec()),
         ttl: now() + timeout as i32,
         signature: Default::default(),
@@ -30,7 +30,7 @@ pub fn sign_dht_value(
 pub fn sign_dht_key_description(
     key: &StoredAdnlNodeKey,
     name: &str,
-) -> Result<ton::dht::keydescription::KeyDescription> {
+) -> ton::dht::keydescription::KeyDescription {
     let key_description = ton::dht::keydescription::KeyDescription {
         key: make_dht_key(key.id(), name),
         id: key.full_id().as_tl().into_boxed(),

@@ -567,7 +567,7 @@ impl AdnlNode {
             (peer_id, true)
         } else if let Some(public_key) = packet.from {
             let full_id: AdnlNodeIdFull = public_key.try_into()?;
-            let peer_id = full_id.compute_short_id()?;
+            let peer_id = full_id.compute_short_id();
 
             if matches!(packet.from_short, Some(id) if peer_id.as_slice() != id) {
                 return Err(AdnlPacketError::InvalidPeerId.into());
@@ -772,7 +772,7 @@ impl AdnlNode {
                 result
             }
 
-            let data = serialize(&message)?;
+            let data = serialize(&message);
             let hash: [u8; 32] = sha2::Sha256::digest(&data).into();
             let mut offset = 0;
 
@@ -865,11 +865,11 @@ impl AdnlNode {
         };
 
         if let MessageSigner::Random(signer) = signer {
-            let signature = signer.sign(&serialize_boxed(packet.clone())?);
+            let signature = signer.sign(&serialize_boxed(packet.clone()));
             packet.signature = Some(ton::bytes(signature.to_bytes().to_vec()));
         }
 
-        let mut data = serialize_boxed(packet)?;
+        let mut data = serialize_boxed(packet);
 
         match signer {
             MessageSigner::Channel { channel, priority } => {
@@ -1043,7 +1043,7 @@ impl AdnlNode {
         query: &ton::TLObject,
         timeout: Option<u64>,
     ) -> Result<Option<ton::TLObject>> {
-        let (query_id, message) = build_query(prefix, query)?;
+        let (query_id, message) = build_query(prefix, query);
 
         let pending_query = self.queries.add_query(query_id);
 

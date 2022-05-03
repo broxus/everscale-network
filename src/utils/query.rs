@@ -9,30 +9,27 @@ use super::{deserialize_bundle, serialize};
 use crate::subscriber::*;
 use crate::utils::compression;
 
-pub fn build_query(
-    prefix: Option<&[u8]>,
-    query: &ton::TLObject,
-) -> Result<(QueryId, ton::adnl::Message)> {
+pub fn build_query(prefix: Option<&[u8]>, query: &ton::TLObject) -> (QueryId, ton::adnl::Message) {
     use rand::Rng;
 
     let query_id: QueryId = rand::thread_rng().gen();
     let query = match prefix {
         Some(prefix) => {
             let mut prefix = prefix.to_vec();
-            Serializer::new(&mut prefix).write_boxed(query)?;
+            Serializer::new(&mut prefix).write_boxed(query);
             prefix
         }
-        None => serialize(query)?,
+        None => serialize(query),
     };
 
-    Ok((
+    (
         query_id,
         ton::adnl::message::message::Query {
             query_id: ton::int256(query_id),
             query: ton::bytes(query),
         }
         .into_boxed(),
-    ))
+    )
 }
 
 pub async fn process_message_custom(
@@ -60,14 +57,15 @@ pub async fn process_message_adnl_query(
     query: &[u8],
 ) -> Result<QueryProcessingResult<ton::adnl::Message>> {
     match process_query(local_id, peer_id, subscribers, Cow::Borrowed(query)).await? {
-        QueryProcessingResult::Processed(answer) => convert_answer(answer, |answer| {
-            ton::adnl::message::message::Answer {
-                query_id: ton::int256(*query_id),
-                answer: ton::bytes(answer),
-            }
-            .into_boxed()
-        })
-        .map(QueryProcessingResult::Processed),
+        QueryProcessingResult::Processed(answer) => Ok(QueryProcessingResult::Processed(
+            convert_answer(answer, |answer| {
+                ton::adnl::message::message::Answer {
+                    query_id: ton::int256(*query_id),
+                    answer: ton::bytes(answer),
+                }
+                .into_boxed()
+            }),
+        )),
         _ => Ok(QueryProcessingResult::Rejected),
     }
 }
@@ -90,19 +88,20 @@ pub async fn process_message_rldp_query(
     };
 
     match process_query(local_id, peer_id, subscribers, Cow::Owned(data.0)).await? {
-        QueryProcessingResult::Processed(answer) => convert_answer(answer, move |mut answer| {
-            if answer_compression {
-                if let Err(e) = compression::compress(&mut answer) {
-                    tracing::warn!("Failed to compress RLDP answer: {e:?}");
+        QueryProcessingResult::Processed(answer) => Ok(QueryProcessingResult::Processed(
+            convert_answer(answer, move |mut answer| {
+                if answer_compression {
+                    if let Err(e) = compression::compress(&mut answer) {
+                        tracing::warn!("Failed to compress RLDP answer: {e:?}");
+                    }
                 }
-            }
 
-            ton::rldp::message::Answer {
-                query_id,
-                data: ton::bytes(answer),
-            }
-        })
-        .map(QueryProcessingResult::Processed),
+                ton::rldp::message::Answer {
+                    query_id,
+                    data: ton::bytes(answer),
+                }
+            }),
+        )),
         _ => Ok(QueryProcessingResult::Rejected),
     }
 }
@@ -161,16 +160,16 @@ where
     }
 }
 
-fn convert_answer<A, F>(answer: Option<QueryAnswer>, convert: F) -> Result<Option<A>>
+fn convert_answer<A, F>(answer: Option<QueryAnswer>, convert: F) -> Option<A>
 where
     F: Fn(Vec<u8>) -> A,
 {
-    Ok(match answer {
-        Some(QueryAnswer::Object(x)) => Some(serialize(&x)?),
+    match answer {
+        Some(QueryAnswer::Object(x)) => Some(serialize(&x)),
         Some(QueryAnswer::Raw(x)) => Some(x),
         None => None,
     }
-    .map(convert))
+    .map(convert)
 }
 
 /// Query id wrapper used for printing
