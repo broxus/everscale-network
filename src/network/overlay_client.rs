@@ -156,7 +156,6 @@ impl OverlayClient {
         Q: ton_api::AnyBoxedSerialize,
         A: ton_api::AnyBoxedSerialize,
     {
-        let now = Instant::now();
         let timeout = timeout.or_else(|| {
             Some(
                 self.overlay_shard
@@ -165,8 +164,9 @@ impl OverlayClient {
             )
         });
         let peer_id = neighbour.peer_id();
-        let answer = self.overlay_shard.query(peer_id, query, timeout).await?;
 
+        let now = Instant::now();
+        let answer = self.overlay_shard.query(peer_id, query, timeout).await?;
         let roundtrip = now.elapsed().as_millis() as u64;
 
         match answer.map(|answer| answer.downcast::<A>()) {

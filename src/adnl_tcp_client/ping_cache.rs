@@ -37,14 +37,11 @@ impl PingCache {
 
         let old = match self.queries.entry(seqno) {
             Entry::Vacant(_) => None,
-            Entry::Occupied(entry) => match entry.get() {
-                PingQueryState::Sent(_) => {
-                    let (_, old) = entry.replace_entry(match answer {
-                        true => PingQueryState::Received,
-                        false => PingQueryState::Timeout,
-                    });
-                    Some(old)
-                }
+            Entry::Occupied(mut entry) => match entry.get() {
+                PingQueryState::Sent(_) => Some(entry.insert(match answer {
+                    true => PingQueryState::Received,
+                    false => PingQueryState::Timeout,
+                })),
                 _ => None,
             },
         };

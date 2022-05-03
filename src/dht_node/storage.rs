@@ -44,8 +44,8 @@ impl Storage {
         full_id.verify_boxed(&value, |v| &mut v.signature)?;
 
         Ok(match self.storage.entry(key) {
-            Entry::Occupied(entry) if entry.get().ttl < value.ttl => {
-                entry.replace_entry(value);
+            Entry::Occupied(mut entry) if entry.get().ttl < value.ttl => {
+                entry.insert(value);
                 true
             }
             Entry::Occupied(_) => false,
@@ -92,7 +92,7 @@ impl Storage {
         }
 
         match self.storage.entry(key) {
-            Entry::Occupied(entry) => {
+            Entry::Occupied(mut entry) => {
                 let old_nodes = match entry.get().ttl {
                     old_ttl if old_ttl < now() => None,
                     old_ttl if old_ttl > value.ttl => return Ok(false),
@@ -102,7 +102,7 @@ impl Storage {
                     }
                 };
 
-                entry.replace_entry(make_overlay_nodes_value(value, new_nodes, old_nodes)?);
+                entry.insert(make_overlay_nodes_value(value, new_nodes, old_nodes)?);
             }
             Entry::Vacant(entry) => {
                 entry.insert(make_overlay_nodes_value(value, new_nodes, None)?);

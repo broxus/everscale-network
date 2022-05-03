@@ -40,14 +40,11 @@ impl QueriesCache {
 
         let old = match self.queries.entry(query_id) {
             Entry::Vacant(_) => None,
-            Entry::Occupied(entry) => match entry.get() {
-                QueryState::Sent(_) => {
-                    let (_, old) = entry.replace_entry(match answer {
-                        Some(bytes) => QueryState::Received(bytes.to_vec()),
-                        None => QueryState::Timeout,
-                    });
-                    Some(old)
-                }
+            Entry::Occupied(mut entry) => match entry.get() {
+                QueryState::Sent(_) => Some(entry.insert(match answer {
+                    Some(bytes) => QueryState::Received(bytes.to_vec()),
+                    None => QueryState::Timeout,
+                })),
                 _ => None,
             },
         };

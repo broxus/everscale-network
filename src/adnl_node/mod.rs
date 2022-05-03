@@ -1046,6 +1046,7 @@ impl AdnlNode {
         timeout: Option<u64>,
     ) -> Result<Option<ton::TLObject>> {
         let (query_id, message) = build_query(prefix, query)?;
+
         let pending_query = self.queries.add_query(query_id);
 
         self.send_message(local_id, peer_id, message, true)?;
@@ -1133,7 +1134,7 @@ impl AdnlNode {
         let peer = peer.value();
 
         match self.channels_by_peers.entry(*peer_id) {
-            Entry::Occupied(entry) => {
+            Entry::Occupied(mut entry) => {
                 let channel = entry.get();
 
                 if channel.is_still_valid(peer_channel_public_key, peer_channel_date) {
@@ -1152,7 +1153,7 @@ impl AdnlNode {
                     context,
                 )?);
 
-                let (.., old_channel) = entry.replace_entry(new_channel.clone());
+                let old_channel = entry.insert(new_channel.clone());
                 self.channels_by_id
                     .remove(old_channel.ordinary_channel_in_id());
                 self.channels_by_id

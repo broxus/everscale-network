@@ -21,9 +21,9 @@ impl Buckets {
 
         let affinity = get_affinity(local_id.as_slice(), peer_id.as_slice());
         match self.buckets[affinity as usize].entry(*peer_id) {
-            Entry::Occupied(entry) => {
+            Entry::Occupied(mut entry) => {
                 if entry.get().version < peer.version {
-                    entry.replace_entry(peer.clone());
+                    entry.insert(peer.clone());
                 }
             }
             Entry::Vacant(entry) => {

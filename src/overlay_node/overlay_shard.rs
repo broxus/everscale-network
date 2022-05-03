@@ -806,9 +806,9 @@ impl OverlayShard {
         }
 
         match self.nodes.entry(*peer_id) {
-            Entry::Occupied(entry) => {
+            Entry::Occupied(mut entry) => {
                 if entry.get().version < node.version {
-                    entry.replace_entry(node);
+                    entry.insert(node);
                 }
             }
             Entry::Vacant(entry) => {
