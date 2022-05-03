@@ -348,11 +348,11 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt() {
         let peer1_key = ed25519_dalek::SecretKey::generate(&mut rand::thread_rng());
-        let peer1_id = peer1_key.compute_node_ids().unwrap().1;
+        let (_, peer1_id) = peer1_key.compute_node_ids();
         let peer1_channel_key = ChannelKey::generate();
 
         let peer2_key = ed25519_dalek::SecretKey::generate(&mut rand::thread_rng());
-        let peer2_id = peer2_key.compute_node_ids().unwrap().1;
+        let (_, peer2_id) = peer2_key.compute_node_ids();
         let peer2_channel_key = ChannelKey::generate();
 
         let channel12 = AdnlChannel::new(
