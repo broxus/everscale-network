@@ -672,12 +672,10 @@ impl OverlayShard {
         peer_id: &AdnlNodeIdShort,
         data: Vec<u8>,
         rldp: &Arc<RldpNode>,
-        max_answer_size: Option<i64>,
         roundtrip: Option<u64>,
     ) -> Result<(Option<Vec<u8>>, u64)> {
         let local_id = self.overlay_key().id();
-        rldp.query(local_id, peer_id, data, max_answer_size, roundtrip)
-            .await
+        rldp.query(local_id, peer_id, data, roundtrip).await
     }
 
     pub async fn get_random_peers(

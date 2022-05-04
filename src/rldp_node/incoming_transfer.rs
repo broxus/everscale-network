@@ -10,6 +10,7 @@ use crate::utils::*;
 
 pub struct IncomingTransfer {
     buffer: Vec<u8>,
+    max_answer_size: u32,
     complete: ton::rldp::MessagePart,
     confirm: ton::rldp::MessagePart,
     confirm_count: usize,
@@ -21,9 +22,10 @@ pub struct IncomingTransfer {
 }
 
 impl IncomingTransfer {
-    pub fn new(transfer_id: TransferId) -> Self {
+    pub fn new(transfer_id: TransferId, max_answer_size: u32) -> Self {
         Self {
             buffer: Vec::new(),
+            max_answer_size,
             complete: ton::rldp::messagepart::Complete {
                 transfer_id: ton::int256(transfer_id),
                 part: 0,
@@ -91,6 +93,9 @@ impl IncomingTransfer {
             Some(total_size) => total_size,
             None => {
                 let total_size = message.total_size as usize;
+                if total_size > self.max_answer_size as usize {
+                    return Err(IncomingTransferError::TooBigTransferSize.into());
+                }
                 self.total_size = Some(total_size);
                 self.data.reserve_exact(total_size);
                 total_size

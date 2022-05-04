@@ -202,7 +202,6 @@ impl OverlayClient {
     where
         Q: ton_api::BoxedSerialize + std::fmt::Debug,
     {
-        const MAX_ANSWER_SIZE: i64 = 10 * 1024 * 1024; // 10 MB
         const ATTEMPT_INTERVAL: u64 = 50; // Milliseconds
 
         let mut data = self.overlay_shard.query_prefix().clone();
@@ -214,7 +213,6 @@ impl OverlayClient {
                 neighbour.peer_id(),
                 data,
                 &self.rldp,
-                Some(MAX_ANSWER_SIZE),
                 neighbour
                     .roundtrip_rldp()
                     .map(|roundtrip| roundtrip + attempt as u64 * ATTEMPT_INTERVAL),

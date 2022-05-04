@@ -27,6 +27,8 @@ pub struct RldpNode {
 #[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct RldpNodeOptions {
+    /// Default: 10485760 (10 MB)
+    pub max_answer_size: u32,
     /// Default: 16
     pub max_peer_queries: u32,
     /// Default: false
@@ -36,6 +38,7 @@ pub struct RldpNodeOptions {
 impl Default for RldpNodeOptions {
     fn default() -> Self {
         Self {
+            max_answer_size: 10 * 1024 * 1024,
             max_peer_queries: 16,
             force_compression: false,
         }
@@ -50,7 +53,12 @@ impl RldpNode {
     ) -> Arc<Self> {
         Arc::new(Self {
             peers: Default::default(),
-            transfers: TransfersCache::new(adnl, subscribers, options.force_compression),
+            transfers: TransfersCache::new(
+                adnl,
+                subscribers,
+                options.max_answer_size,
+                options.force_compression,
+            ),
             options,
         })
     }
@@ -73,7 +81,6 @@ impl RldpNode {
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
         mut data: Vec<u8>,
-        max_answer_size: Option<i64>,
         roundtrip: Option<u64>,
     ) -> Result<(Option<Vec<u8>>, u64)> {
         if self.options.force_compression {
@@ -82,7 +89,7 @@ impl RldpNode {
             }
         }
 
-        let (query_id, query) = make_query(data, max_answer_size);
+        let (query_id, query) = make_query(data, self.options.max_answer_size);
 
         let peer = self
             .peers

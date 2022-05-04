@@ -19,6 +19,7 @@ pub struct TransfersCache {
     adnl: Arc<AdnlNode>,
     transfers: Arc<FxDashMap<TransferId, RldpTransfer>>,
     subscribers: Arc<Vec<Arc<dyn Subscriber>>>,
+    max_answer_size: u32,
     force_compression: bool,
 }
 
@@ -26,12 +27,14 @@ impl TransfersCache {
     pub fn new(
         adnl: Arc<AdnlNode>,
         subscribers: Vec<Arc<dyn Subscriber>>,
+        max_answer_size: u32,
         force_compression: bool,
     ) -> Self {
         Self {
             adnl,
             transfers: Arc::new(Default::default()),
             subscribers: Arc::new(subscribers),
+            max_answer_size,
             force_compression,
         }
     }
@@ -55,7 +58,7 @@ impl TransfersCache {
 
         // Initiate incoming transfer with derived id
         let incoming_transfer_id = negate_id(outgoing_transfer_id);
-        let incoming_transfer = IncomingTransfer::new(incoming_transfer_id);
+        let incoming_transfer = IncomingTransfer::new(incoming_transfer_id, self.max_answer_size);
         let incoming_transfer_state = incoming_transfer.state().clone();
         let (parts_tx, parts_rx) = mpsc::unbounded_channel();
         self.transfers
@@ -285,7 +288,7 @@ impl TransfersCache {
             local_id: *local_id,
             peer_id: *peer_id,
             parts_rx,
-            transfer: IncomingTransfer::new(transfer_id),
+            transfer: IncomingTransfer::new(transfer_id, self.max_answer_size),
             transfer_id,
         };
 
@@ -332,13 +335,13 @@ impl TransfersCache {
     }
 }
 
-pub fn make_query(data: Vec<u8>, max_answer_size: Option<i64>) -> (QueryId, Vec<u8>) {
+pub fn make_query(data: Vec<u8>, max_answer_size: u32) -> (QueryId, Vec<u8>) {
     use rand::Rng;
 
     let query_id: QueryId = rand::thread_rng().gen();
     let data = serialize_boxed(ton::rldp::message::Query {
         query_id: ton::int256(query_id),
-        max_answer_size: max_answer_size.unwrap_or(128 * 1024),
+        max_answer_size: max_answer_size as i64,
         timeout: now() + MAX_TIMEOUT as i32 / 1000,
         data: ton::bytes(data),
     });
