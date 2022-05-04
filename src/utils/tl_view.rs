@@ -138,10 +138,7 @@ impl PacketContentsSignature {
     ///
     /// * Must be called only once on same packet
     ///
-    pub unsafe fn extract<'a>(
-        self,
-        packet: &'a PacketView<'_>,
-    ) -> PacketContentsResult<(&'a [u8], [u8; 64])> {
+    pub unsafe fn extract<'a>(self, packet: &'a PacketView<'_>) -> Option<(&'a [u8], [u8; 64])> {
         let origin = packet.as_slice().as_ptr() as *mut u8;
         let packet: &mut [u8] = std::slice::from_raw_parts_mut(origin, packet.len());
 
@@ -164,7 +161,7 @@ impl PacketContentsSignature {
                     packet_len - self.signature_end,           // remaining
                 )
             }
-            _ => return Err(PacketContentsError::InvalidSignature),
+            _ => return None,
         };
 
         let src = origin.add(self.signature_end);
@@ -175,7 +172,7 @@ impl PacketContentsSignature {
         // [............_0__.................||.........]-----removed-----]
         // flags_offset ^     signature_start ^
 
-        Ok((
+        Some((
             std::slice::from_raw_parts(origin, packet.len() - signature_len),
             self.signature,
         ))

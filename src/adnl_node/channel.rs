@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 use aes::cipher::StreamCipher;
 use anyhow::Result;
+use everscale_crypto::ed25519;
 use ton_api::ton;
 
 use crate::utils::*;
@@ -15,7 +16,8 @@ pub struct AdnlChannel {
     channel_in: ChannelSide,
     local_id: AdnlNodeIdShort,
     peer_id: AdnlNodeIdShort,
-    peer_channel_public_key: [u8; 32],
+    /// Public key of the keypair from the peer side
+    peer_channel_public_key: ed25519::PublicKey,
     peer_channel_date: i32,
     drop: AtomicI32,
 }
@@ -24,12 +26,12 @@ impl AdnlChannel {
     pub fn new(
         local_id: AdnlNodeIdShort,
         peer_id: AdnlNodeIdShort,
-        channel_private_key_part: &[u8; 32],
-        channel_public_key: &[u8; 32],
+        channel_key: &ed25519::KeyPair,
+        peer_channel_public_key: ed25519::PublicKey,
         peer_channel_date: i32,
         context: ChannelCreationContext,
-    ) -> Result<Self> {
-        let shared_secret = compute_shared_secret(channel_private_key_part, channel_public_key)?;
+    ) -> Self {
+        let shared_secret = channel_key.compute_shared_secret(&peer_channel_public_key);
         let mut reversed_secret = shared_secret;
         reversed_secret.reverse();
 
@@ -39,21 +41,21 @@ impl AdnlChannel {
             std::cmp::Ordering::Greater => (reversed_secret, shared_secret),
         };
 
-        Ok(Self {
+        Self {
             ready: AtomicBool::new(context == ChannelCreationContext::ConfirmChannel),
             channel_out: ChannelSide::from_secret(out_secret),
             channel_in: ChannelSide::from_secret(in_secret),
             local_id,
             peer_id,
-            peer_channel_public_key: *channel_public_key,
+            peer_channel_public_key,
             peer_channel_date,
             drop: Default::default(),
-        })
+        }
     }
 
     pub fn is_still_valid(
         &self,
-        peer_channel_public_key: &[u8; 32],
+        peer_channel_public_key: &ed25519::PublicKey,
         peer_channel_date: i32,
     ) -> bool {
         &self.peer_channel_public_key == peer_channel_public_key
@@ -69,7 +71,7 @@ impl AdnlChannel {
     }
 
     #[inline(always)]
-    pub fn peer_channel_public_key(&self) -> &[u8; 32] {
+    pub fn peer_channel_public_key(&self) -> &ed25519::PublicKey {
         &self.peer_channel_public_key
     }
 
@@ -155,12 +157,7 @@ impl AdnlChannel {
     }
 
     /// Modifies `buffer` in-place to contain the channel packet
-    pub fn encrypt(
-        &self,
-        buffer: &mut Vec<u8>,
-        priority: bool,
-        version: Option<u16>,
-    ) -> Result<()> {
+    pub fn encrypt(&self, buffer: &mut Vec<u8>, priority: bool, version: Option<u16>) {
         let checksum: [u8; 32] = compute_packet_data_hash(version, buffer.as_slice());
         let channel_out = if priority {
             &self.channel_out.priority
@@ -200,8 +197,6 @@ impl AdnlChannel {
                     .apply_keystream(&mut buffer[64..]);
             }
         }
-
-        Ok(())
     }
 }
 
@@ -281,33 +276,6 @@ fn build_priority_secret(ordinary_secret: [u8; 32]) -> [u8; 32] {
         ordinary_secret[31],
         ordinary_secret[30],
     ]
-}
-
-pub struct ChannelKey {
-    public_key: ed25519_dalek::PublicKey,
-    private_key_part: [u8; 32],
-}
-
-impl ChannelKey {
-    pub fn generate() -> Self {
-        let private_key = ed25519_dalek::SecretKey::generate(&mut rand::thread_rng());
-        let public_key = ed25519_dalek::PublicKey::from(&private_key);
-        let private_key = ed25519_dalek::ExpandedSecretKey::from(&private_key);
-        let private_key_part = private_key.to_bytes()[0..32].try_into().unwrap();
-
-        Self {
-            public_key,
-            private_key_part,
-        }
-    }
-
-    pub fn public_key(&self) -> &ed25519_dalek::PublicKey {
-        &self.public_key
-    }
-
-    pub fn private_key_part(&self) -> &[u8; 32] {
-        &self.private_key_part
-    }
 }
 
 pub type AdnlChannelId = [u8; 32];

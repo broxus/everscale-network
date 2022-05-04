@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use ed25519_dalek::Verifier;
+use everscale_crypto::ed25519;
 use parking_lot::Mutex;
 use sha2::Digest;
 use tokio::net::UdpSocket;
@@ -455,12 +455,18 @@ impl AdnlNode {
             MessageView::Answer { query_id, answer } => {
                 self.process_message_answer(query_id, answer).await
             }
-            MessageView::ConfirmChannel { key, date, .. } => {
-                self.process_message_confirm_channel(local_id, peer_id, key, date)
-            }
-            MessageView::CreateChannel { key, date } => {
-                self.process_message_create_channel(local_id, peer_id, key, date)
-            }
+            MessageView::ConfirmChannel { key, date, .. } => self.process_message_confirm_channel(
+                local_id,
+                peer_id,
+                ed25519::PublicKey::from_bytes(*key).ok_or(AdnlNodeError::InvalidPacket)?,
+                date,
+            ),
+            MessageView::CreateChannel { key, date } => self.process_message_create_channel(
+                local_id,
+                peer_id,
+                ed25519::PublicKey::from_bytes(*key).ok_or(AdnlNodeError::InvalidPacket)?,
+                date,
+            ),
             MessageView::Custom { data } => {
                 if process_message_custom(local_id, peer_id, subscribers, data).await? {
                     Ok(())
@@ -500,7 +506,7 @@ impl AdnlNode {
         &self,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
-        peer_channel_public_key: &[u8; 32],
+        peer_channel_public_key: ed25519::PublicKey,
         peer_channel_date: i32,
     ) -> Result<()> {
         self.create_channel(
@@ -516,7 +522,7 @@ impl AdnlNode {
         &self,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
-        peer_channel_public_key: &[u8; 32],
+        peer_channel_public_key: ed25519::PublicKey,
         peer_channel_date: i32,
     ) -> Result<()> {
         self.create_channel(
@@ -543,16 +549,22 @@ impl AdnlNode {
         fn verify(
             raw_packet: &PacketView<'_>,
             signature: &mut Option<PacketContentsSignature>,
-            public_key: &ed25519_dalek::PublicKey,
+            public_key: &ed25519::PublicKey,
             mandatory: bool,
-        ) -> Result<()> {
+        ) -> Result<(), AdnlPacketError> {
             if let Some(signature) = signature.take() {
                 // SAFETY: called only once on same packet
-                let (message, signature) = unsafe { signature.extract(raw_packet)? };
-                let signature = ed25519_dalek::Signature::from_bytes(&signature)?;
-                public_key.verify(message, &signature)?;
+                let (message, signature) = unsafe {
+                    signature
+                        .extract(raw_packet)
+                        .ok_or(AdnlPacketError::SignatureNotFound)?
+                };
+
+                if !public_key.verify_raw(message, &signature) {
+                    return Err(AdnlPacketError::InvalidSignature);
+                }
             } else if mandatory {
-                return Err(AdnlPacketError::SignatureNotFound.into());
+                return Err(AdnlPacketError::SignatureNotFound);
             }
             Ok(())
         }
@@ -703,8 +715,8 @@ impl AdnlNode {
                 tracing::debug!("Confirm channel {local_id} -> {peer_id}");
 
                 let message = ton::adnl::message::message::ConfirmChannel {
-                    key: ton::int256(peer.channel_key().public_key().to_bytes()),
-                    peer_key: ton::int256(*channel_data.peer_channel_public_key()),
+                    key: ton::int256(peer.channel_key().public_key.to_bytes()),
+                    peer_key: ton::int256(channel_data.peer_channel_public_key().to_bytes()),
                     date: channel_data.peer_channel_date(),
                 }
                 .into_boxed();
@@ -716,7 +728,7 @@ impl AdnlNode {
                 tracing::debug!("Create channel {local_id} -> {peer_id}");
 
                 let message = ton::adnl::message::message::CreateChannel {
-                    key: ton::int256(peer.channel_key().public_key().to_bytes()),
+                    key: ton::int256(peer.channel_key().public_key.to_bytes()),
                     date: now(),
                 }
                 .into_boxed();
@@ -866,17 +878,17 @@ impl AdnlNode {
 
         if let MessageSigner::Random(signer) = signer {
             let signature = signer.sign(&serialize_boxed(packet.clone()));
-            packet.signature = Some(ton::bytes(signature.to_bytes().to_vec()));
+            packet.signature = Some(ton::bytes(signature.to_vec()));
         }
 
         let mut data = serialize_boxed(packet);
 
         match signer {
             MessageSigner::Channel { channel, priority } => {
-                channel.encrypt(&mut data, priority, self.options.version)?
+                channel.encrypt(&mut data, priority, self.options.version)
             }
             MessageSigner::Random(_) => {
-                build_handshake_packet(peer_id, peer.id(), &mut data, self.options.version)?
+                build_handshake_packet(peer_id, peer.id(), &mut data, self.options.version)
             }
         }
 
@@ -921,11 +933,7 @@ impl AdnlNode {
         }
     }
 
-    pub fn add_key(
-        &mut self,
-        key: ed25519_dalek::SecretKey,
-        tag: usize,
-    ) -> Result<AdnlNodeIdShort> {
+    pub fn add_key(&mut self, key: [u8; 32], tag: usize) -> Result<AdnlNodeIdShort> {
         use dashmap::mapref::entry::Entry;
 
         let result = self.keystore.add_key(key, tag)?;
@@ -1118,7 +1126,7 @@ impl AdnlNode {
         &self,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
-        peer_channel_public_key: &[u8; 32],
+        peer_channel_public_key: ed25519::PublicKey,
         peer_channel_date: i32,
         context: ChannelCreationContext,
     ) -> Result<()> {
@@ -1135,7 +1143,7 @@ impl AdnlNode {
             Entry::Occupied(mut entry) => {
                 let channel = entry.get();
 
-                if channel.is_still_valid(peer_channel_public_key, peer_channel_date) {
+                if channel.is_still_valid(&peer_channel_public_key, peer_channel_date) {
                     if context == ChannelCreationContext::ConfirmChannel {
                         channel.set_ready();
                     }
@@ -1145,11 +1153,11 @@ impl AdnlNode {
                 let new_channel = Arc::new(AdnlChannel::new(
                     *local_id,
                     *peer_id,
-                    peer.channel_key().private_key_part(),
+                    peer.channel_key(),
                     peer_channel_public_key,
                     peer_channel_date,
                     context,
-                )?);
+                ));
 
                 let old_channel = entry.insert(new_channel.clone());
                 self.channels_by_id
@@ -1171,11 +1179,11 @@ impl AdnlNode {
                     .insert(Arc::new(AdnlChannel::new(
                         *local_id,
                         *peer_id,
-                        peer.channel_key().private_key_part(),
+                        peer.channel_key(),
                         peer_channel_public_key,
                         peer_channel_date,
                         context,
-                    )?))
+                    )))
                     .clone();
                 self.channels_by_id.insert(
                     *new_channel.ordinary_channel_in_id(),
@@ -1279,6 +1287,8 @@ enum AdnlPacketError {
     ConfirmationSeqnoTooNew,
     #[error("Signature not found")]
     SignatureNotFound,
+    #[error("Invalid signature")]
+    InvalidSignature,
 }
 
 const ADNL_INITIAL_VERSION: u16 = 0;

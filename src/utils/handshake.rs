@@ -3,12 +3,13 @@ use std::sync::Arc;
 
 use aes::cipher::StreamCipher;
 use anyhow::Result;
+use everscale_crypto::ed25519;
 use sha2::Digest;
 
+use super::build_packet_cipher;
 use super::node_id::*;
 use super::packet_view::*;
 use super::FxHashMap;
-use super::{build_packet_cipher, compute_shared_secret};
 
 /// Modifies `buffer` in-place to contain the handshake packet
 pub fn build_handshake_packet(
@@ -16,16 +17,13 @@ pub fn build_handshake_packet(
     peer_id_full: &AdnlNodeIdFull,
     buffer: &mut Vec<u8>,
     version: Option<u16>,
-) -> Result<()> {
+) {
     // Create temp local key
-    let temp_private_key = ed25519_dalek::SecretKey::generate(&mut rand::thread_rng());
-    let temp_private_key = ed25519_dalek::ExpandedSecretKey::from(&temp_private_key);
-    let temp_public_key = ed25519_dalek::PublicKey::from(&temp_private_key);
+    let temp_private_key = ed25519::SecretKey::generate(&mut rand::thread_rng());
+    let temp_private_key = ed25519::ExpandedSecretKey::from(&temp_private_key);
+    let temp_public_key = ed25519::PublicKey::from(&temp_private_key);
 
-    // Encrypt packet data
-    let temp_private_key_part = temp_private_key.to_bytes()[0..32].try_into().unwrap();
-    let shared_secret =
-        compute_shared_secret(&temp_private_key_part, peer_id_full.public_key().as_bytes())?;
+    let shared_secret = temp_private_key.compute_shared_secret(peer_id_full.public_key());
 
     // Prepare packet
     let checksum: [u8; 32] = compute_packet_data_hash(version, buffer.as_slice());
@@ -61,9 +59,6 @@ pub fn build_handshake_packet(
             build_packet_cipher(&shared_secret, &checksum).apply_keystream(&mut buffer[96..]);
         }
     }
-
-    // Done
-    Ok(())
 }
 
 /// Attempts to decode the buffer as an ADNL handshake packet. On a successful nonempty result,
@@ -103,8 +98,10 @@ pub fn parse_handshake_packet(
     };
 
     // Compute shared secret
-    let shared_secret =
-        compute_shared_secret(value.private_key_part(), buffer[32..64].try_into().unwrap())?;
+    let shared_secret = value.private_key().compute_shared_secret(
+        &ed25519::PublicKey::from_bytes(buffer[32..64].try_into().unwrap())
+            .ok_or(HandshakeError::InvalidPublicKey)?,
+    );
 
     // NOTE: macros is used here to avoid useless bound checks, saving the `.len()` context
     macro_rules! process {
@@ -169,4 +166,6 @@ enum HandshakeError {
     BadHandshakePacketLength,
     #[error("Bad handshake packet checksum")]
     BadHandshakePacketChecksum,
+    #[error("Invalid public key")]
+    InvalidPublicKey,
 }

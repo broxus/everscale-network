@@ -725,7 +725,7 @@ impl OverlayShard {
             id: key.full_id().as_tl().into_boxed(),
             overlay: ton::int256(self.id().into()),
             version,
-            signature: ton::bytes(signature.to_bytes().to_vec()),
+            signature: ton::bytes(signature.to_vec()),
         }
     }
 

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use everscale_crypto::ed25519;
 use ton_api::ton::{self, TLObject};
 
 pub use self::overlay_shard::{
@@ -65,7 +66,7 @@ impl OverlayNode {
     pub fn add_private_peers(
         &self,
         local_id: &AdnlNodeIdShort,
-        peers: &[(AdnlAddressUdp, ed25519_dalek::PublicKey)],
+        peers: &[(AdnlAddressUdp, ed25519::PublicKey)],
     ) -> Result<Vec<AdnlNodeIdShort>> {
         let mut new_peers = Vec::new();
 

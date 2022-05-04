@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 
-use super::channel::ChannelKey;
+use everscale_crypto::ed25519;
+
 use crate::utils::*;
 
 pub type AdnlPeers = FxDashMap<AdnlNodeIdShort, AdnlPeer>;
@@ -8,7 +9,7 @@ pub type AdnlPeers = FxDashMap<AdnlNodeIdShort, AdnlPeer>;
 pub struct AdnlPeer {
     id: AdnlNodeIdFull,
     ip_address: AtomicU64,
-    channel_key: ChannelKey,
+    channel_key: ed25519::KeyPair,
     receiver_state: AdnlPeerState,
     sender_state: AdnlPeerState,
 }
@@ -18,7 +19,7 @@ impl AdnlPeer {
         Self {
             id,
             ip_address: AtomicU64::new(ip_address.into()),
-            channel_key: ChannelKey::generate(),
+            channel_key: ed25519::KeyPair::generate(&mut rand::thread_rng()),
             receiver_state: AdnlPeerState::for_receive_with_reinit_date(reinit_date),
             sender_state: AdnlPeerState::for_send(),
         }
@@ -52,7 +53,7 @@ impl AdnlPeer {
         self.ip_address.load(Ordering::Acquire).into()
     }
 
-    pub fn channel_key(&self) -> &ChannelKey {
+    pub fn channel_key(&self) -> &ed25519::KeyPair {
         &self.channel_key
     }
 
@@ -71,7 +72,7 @@ impl AdnlPeer {
     pub fn reset(&mut self) {
         let reinit_date = self.receiver_state.reinit_date();
 
-        self.channel_key = ChannelKey::generate();
+        self.channel_key = ed25519::KeyPair::generate(&mut rand::thread_rng());
         self.receiver_state = AdnlPeerState::for_receive_with_reinit_date(reinit_date + 1);
         self.sender_state = AdnlPeerState::for_send();
     }

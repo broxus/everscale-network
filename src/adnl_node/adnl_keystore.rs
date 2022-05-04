@@ -2,6 +2,7 @@ use std::collections::hash_map;
 use std::sync::Arc;
 
 use anyhow::Result;
+use everscale_crypto::ed25519;
 
 use crate::utils::*;
 
@@ -13,7 +14,7 @@ pub struct AdnlKeystore {
 impl AdnlKeystore {
     pub fn from_tagged_keys<I>(keys: I) -> Result<Self>
     where
-        I: IntoIterator<Item = (ed25519_dalek::SecretKey, usize)>,
+        I: IntoIterator<Item = ([u8; 32], usize)>,
     {
         let mut result = AdnlKeystore {
             keys: Default::default(),
@@ -47,12 +48,9 @@ impl AdnlKeystore {
         &self.keys
     }
 
-    pub fn add_key(
-        &mut self,
-        key: ed25519_dalek::SecretKey,
-        tag: usize,
-    ) -> Result<AdnlNodeIdShort> {
-        let (full_id, short_id) = key.compute_node_ids();
+    pub fn add_key(&mut self, key: [u8; 32], tag: usize) -> Result<AdnlNodeIdShort> {
+        let secret_key = ed25519::SecretKey::from_bytes(key);
+        let (full_id, short_id) = secret_key.compute_node_ids();
 
         match self.tags.entry(tag) {
             hash_map::Entry::Vacant(entry) => {
@@ -60,7 +58,9 @@ impl AdnlKeystore {
                 match self.keys.entry(short_id) {
                     hash_map::Entry::Vacant(entry) => {
                         entry.insert(Arc::new(StoredAdnlNodeKey::from_id_and_private_key(
-                            short_id, full_id, &key,
+                            short_id,
+                            full_id,
+                            &secret_key,
                         )));
                         Ok(short_id)
                     }

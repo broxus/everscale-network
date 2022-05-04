@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use aes::cipher::{KeyIvInit, StreamCipher};
 use anyhow::Result;
+use everscale_crypto::ed25519;
 use rand::Rng;
 use sha2::Digest;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -27,7 +28,7 @@ pub struct AdnlTcpClient {
 #[derive(Debug, Clone)]
 pub struct AdnlTcpClientConfig {
     pub server_address: SocketAddrV4,
-    pub server_key: ed25519_dalek::PublicKey,
+    pub server_key: ed25519::PublicKey,
     pub socket_read_timeout: Duration,
     pub socket_send_timeout: Duration,
 }
@@ -247,7 +248,7 @@ impl AdnlTcpClient {
 
         tracing::info!("Created connection. Sending init packet...");
 
-        build_handshake_packet(&peer_id, &peer_id_full, &mut initial_buffer, None)?;
+        build_handshake_packet(&peer_id, &peer_id_full, &mut initial_buffer, None);
         let _ = client.sender.send(PacketToSend {
             data: initial_buffer,
             should_encrypt: false,

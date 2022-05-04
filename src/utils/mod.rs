@@ -73,18 +73,6 @@ pub fn build_packet_cipher(shared_secret: &[u8; 32], checksum: &[u8; 32]) -> Aes
     )
 }
 
-pub fn compute_shared_secret(
-    private_key_part: &[u8; 32],
-    public_key: &[u8; 32],
-) -> Result<[u8; 32]> {
-    let point = curve25519_dalek_ng::edwards::CompressedEdwardsY(*public_key)
-        .decompress()
-        .ok_or(BadPublicKeyData)?
-        .to_montgomery()
-        .to_bytes();
-    Ok(x25519_dalek_ng::x25519(*private_key_part, point))
-}
-
 #[derive(thiserror::Error, Debug)]
 #[error("Bad public key data")]
 struct BadPublicKeyData;
