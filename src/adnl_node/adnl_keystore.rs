@@ -106,14 +106,15 @@ enum AdnlNodeConfigError {
 
 #[cfg(test)]
 mod tests {
+    use rand::Rng;
+
     use super::*;
 
     #[test]
     fn test_handshake() -> Result<()> {
         let mut first_peer_config = AdnlKeystore::from_tagged_keys(Vec::new())?;
 
-        let first_peer_key = ed25519_dalek::SecretKey::generate(&mut rand::thread_rng());
-        let first_peer_id = first_peer_config.add_key(first_peer_key, 1)?;
+        let first_peer_id = first_peer_config.add_key(rand::thread_rng().gen(), 1)?;
         let first_peer = first_peer_config.key_by_tag(1).unwrap();
 
         let text = "Hello world";
@@ -122,7 +123,7 @@ mod tests {
             let mut packet = text.as_bytes().to_vec();
             println!("Packet decoded: {}", hex::encode(&packet));
 
-            build_handshake_packet(&first_peer_id, first_peer.full_id(), &mut packet, version)?;
+            build_handshake_packet(&first_peer_id, first_peer.full_id(), &mut packet, version);
             println!("Packet encoded: {}", hex::encode(&packet));
 
             println!("Packet decoded: {}", hex::encode(packet.as_slice()));

@@ -315,33 +315,31 @@ mod tests {
 
     #[test]
     fn test_encrypt_decrypt() {
-        let peer1_key = ed25519_dalek::SecretKey::generate(&mut rand::thread_rng());
+        let peer1_key = ed25519::SecretKey::generate(&mut rand::thread_rng());
         let (_, peer1_id) = peer1_key.compute_node_ids();
-        let peer1_channel_key = ChannelKey::generate();
+        let peer1_channel_key = ed25519::KeyPair::generate(&mut rand::thread_rng());
 
-        let peer2_key = ed25519_dalek::SecretKey::generate(&mut rand::thread_rng());
+        let peer2_key = ed25519::SecretKey::generate(&mut rand::thread_rng());
         let (_, peer2_id) = peer2_key.compute_node_ids();
-        let peer2_channel_key = ChannelKey::generate();
+        let peer2_channel_key = ed25519::KeyPair::generate(&mut rand::thread_rng());
 
         let channel12 = AdnlChannel::new(
             peer1_id,
             peer2_id,
-            peer1_channel_key.private_key_part(),
-            peer2_channel_key.public_key().as_bytes(),
+            &peer1_channel_key,
+            peer2_channel_key.public_key,
             now(),
             ChannelCreationContext::CreateChannel,
-        )
-        .unwrap();
+        );
 
         let channel21 = AdnlChannel::new(
             peer2_id,
             peer1_id,
-            peer2_channel_key.private_key_part(),
-            peer1_channel_key.public_key().as_bytes(),
+            &peer2_channel_key,
+            peer1_channel_key.public_key,
             now(),
             ChannelCreationContext::CreateChannel,
-        )
-        .unwrap();
+        );
 
         let message = b"Hello world!";
 
@@ -349,7 +347,7 @@ mod tests {
             // Send 1 to 2
             {
                 let mut packet = message.to_vec();
-                channel12.encrypt(&mut packet, false, version).unwrap();
+                channel12.encrypt(&mut packet, false, version);
 
                 let mut received_packet = PacketView::from(packet.as_mut_slice());
                 let parsed_version = channel21.decrypt(&mut received_packet, false).unwrap();
@@ -361,7 +359,7 @@ mod tests {
             // Send 2 to 1
             {
                 let mut packet = message.to_vec();
-                channel21.encrypt(&mut packet, true, version).unwrap();
+                channel21.encrypt(&mut packet, true, version);
 
                 let mut received_packet = PacketView::from(packet.as_mut_slice());
                 let parsed_version = channel12.decrypt(&mut received_packet, true).unwrap();
