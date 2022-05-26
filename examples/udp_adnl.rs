@@ -45,7 +45,7 @@ async fn main() -> Result<()> {
     )?;
 
     left_node.start(Vec::new())?;
-    right_node.start([Arc::new(Service) as Arc<dyn tiny_adnl::Subscriber>])?;
+    right_node.start(vec![Arc::new(Service)])?;
 
     let iterations = Arc::new(AtomicUsize::new(0));
     let mut handles = Vec::new();
