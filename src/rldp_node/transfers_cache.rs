@@ -11,8 +11,8 @@ use super::incoming_transfer::*;
 use super::outgoing_transfer::*;
 use super::MessagePart;
 use crate::adnl_node::AdnlNode;
+use crate::proto;
 use crate::subscriber::*;
-use crate::utils::RldpMessagePartView;
 use crate::utils::*;
 
 #[derive(Clone)]
@@ -167,10 +167,10 @@ impl TransfersCache {
         &self,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
-        message: RldpMessagePartView<'_>,
+        message: proto::rldp::MessagePart<'_>,
     ) -> Result<()> {
         match message {
-            RldpMessagePartView::MessagePart {
+            proto::rldp::MessagePart::MessagePart {
                 transfer_id,
                 fec_type,
                 part,
@@ -199,7 +199,7 @@ impl TransfersCache {
 
                             // Send confirm message
                             let mut buffer = Vec::with_capacity(44);
-                            RldpMessagePartView::Confirm {
+                            proto::rldp::MessagePart::Confirm {
                                 transfer_id,
                                 part,
                                 seqno,
@@ -209,7 +209,7 @@ impl TransfersCache {
 
                             // Send complete message
                             buffer.clear();
-                            RldpMessagePartView::Complete { transfer_id, part }
+                            proto::rldp::MessagePart::Complete { transfer_id, part }
                                 .write_to(&mut buffer);
                             self.adnl.send_custom_message(local_id, peer_id, &buffer)?;
 
@@ -238,7 +238,7 @@ impl TransfersCache {
                     },
                 }
             },
-            RldpMessagePartView::Confirm {
+            proto::rldp::MessagePart::Confirm {
                 transfer_id,
                 part,
                 seqno,
@@ -251,7 +251,7 @@ impl TransfersCache {
                     }
                 }
             }
-            RldpMessagePartView::Complete { transfer_id, part } => {
+            proto::rldp::MessagePart::Complete { transfer_id, part } => {
                 if let Some(transfer) = self.transfers.get(transfer_id) {
                     if let RldpTransfer::Outgoing(state) = transfer.value() {
                         state.set_part(part as u32 + 1);
@@ -341,7 +341,7 @@ pub fn make_query(data: &[u8], max_answer_size: u32) -> (QueryId, Vec<u8>) {
     use rand::Rng;
 
     let query_id: QueryId = rand::thread_rng().gen();
-    let data = RldpMessageView::Query {
+    let data = proto::rldp::Message::Query {
         query_id: &query_id,
         max_answer_size: max_answer_size as u64,
         timeout: now() + MAX_TIMEOUT as u32 / 1000,

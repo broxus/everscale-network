@@ -9,6 +9,7 @@ pub use self::overlay_shard::{
     OverlayShardOptions, ReceivedPeersMap,
 };
 use crate::adnl_node::*;
+use crate::proto;
 use crate::subscriber::*;
 use crate::utils::*;
 
@@ -188,7 +189,9 @@ impl Subscriber for OverlayNode {
         data: &[u8],
     ) -> Result<bool> {
         let (message, broadcast) =
-            match tl_proto::deserialize::<(OverlayMessageView, OverlayBroadcastView)>(data) {
+            match tl_proto::deserialize::<(proto::overlay::Message, proto::overlay::Broadcast)>(
+                data,
+            ) {
                 Ok(bundle) => bundle,
                 Err(_) => return Ok(false),
             };
@@ -197,13 +200,13 @@ impl Subscriber for OverlayNode {
         let shard = self.get_overlay_shard(&overlay_id)?;
 
         match broadcast {
-            OverlayBroadcastView::Broadcast(broadcast) => {
+            proto::overlay::Broadcast::Broadcast(broadcast) => {
                 shard
                     .receive_broadcast(local_id, peer_id, broadcast, data)
                     .await?;
                 Ok(true)
             }
-            OverlayBroadcastView::BroadcastFec(broadcast) => {
+            proto::overlay::Broadcast::BroadcastFec(broadcast) => {
                 shard
                     .receive_fec_broadcast(local_id, peer_id, broadcast, data)
                     .await?;

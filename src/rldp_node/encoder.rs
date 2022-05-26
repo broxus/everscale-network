@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::utils::*;
+use crate::proto::rldp::RaptorQFecType;
 
 pub struct RaptorQEncoder {
     engine: raptorq::Encoder,
@@ -54,10 +54,10 @@ impl RaptorQEncoder {
     }
 }
 
-pub const MAX_TRANSMISSION_UNIT: u32 = 768;
-
 #[derive(thiserror::Error, Debug)]
 enum EncoderError {
     #[error("Failed to encode repair packet")]
     FailedToEncode,
 }
+
+pub const MAX_TRANSMISSION_UNIT: u32 = 768;

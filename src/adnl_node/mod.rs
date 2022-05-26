@@ -13,6 +13,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use ton_api::ton;
 
+use crate::proto;
 use crate::subscriber::*;
 use crate::utils::*;
 
@@ -20,7 +21,6 @@ pub use self::adnl_keystore::*;
 use self::channel::*;
 use self::peer::*;
 use self::transfer::*;
-use crate::utils::MessageView;
 
 mod adnl_keystore;
 mod channel;
@@ -328,8 +328,9 @@ impl AdnlNode {
         }
 
         // Parse packet
-        let mut packet = tl_proto::deserialize::<IncomingPacketContents>(data.as_slice())
-            .map_err(|_| AdnlNodeError::InvalidPacket)?;
+        let mut packet =
+            tl_proto::deserialize::<proto::adnl::IncomingPacketContents>(data.as_slice())
+                .map_err(|_| AdnlNodeError::InvalidPacket)?;
 
         // Validate packet
         let peer_id = match self.check_packet(&data, &mut packet, &local_id, peer_id, priority)? {
@@ -353,14 +354,14 @@ impl AdnlNode {
         &self,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
-        message: MessageView<'_>,
+        message: proto::adnl::Message<'_>,
         subscribers: &[Arc<dyn Subscriber>],
         priority: bool,
     ) -> Result<()> {
         use dashmap::mapref::entry::Entry;
 
         // Handle split message case
-        let alt_message = if let MessageView::Part {
+        let alt_message = if let proto::adnl::Message::Part {
             hash,
             total_size,
             offset,
@@ -428,30 +429,32 @@ impl AdnlNode {
 
         // Process message
         match alt_message.unwrap_or(message) {
-            MessageView::Answer { query_id, answer } => {
+            proto::adnl::Message::Answer { query_id, answer } => {
                 self.process_message_answer(query_id, answer).await
             }
-            MessageView::ConfirmChannel { key, date, .. } => self.process_message_confirm_channel(
-                local_id,
-                peer_id,
-                ed25519::PublicKey::from_bytes(*key).ok_or(AdnlNodeError::InvalidPacket)?,
-                date,
-            ),
-            MessageView::CreateChannel { key, date } => self.process_message_create_channel(
-                local_id,
-                peer_id,
-                ed25519::PublicKey::from_bytes(*key).ok_or(AdnlNodeError::InvalidPacket)?,
-                date,
-            ),
-            MessageView::Custom { data } => {
+            proto::adnl::Message::ConfirmChannel { key, date, .. } => self
+                .process_message_confirm_channel(
+                    local_id,
+                    peer_id,
+                    ed25519::PublicKey::from_bytes(*key).ok_or(AdnlNodeError::InvalidPacket)?,
+                    date,
+                ),
+            proto::adnl::Message::CreateChannel { key, date } => self
+                .process_message_create_channel(
+                    local_id,
+                    peer_id,
+                    ed25519::PublicKey::from_bytes(*key).ok_or(AdnlNodeError::InvalidPacket)?,
+                    date,
+                ),
+            proto::adnl::Message::Custom { data } => {
                 if process_message_custom(local_id, peer_id, subscribers, data).await? {
                     Ok(())
                 } else {
                     Err(AdnlNodeError::NoSubscribersForCustomMessage.into())
                 }
             }
-            MessageView::Nop => Ok(()),
-            MessageView::Query { query_id, query } => {
+            proto::adnl::Message::Nop => Ok(()),
+            proto::adnl::Message::Query { query_id, query } => {
                 let result =
                     process_message_adnl_query(local_id, peer_id, subscribers, query).await?;
 
@@ -459,7 +462,7 @@ impl AdnlNode {
                     QueryProcessingResult::Processed(Some(answer)) => self.send_message(
                         local_id,
                         peer_id,
-                        MessageView::Answer {
+                        proto::adnl::Message::Answer {
                             query_id,
                             answer: &answer,
                         },
@@ -519,7 +522,7 @@ impl AdnlNode {
     fn check_packet(
         &self,
         raw_packet: &PacketView<'_>,
-        packet: &mut IncomingPacketContents<'_>,
+        packet: &mut proto::adnl::IncomingPacketContents<'_>,
         local_id: &AdnlNodeIdShort,
         peer_id: Option<AdnlNodeIdShort>,
         priority: bool,
@@ -528,7 +531,7 @@ impl AdnlNode {
 
         fn verify(
             raw_packet: &PacketView<'_>,
-            signature: &mut Option<PacketContentsSignature>,
+            signature: &mut Option<proto::adnl::PacketContentsSignature>,
             public_key: &ed25519::PublicKey,
             mandatory: bool,
         ) -> Result<(), AdnlPacketError> {
@@ -613,7 +616,7 @@ impl AdnlNode {
             )?;
         }
 
-        if let Some(ReinitDates {
+        if let Some(proto::adnl::ReinitDates {
             local: peer_reinit_date,
             target: local_reinit_date,
         }) = packet.reinit_dates
@@ -636,7 +639,7 @@ impl AdnlNode {
             if local_reinit_date != 0 && expected_local_reinit_date == Ordering::Less {
                 drop(peer);
 
-                self.send_message(local_id, &peer_id, MessageView::Nop, false)?;
+                self.send_message(local_id, &peer_id, proto::adnl::Message::Nop, false)?;
                 return Err(AdnlPacketError::DstReinitDateTooOld.into());
             }
         }
@@ -667,7 +670,7 @@ impl AdnlNode {
         &self,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
-        message: MessageView,
+        message: proto::adnl::Message,
         priority: bool,
     ) -> Result<()> {
         const MAX_ADNL_MESSAGE_SIZE: usize = 1024;
@@ -698,7 +701,7 @@ impl AdnlNode {
                 force_handshake = true;
                 (
                     MSG_CONFIRM_CHANNEL_SIZE,
-                    Some(MessageView::ConfirmChannel {
+                    Some(proto::adnl::Message::ConfirmChannel {
                         key: peer.channel_key().public_key.as_bytes(),
                         peer_key: channel_data.peer_channel_public_key().as_bytes(),
                         date: channel_data.peer_channel_date(),
@@ -710,7 +713,7 @@ impl AdnlNode {
 
                 (
                     MSG_CREATE_CHANNEL_SIZE,
-                    Some(MessageView::CreateChannel {
+                    Some(proto::adnl::Message::CreateChannel {
                         key: peer.channel_key().public_key.as_bytes(),
                         date: now(),
                     }),
@@ -720,11 +723,11 @@ impl AdnlNode {
 
         let mut size = additional_size;
         size += match message {
-            MessageView::Answer { answer, .. } => answer.len() + MSG_ANSWER_SIZE,
-            MessageView::ConfirmChannel { .. } => MSG_CONFIRM_CHANNEL_SIZE,
-            MessageView::Custom { data } => data.len() + MSG_CUSTOM_SIZE,
-            MessageView::Nop => MSG_NOP_SIZE,
-            MessageView::Query { query, .. } => query.len() + MSG_QUERY_SIZE,
+            proto::adnl::Message::Answer { answer, .. } => answer.len() + MSG_ANSWER_SIZE,
+            proto::adnl::Message::ConfirmChannel { .. } => MSG_CONFIRM_CHANNEL_SIZE,
+            proto::adnl::Message::Custom { data } => data.len() + MSG_CUSTOM_SIZE,
+            proto::adnl::Message::Nop => MSG_NOP_SIZE,
+            proto::adnl::Message::Query { query, .. } => query.len() + MSG_QUERY_SIZE,
             _ => return Err(AdnlNodeError::UnexpectedMessageToSend.into()),
         };
 
@@ -742,11 +745,11 @@ impl AdnlNode {
                 Some(additional_message) => {
                     additional_message.write_to(&mut buffer);
                     message.write_to(&mut buffer);
-                    OutgoingMessages::Pair(&buffer)
+                    proto::adnl::OutgoingMessages::Pair(&buffer)
                 }
                 None => {
                     message.write_to(&mut buffer);
-                    OutgoingMessages::Single(&buffer)
+                    proto::adnl::OutgoingMessages::Single(&buffer)
                 }
             };
 
@@ -757,10 +760,10 @@ impl AdnlNode {
                 hash: &'a [u8; 32],
                 max_size: usize,
                 offset: &mut usize,
-            ) -> MessageView<'a> {
+            ) -> proto::adnl::Message<'a> {
                 let len = std::cmp::min(data.len(), *offset + max_size);
 
-                let result = MessageView::Part {
+                let result = proto::adnl::Message::Part {
                     hash,
                     total_size: data.len() as u32,
                     offset: *offset as u32,
@@ -791,7 +794,12 @@ impl AdnlNode {
                 );
                 message.write_to(&mut buffer);
 
-                self.send_packet(peer_id, peer, signer, OutgoingMessages::Pair(&buffer))?;
+                self.send_packet(
+                    peer_id,
+                    peer,
+                    signer,
+                    proto::adnl::OutgoingMessages::Pair(&buffer),
+                )?;
             }
 
             while offset < data.len() {
@@ -799,7 +807,12 @@ impl AdnlNode {
                 let message = build_part_message(&data, &hash, MAX_ADNL_MESSAGE_SIZE, &mut offset);
                 message.write_to(&mut buffer);
 
-                self.send_packet(peer_id, peer, signer, OutgoingMessages::Single(&buffer))?;
+                self.send_packet(
+                    peer_id,
+                    peer,
+                    signer,
+                    proto::adnl::OutgoingMessages::Single(&buffer),
+                )?;
             }
 
             Ok(())
@@ -811,7 +824,7 @@ impl AdnlNode {
         peer_id: &AdnlNodeIdShort,
         peer: &AdnlPeer,
         mut signer: MessageSigner,
-        messages: OutgoingMessages,
+        messages: proto::adnl::OutgoingMessages,
     ) -> Result<()> {
         use rand::Rng;
 
@@ -831,7 +844,7 @@ impl AdnlNode {
         let rand_bytes: [u8; 10] = rand::thread_rng().gen();
 
         let now = now();
-        let address = AddressListView {
+        let address = proto::adnl::AddressList {
             address: Some(self.ip_address.as_tl()),
             version: now,
             reinit_date: self.start_time,
@@ -839,7 +852,7 @@ impl AdnlNode {
             expire_at: now + self.options.address_list_timeout_sec,
         };
 
-        let mut packet = OutgoingPacketContents {
+        let mut packet = proto::adnl::OutgoingPacketContents {
             rand1: &rand_bytes[..3],
             from: match signer {
                 MessageSigner::Channel { .. } => None,
@@ -851,7 +864,7 @@ impl AdnlNode {
             confirm_seqno: peer.receiver_state().history(priority).seqno(),
             reinit_dates: match signer {
                 MessageSigner::Channel { .. } => None,
-                MessageSigner::Random(_) => Some(ReinitDates {
+                MessageSigner::Random(_) => Some(proto::adnl::ReinitDates {
                     local: peer.receiver_state().reinit_date(),
                     target: peer.sender_state().reinit_date(),
                 }),
@@ -1008,7 +1021,7 @@ impl AdnlNode {
         self.send_message(
             local_id,
             peer_id,
-            MessageView::Custom { data },
+            proto::adnl::Message::Custom { data },
             self.options.force_use_priority_channels,
         )
     }
@@ -1040,7 +1053,7 @@ impl AdnlNode {
             self.send_message(
                 local_id,
                 peer_id,
-                MessageView::Query {
+                proto::adnl::Message::Query {
                     query_id: &query_id,
                     query: &message,
                 },

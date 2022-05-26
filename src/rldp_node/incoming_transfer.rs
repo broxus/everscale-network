@@ -5,7 +5,7 @@ use anyhow::Result;
 
 use super::decoder::*;
 use super::{MessagePart, TransferId};
-use crate::utils::*;
+use crate::proto;
 
 pub struct IncomingTransfer {
     buffer: Vec<u8>,
@@ -84,7 +84,7 @@ impl IncomingTransfer {
             },
             std::cmp::Ordering::Less => {
                 tl_proto::serialize_into(
-                    RldpMessagePartView::Complete {
+                    proto::rldp::MessagePart::Complete {
                         transfer_id: &self.transfer_id,
                         part: message.part,
                     },
@@ -111,7 +111,7 @@ impl IncomingTransfer {
                 }
 
                 tl_proto::serialize_into(
-                    RldpMessagePartView::Complete {
+                    proto::rldp::MessagePart::Complete {
                         transfer_id: &self.transfer_id,
                         part: message.part,
                     },
@@ -122,7 +122,7 @@ impl IncomingTransfer {
             None if self.confirm_count == 9 => {
                 self.confirm_count = 0;
                 tl_proto::serialize_into(
-                    RldpMessagePartView::Confirm {
+                    proto::rldp::MessagePart::Confirm {
                         transfer_id: &self.transfer_id,
                         part: message.part,
                         seqno: decoder.seqno(),

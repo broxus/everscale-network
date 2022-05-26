@@ -1,4 +1,4 @@
-use crate::utils::RaptorQFecType;
+use crate::proto::rldp::RaptorQFecType;
 
 pub struct RaptorQDecoder {
     engine: raptorq::Decoder,

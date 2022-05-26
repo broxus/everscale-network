@@ -6,7 +6,7 @@ use rand::Rng;
 
 use super::encoder::*;
 use super::TransferId;
-use crate::utils::*;
+use crate::proto;
 
 pub struct OutgoingTransfer {
     buffer: Vec<u8>,
@@ -83,7 +83,7 @@ impl OutgoingTransfer {
         }
 
         tl_proto::serialize_into(
-            RldpMessagePartView::MessagePart {
+            proto::rldp::MessagePart::MessagePart {
                 transfer_id: &self.transfer_id,
                 fec_type: *encoder.params(),
                 part: self.current_message_part,

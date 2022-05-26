@@ -7,6 +7,7 @@ pub use self::encoder::RaptorQEncoder;
 use self::peer::*;
 use self::transfers_cache::*;
 use crate::adnl_node::AdnlNode;
+use crate::proto;
 use crate::subscriber::*;
 use crate::utils::*;
 
@@ -107,18 +108,18 @@ impl RldpNode {
 
         match result? {
             (Some(answer), roundtrip) => match tl_proto::deserialize(&answer) {
-                Ok(RldpMessageView::Answer {
+                Ok(proto::rldp::Message::Answer {
                     query_id: answer_id,
                     data,
                 }) if answer_id == &query_id => Ok((
                     Some(compression::decompress(data).unwrap_or_else(|| data.to_vec())),
                     roundtrip,
                 )),
-                Ok(RldpMessageView::Answer { .. }) => Err(RldpNodeError::QueryIdMismatch),
-                Ok(RldpMessageView::Message { .. }) => {
+                Ok(proto::rldp::Message::Answer { .. }) => Err(RldpNodeError::QueryIdMismatch),
+                Ok(proto::rldp::Message::Message { .. }) => {
                     Err(RldpNodeError::UnexpectedAnswer("RldpMessageView::Message"))
                 }
-                Ok(RldpMessageView::Query { .. }) => {
+                Ok(proto::rldp::Message::Query { .. }) => {
                     Err(RldpNodeError::UnexpectedAnswer("RldpMessageView::Query"))
                 }
                 Err(e) => Err(RldpNodeError::InvalidPacketContent(e)),
@@ -157,7 +158,7 @@ pub struct RldpNodeMetrics {
 }
 
 pub struct MessagePart {
-    fec_type: RaptorQFecType,
+    fec_type: proto::rldp::RaptorQFecType,
     part: u32,
     total_size: u64,
     seqno: u32,

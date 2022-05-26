@@ -1,9 +1,8 @@
-use std::convert::TryInto;
-
 use smallvec::SmallVec;
 use tl_proto::{TlError, TlPacket, TlRead, TlResult, TlWrite};
 
-use super::PacketView;
+use super::HashRef;
+use crate::utils::PacketView;
 
 #[derive(Clone)]
 pub struct OutgoingPacketContents<'tl> {
@@ -11,7 +10,7 @@ pub struct OutgoingPacketContents<'tl> {
     pub rand1: &'tl [u8],
     pub from: Option<everscale_crypto::tl::PublicKey<'tl>>,
     pub messages: OutgoingMessages<'tl>,
-    pub address: AddressListView<'tl>,
+    pub address: AddressList<'tl>,
     pub seqno: u64,
     pub confirm_seqno: u64,
     pub reinit_dates: Option<ReinitDates>,
@@ -106,8 +105,8 @@ pub struct IncomingPacketContents<'tl> {
     pub from: Option<everscale_crypto::tl::PublicKey<'tl>>,
     pub from_short: Option<HashRef<'tl>>,
 
-    pub messages: SmallVec<[MessageView<'tl>; 2]>,
-    pub address: Option<AddressListView<'tl>>,
+    pub messages: SmallVec<[Message<'tl>; 2]>,
+    pub address: Option<AddressList<'tl>>,
 
     pub seqno: Option<u64>,
     pub confirm_seqno: Option<u64>,
@@ -144,11 +143,11 @@ impl<'tl> TlRead<'tl> for IncomingPacketContents<'tl> {
         let from = read_optional::<everscale_crypto::tl::PublicKey, 0>(flags, packet, offset)?;
         let from_short = read_optional::<HashRef, 1>(flags, packet, offset)?;
 
-        let message = read_optional::<MessageView, 2>(flags, packet, offset)?;
-        let messages = read_optional::<SmallVec<[MessageView<'tl>; 2]>, 3>(flags, packet, offset)?;
+        let message = read_optional::<Message, 2>(flags, packet, offset)?;
+        let messages = read_optional::<SmallVec<[Message<'tl>; 2]>, 3>(flags, packet, offset)?;
 
-        let address = read_optional::<AddressListView, 4>(flags, packet, offset)?;
-        read_optional::<AddressListView, 5>(flags, packet, offset)?; // priority_address
+        let address = read_optional::<AddressList, 4>(flags, packet, offset)?;
+        read_optional::<AddressList, 5>(flags, packet, offset)?; // priority_address
 
         let seqno = read_optional::<u64, 6>(flags, packet, offset)?;
         let confirm_seqno = read_optional::<u64, 7>(flags, packet, offset)?;
@@ -268,141 +267,9 @@ pub struct ReinitDates {
     pub target: u32,
 }
 
-#[derive(Debug, Copy, Clone, TlWrite, TlRead)]
-#[tl(boxed, id = 0x75252420, size_hint = 32)]
-pub struct OverlayMessageView<'tl> {
-    pub overlay: HashRef<'tl>,
-}
-
-#[derive(Debug, Copy, Clone, TlWrite, TlRead)]
-#[tl(boxed)]
-pub enum OverlayBroadcastView<'tl> {
-    #[tl(id = 0xb15a2b6b)]
-    Broadcast(OverlayBroadcastViewBroadcast<'tl>),
-    #[tl(id = 0xbad7c36a)]
-    BroadcastFec(OverlayBroadcastViewBroadcastFec<'tl>),
-    #[tl(id = 0xf1881342)]
-    BroadcastFecShort {
-        src: everscale_crypto::tl::PublicKey<'tl>,
-        certificate: CertificateView<'tl>,
-        #[tl(size_hint = 32)]
-        broadcast_hash: HashRef<'tl>,
-        #[tl(size_hint = 32)]
-        part_data_hash: HashRef<'tl>,
-        seqno: u32,
-        signature: &'tl [u8],
-    },
-    #[tl(id = 0x95863624, size_hint = 0)]
-    BroadcastNotFound,
-    #[tl(id = 0x09d76914, size_hint = 32)]
-    FecCompleted { hash: HashRef<'tl> },
-    #[tl(id = 0xd55c14ec, size_hint = 32)]
-    FecReceived { hash: HashRef<'tl> },
-    #[tl(id = 0x33534e24)]
-    Unicast { data: &'tl [u8] },
-}
-
-#[derive(Debug, Copy, Clone, TlWrite, TlRead)]
-pub struct OverlayBroadcastViewBroadcast<'tl> {
-    pub src: everscale_crypto::tl::PublicKey<'tl>,
-    pub certificate: CertificateView<'tl>,
-    pub flags: u32,
-    pub data: &'tl [u8],
-    pub date: u32,
-    pub signature: &'tl [u8],
-}
-
-#[derive(Debug, Copy, Clone, TlWrite, TlRead)]
-pub struct OverlayBroadcastViewBroadcastFec<'tl> {
-    pub src: everscale_crypto::tl::PublicKey<'tl>,
-    pub certificate: CertificateView<'tl>,
-    #[tl(size_hint = 32)]
-    pub data_hash: HashRef<'tl>,
-    pub data_size: u32,
-    pub flags: u32,
-    pub data: &'tl [u8],
-    pub seqno: u32,
-    pub fec: RaptorQFecType,
-    pub date: u32,
-    pub signature: &'tl [u8],
-}
-
-#[derive(Debug, Copy, Clone, TlWrite, TlRead)]
-#[tl(boxed)]
-pub enum CertificateView<'tl> {
-    #[tl(id = 0xe09ed731)]
-    Certificate {
-        issued_by: everscale_crypto::tl::PublicKey<'tl>,
-        expire_at: u32,
-        max_size: u32,
-        signature: &'tl [u8],
-    },
-    #[tl(id = 0x32dabccf, size_hint = 0)]
-    EmptyCertificate,
-}
-
 #[derive(Debug, Copy, Clone, TlRead, TlWrite)]
 #[tl(boxed)]
-pub enum RldpMessagePartView<'tl> {
-    #[tl(id = 0x185c22cc)]
-    MessagePart {
-        #[tl(size_hint = 32)]
-        transfer_id: HashRef<'tl>,
-        fec_type: RaptorQFecType,
-        part: u32,
-        total_size: u64,
-        seqno: u32,
-        data: &'tl [u8],
-    },
-    #[tl(id = 0xf582dc58, size_hint = 40)]
-    Confirm {
-        transfer_id: HashRef<'tl>,
-        part: u32,
-        seqno: u32,
-    },
-    #[tl(id = 0xbc0cb2bf, size_hint = 36)]
-    Complete {
-        transfer_id: HashRef<'tl>,
-        part: u32,
-    },
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq, TlRead, TlWrite)]
-#[tl(boxed, id = 0x8b93a7e0, size_hint = 12)]
-pub struct RaptorQFecType {
-    pub data_size: u32,
-    pub symbol_size: u32,
-    pub symbols_count: u32,
-}
-
-#[derive(Debug, Copy, Clone, TlRead, TlWrite)]
-#[tl(boxed)]
-pub enum RldpMessageView<'tl> {
-    #[tl(id = 0x7d1bcd1e)]
-    Message {
-        #[tl(size_hint = 32)]
-        id: HashRef<'tl>,
-        data: &'tl [u8],
-    },
-    #[tl(id = 0xa3fc5c03)]
-    Answer {
-        #[tl(size_hint = 32)]
-        query_id: HashRef<'tl>,
-        data: &'tl [u8],
-    },
-    #[tl(id = 0x8a794d69)]
-    Query {
-        #[tl(size_hint = 32)]
-        query_id: HashRef<'tl>,
-        max_answer_size: u64,
-        timeout: u32,
-        data: &'tl [u8],
-    },
-}
-
-#[derive(Debug, Copy, Clone, TlRead, TlWrite)]
-#[tl(boxed)]
-pub enum MessageView<'tl> {
+pub enum Message<'tl> {
     #[tl(id = 0x0fac8416)]
     Answer {
         #[tl(size_hint = 32)]
@@ -447,16 +314,16 @@ pub enum MessageView<'tl> {
 }
 
 #[derive(Debug, Copy, Clone)]
-pub struct AddressListView<'tl> {
+pub struct AddressList<'tl> {
     /// Single address instead of list, because only one is always passed
-    pub address: Option<AddressView<'tl>>,
+    pub address: Option<Address<'tl>>,
     pub version: u32,
     pub reinit_date: u32,
     pub priority: u32,
     pub expire_at: u32,
 }
 
-impl TlWrite for AddressListView<'_> {
+impl TlWrite for AddressList<'_> {
     fn max_size_hint(&self) -> usize {
         // 4 bytes - address vector size
         // optional address size
@@ -480,12 +347,12 @@ impl TlWrite for AddressListView<'_> {
     }
 }
 
-impl<'tl> TlRead<'tl> for AddressListView<'tl> {
+impl<'tl> TlRead<'tl> for AddressList<'tl> {
     fn read_from(packet: &'tl [u8], offset: &mut usize) -> TlResult<Self> {
         let address_count = u32::read_from(packet, offset)?;
         let mut address = None;
         for _ in 0..address_count {
-            let item = AddressView::read_from(packet, offset)?;
+            let item = Address::read_from(packet, offset)?;
             if address.is_none() {
                 address = Some(item);
             }
@@ -508,7 +375,7 @@ impl<'tl> TlRead<'tl> for AddressListView<'tl> {
 
 #[derive(Debug, Copy, Clone, TlRead, TlWrite)]
 #[tl(boxed)]
-pub enum AddressView<'tl> {
+pub enum Address<'tl> {
     #[tl(id = 0x670da6e7, size_hint = 8)]
     Udp { ip: u32, port: u32 },
     #[tl(id = 0xe31d63fa, size_hint = 20)]
@@ -520,5 +387,3 @@ pub enum AddressView<'tl> {
         pubkey: everscale_crypto::tl::PublicKey<'tl>,
     },
 }
-
-pub type HashRef<'a> = &'a [u8; 32];

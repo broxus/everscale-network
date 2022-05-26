@@ -2,19 +2,10 @@ use std::convert::TryFrom;
 
 use anyhow::Result;
 use sha2::Digest;
-use tl_proto::{HashWrapper, TlWrite};
 use ton_api::ton;
 
-use super::hash;
-use crate::utils::{AdnlNodeIdFull, HashRef};
-
-#[derive(TlWrite)]
-#[tl(boxed, id = 0x03d8a8e1)]
-pub struct OverlayNodeToSign<'tl> {
-    pub id: HashRef<'tl>,
-    pub overlay: HashRef<'tl>,
-    pub version: u32,
-}
+use crate::proto;
+use crate::utils::AdnlNodeIdFull;
 
 pub fn verify_node(overlay_id: &OverlayIdShort, node: &ton::overlay::node::Node) -> Result<()> {
     if node.overlay.0 != overlay_id.0 {
@@ -24,7 +15,7 @@ pub fn verify_node(overlay_id: &OverlayIdShort, node: &ton::overlay::node::Node)
     let full_id = AdnlNodeIdFull::try_from(&node.id)?;
     let peer_id = full_id.compute_short_id();
 
-    let node_to_sign = OverlayNodeToSign {
+    let node_to_sign = proto::overlay::NodeToSign {
         id: peer_id.as_slice(),
         overlay: &node.overlay.0,
         version: node.version as u32,
@@ -36,16 +27,8 @@ pub fn verify_node(overlay_id: &OverlayIdShort, node: &ton::overlay::node::Node)
 }
 
 pub fn compute_overlay_id(workchain: i32, zero_state_file_hash: FileHash) -> OverlayIdFull {
-    #[derive(TlWrite)]
-    #[tl(boxed, id = 0x4d9ed329)]
-    struct ShardPublicOverlayId<'tl> {
-        workchain: i32,
-        shard: u64,
-        zero_state_file_hash: HashRef<'tl>,
-    }
-
     let mut hash = sha2::Sha256::new();
-    HashWrapper(ShardPublicOverlayId {
+    tl_proto::HashWrapper(proto::overlay::ShardPublicOverlayId {
         workchain,
         shard: 1u64 << 63,
         zero_state_file_hash: &zero_state_file_hash,
@@ -64,10 +47,10 @@ impl OverlayIdFull {
     }
 
     pub fn compute_short_id(&self) -> OverlayIdShort {
-        let overlay = ton::pub_::publickey::Overlay {
-            name: ton::bytes(self.0.to_vec()),
-        };
-        OverlayIdShort(hash(overlay))
+        let mut hash = sha2::Sha256::new();
+        tl_proto::HashWrapper(everscale_crypto::tl::PublicKey::Overlay { name: &self.0 })
+            .update_hasher(&mut hash);
+        OverlayIdShort(hash.finalize().into())
     }
 }
 

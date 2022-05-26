@@ -13,6 +13,7 @@ use ton_api::{ton, IntoBoxed};
 
 use super::{broadcast_receiver::*, MAX_OVERLAY_PEERS};
 use crate::adnl_node::*;
+use crate::proto;
 use crate::rldp_node::*;
 use crate::utils::*;
 
@@ -374,7 +375,7 @@ impl OverlayShard {
         self: &Arc<Self>,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
-        broadcast: OverlayBroadcastViewBroadcast<'_>,
+        broadcast: proto::overlay::OverlayBroadcast<'_>,
         raw_data: &[u8],
     ) -> Result<()> {
         if self.is_broadcast_outdated(broadcast.date) {
@@ -440,7 +441,7 @@ impl OverlayShard {
         self: &Arc<Self>,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
-        broadcast: OverlayBroadcastViewBroadcastFec<'_>,
+        broadcast: proto::overlay::OverlayBroadcastFec<'_>,
         raw_data: &[u8],
     ) -> Result<()> {
         use dashmap::mapref::entry::Entry;
@@ -527,9 +528,9 @@ impl OverlayShard {
             }
         }
 
-        let broadcast = OverlayBroadcastView::Broadcast(OverlayBroadcastViewBroadcast {
+        let broadcast = proto::overlay::Broadcast::Broadcast(proto::overlay::OverlayBroadcast {
             src: key.full_id().as_tl(),
-            certificate: CertificateView::EmptyCertificate,
+            certificate: proto::overlay::Certificate::EmptyCertificate,
             flags: BROADCAST_FLAG_ANY_SENDER,
             data: &data,
             date,
@@ -702,7 +703,7 @@ impl OverlayShard {
         let key = self.overlay_key();
         let version = now();
 
-        let node_to_sign = OverlayNodeToSign {
+        let node_to_sign = proto::overlay::NodeToSign {
             id: key.id().as_slice(),
             overlay: self.id().as_slice(),
             version,
@@ -823,7 +824,7 @@ impl OverlayShard {
 
     fn create_incoming_fec_transfer(
         self: &Arc<Self>,
-        fec_type: RaptorQFecType,
+        fec_type: proto::rldp::RaptorQFecType,
         broadcast_id: BroadcastId,
         peer_id: AdnlNodeIdShort,
     ) -> Result<IncomingFecTransfer> {
@@ -928,18 +929,19 @@ impl OverlayShard {
         );
         let signature = key.sign(signature);
 
-        let broadcast = OverlayBroadcastView::BroadcastFec(OverlayBroadcastViewBroadcastFec {
-            src: key.full_id().as_tl(),
-            certificate: CertificateView::EmptyCertificate,
-            data_hash: &transfer.broadcast_id,
-            data_size: transfer.encoder.params().data_size,
-            flags: BROADCAST_FLAG_ANY_SENDER,
-            data: &chunk,
-            seqno: transfer.seqno,
-            fec: *transfer.encoder.params(),
-            date,
-            signature: &signature,
-        });
+        let broadcast =
+            proto::overlay::Broadcast::BroadcastFec(proto::overlay::OverlayBroadcastFec {
+                src: key.full_id().as_tl(),
+                certificate: proto::overlay::Certificate::EmptyCertificate,
+                data_hash: &transfer.broadcast_id,
+                data_size: transfer.encoder.params().data_size,
+                flags: BROADCAST_FLAG_ANY_SENDER,
+                data: &chunk,
+                seqno: transfer.seqno,
+                fec: *transfer.encoder.params(),
+                date,
+                signature: &signature,
+            });
 
         transfer.seqno += 1;
         let mut buffer = self.message_prefix.clone();
@@ -1078,7 +1080,7 @@ fn make_fec_part_to_sign(
     data_size: u32,
     date: u32,
     flags: u32,
-    params: &RaptorQFecType,
+    params: &proto::rldp::RaptorQFecType,
     part: &[u8],
     seqno: u32,
     source: Option<AdnlNodeIdShort>,
@@ -1162,7 +1164,7 @@ struct BroadcastFec {
     flags: u32,
     data: Vec<u8>,
     seqno: u32,
-    fec_type: RaptorQFecType,
+    fec_type: proto::rldp::RaptorQFecType,
     date: u32,
     signature: [u8; 64],
 }

@@ -7,12 +7,12 @@ use ton_api::ton::adnl::Address;
 use ton_api::{ton, IntoBoxed};
 
 use super::{now, FxDashSet};
-use crate::utils::{AddressListView, AddressView};
+use crate::proto;
 
 pub trait AdnlAddress: Sized {
     fn is_public(&self) -> bool;
     fn serialized_size(&self) -> usize;
-    fn as_tl(&self) -> AddressView;
+    fn as_tl(&self) -> proto::adnl::Address;
     fn as_old_tl(&self) -> ton::adnl::Address;
 }
 
@@ -152,8 +152,8 @@ impl AdnlAddress for AdnlAddressUdp {
         12
     }
 
-    fn as_tl(&self) -> AddressView {
-        AddressView::Udp {
+    fn as_tl(&self) -> proto::adnl::Address {
+        proto::adnl::Address::Udp {
             ip: (self.0 >> 16) as u32,
             port: self.0 as u16 as u32,
         }
@@ -182,7 +182,7 @@ impl std::fmt::Display for AdnlAddressUdp {
 }
 
 pub fn parse_address_list_view(
-    list: &AddressListView<'_>,
+    list: &proto::adnl::AddressList<'_>,
     clock_tolerance: u32,
 ) -> Result<AdnlAddressUdp> {
     let address = list.address.ok_or(AdnlAddressListError::ListIsEmpty)?;
@@ -197,7 +197,9 @@ pub fn parse_address_list_view(
     }
 
     match address {
-        AddressView::Udp { ip, port } => Ok(AdnlAddressUdp::from_ip_and_port(ip, port as u16)),
+        proto::adnl::Address::Udp { ip, port } => {
+            Ok(AdnlAddressUdp::from_ip_and_port(ip, port as u16))
+        }
         _ => Err(AdnlAddressListError::UnsupportedAddress.into()),
     }
 }
