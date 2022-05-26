@@ -522,7 +522,7 @@ fn update_roundtrip(roundtrip: &mut u64, time: &Instant) -> u64 {
     *roundtrip = if *roundtrip == 0 {
         time.elapsed().as_millis() as u64
     } else {
-        *roundtrip + (time.elapsed().as_millis() as u64) / 2
+        (*roundtrip + time.elapsed().as_millis() as u64) / 2
     };
     compute_timeout(Some(*roundtrip))
 }
