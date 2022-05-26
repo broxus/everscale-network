@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use everscale_crypto::ed25519;
 
@@ -15,7 +15,7 @@ pub struct AdnlPeer {
 }
 
 impl AdnlPeer {
-    pub fn new(reinit_date: i32, ip_address: AdnlAddressUdp, id: AdnlNodeIdFull) -> Self {
+    pub fn new(reinit_date: u32, ip_address: AdnlAddressUdp, id: AdnlNodeIdFull) -> Self {
         Self {
             id,
             ip_address: AtomicU64::new(ip_address.into()),
@@ -26,7 +26,7 @@ impl AdnlPeer {
     }
 
     #[inline(always)]
-    pub fn try_reinit(&self, reinit_date: i32) -> bool {
+    pub fn try_reinit(&self, reinit_date: u32) -> bool {
         let sender_reinit_date = self.sender_state.reinit_date();
         match reinit_date.cmp(&sender_reinit_date) {
             std::cmp::Ordering::Equal => true,
@@ -81,15 +81,15 @@ impl AdnlPeer {
 pub struct AdnlPeerState {
     ordinary_history: PacketsHistory,
     priority_history: PacketsHistory,
-    reinit_date: AtomicI32,
+    reinit_date: AtomicU32,
 }
 
 impl AdnlPeerState {
-    fn for_receive_with_reinit_date(reinit_date: i32) -> Self {
+    fn for_receive_with_reinit_date(reinit_date: u32) -> Self {
         Self {
             ordinary_history: PacketsHistory::for_recv(),
             priority_history: PacketsHistory::for_recv(),
-            reinit_date: AtomicI32::new(reinit_date),
+            reinit_date: AtomicU32::new(reinit_date),
         }
     }
 
@@ -110,11 +110,11 @@ impl AdnlPeerState {
         }
     }
 
-    pub fn reinit_date(&self) -> i32 {
+    pub fn reinit_date(&self) -> u32 {
         self.reinit_date.load(Ordering::Acquire)
     }
 
-    pub fn set_reinit_date(&self, reinit_date: i32) {
+    pub fn set_reinit_date(&self, reinit_date: u32) {
         self.reinit_date.store(reinit_date, Ordering::Release)
     }
 }

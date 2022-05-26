@@ -27,7 +27,7 @@ impl Storage {
 
     pub fn get(&self, key: &StorageKey) -> Option<ton::dht::value::Value> {
         match self.storage.get(key) {
-            Some(item) if item.ttl > now() => Some(item.value().clone()),
+            Some(item) if item.ttl as u32 > now() => Some(item.value().clone()),
             _ => None,
         }
     }
@@ -93,9 +93,9 @@ impl Storage {
 
         match self.storage.entry(key) {
             Entry::Occupied(mut entry) => {
-                let old_nodes = match entry.get().ttl {
+                let old_nodes = match entry.get().ttl as u32 {
                     old_ttl if old_ttl < now() => None,
-                    old_ttl if old_ttl > value.ttl => return Ok(false),
+                    old_ttl if old_ttl > value.ttl as u32 => return Ok(false),
                     _ => {
                         let nodes = deserialize_overlay_nodes(&entry.get().value)?;
                         Some(nodes)

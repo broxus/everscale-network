@@ -12,7 +12,8 @@ use crate::utils::{AddressListView, AddressView};
 pub trait AdnlAddress: Sized {
     fn is_public(&self) -> bool;
     fn serialized_size(&self) -> usize;
-    fn as_tl(&self) -> ton::adnl::Address;
+    fn as_tl(&self) -> AddressView;
+    fn as_old_tl(&self) -> ton::adnl::Address;
 }
 
 pub struct AdnlAddressList<T> {
@@ -84,7 +85,7 @@ where
             addrs: self
                 .addresses
                 .iter()
-                .map(|item| item.key().as_tl())
+                .map(|item| item.key().as_old_tl())
                 .collect::<Vec<_>>()
                 .into(),
             version: self.version(),
@@ -99,6 +100,10 @@ where
 pub struct AdnlAddressUdp(u64);
 
 impl AdnlAddressUdp {
+    pub fn localhost(port: u16) -> Self {
+        Self::new(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port))
+    }
+
     pub fn new(addr: SocketAddrV4) -> Self {
         let ip = u32::from_be_bytes(addr.ip().octets());
         Self((ip as u64) << 16 | addr.port() as u64)
@@ -147,7 +152,14 @@ impl AdnlAddress for AdnlAddressUdp {
         12
     }
 
-    fn as_tl(&self) -> Address {
+    fn as_tl(&self) -> AddressView {
+        AddressView::Udp {
+            ip: (self.0 >> 16) as u32,
+            port: self.0 as u16 as u32,
+        }
+    }
+
+    fn as_old_tl(&self) -> Address {
         ton::adnl::address::address::Udp {
             ip: (self.0 >> 16) as i32,
             port: self.0 as u16 as i32,
@@ -171,7 +183,7 @@ impl std::fmt::Display for AdnlAddressUdp {
 
 pub fn parse_address_list_view(
     list: &AddressListView<'_>,
-    clock_tolerance: i32,
+    clock_tolerance: u32,
 ) -> Result<AdnlAddressUdp> {
     let address = list.address.ok_or(AdnlAddressListError::ListIsEmpty)?;
 
@@ -185,23 +197,21 @@ pub fn parse_address_list_view(
     }
 
     match address {
-        AddressView::Udp { ip, port } => {
-            Ok(AdnlAddressUdp::from_ip_and_port(ip as u32, port as u16))
-        }
+        AddressView::Udp { ip, port } => Ok(AdnlAddressUdp::from_ip_and_port(ip, port as u16)),
         _ => Err(AdnlAddressListError::UnsupportedAddress.into()),
     }
 }
 
 pub fn parse_address_list(
     list: &ton::adnl::addresslist::AddressList,
-    clock_tolerance: i32,
+    clock_tolerance: u32,
 ) -> Result<AdnlAddressUdp> {
     if list.addrs.is_empty() {
         return Err(AdnlAddressListError::ListIsEmpty.into());
     }
 
-    let version = now();
-    if list.reinit_date > version + clock_tolerance {
+    let version = now() as i32;
+    if list.reinit_date > version + clock_tolerance as i32 {
         return Err(AdnlAddressListError::TooNewVersion.into());
     }
 

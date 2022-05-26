@@ -3,17 +3,17 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use rand::Rng;
-use ton_api::{ton, IntoBoxed};
 
 use super::encoder::*;
 use super::TransferId;
 use crate::utils::*;
 
 pub struct OutgoingTransfer {
-    data: Vec<u8>,
     buffer: Vec<u8>,
+    transfer_id: TransferId,
+    data: Vec<u8>,
+    current_message_part: u32,
     encoder: Option<RaptorQEncoder>,
-    message: ton::rldp::MessagePart,
     state: Arc<OutgoingTransferState>,
 }
 
@@ -21,36 +21,19 @@ impl OutgoingTransfer {
     pub fn new(data: Vec<u8>, transfer_id: Option<TransferId>) -> Self {
         let transfer_id = transfer_id.unwrap_or_else(|| rand::thread_rng().gen());
 
-        let message = ton::rldp::messagepart::MessagePart {
-            transfer_id: ton::int256(transfer_id),
-            fec_type: ton::fec::type_::RaptorQ {
-                data_size: 0,
-                symbol_size: MAX_TRANSMISSION_UNIT as i32,
-                symbols_count: 0,
-            }
-            .into_boxed(),
-            part: 0,
-            total_size: 0,
-            seqno: 0,
-            data: Default::default(),
-        }
-        .into_boxed();
-
         Self {
-            data,
             buffer: Vec::new(),
+            transfer_id,
+            data,
+            current_message_part: 0,
             encoder: None,
-            message,
             state: Default::default(),
         }
     }
 
-    pub fn message(&mut self) -> &mut ton::rldp::messagepart::MessagePart {
-        match &mut self.message {
-            ton::rldp::MessagePart::Rldp_MessagePart(message) => message,
-            // SAFETY: `self.message` is only initialized in `OutgoingTransfer::new`
-            _ => unsafe { std::hint::unreachable_unchecked() },
-        }
+    #[inline(always)]
+    pub fn transfer_id(&self) -> &TransferId {
+        &self.transfer_id
     }
 
     pub fn start_next_part(&mut self) -> Result<Option<u32>> {
@@ -58,31 +41,26 @@ impl OutgoingTransfer {
             return Ok(None);
         }
 
+        let total = self.data.len();
         let part = self.state.part() as usize;
         let processed = part * SLICE;
-        let total = self.data.len();
         if processed >= total {
             return Ok(None);
         }
 
+        self.current_message_part = part as u32;
+
         let chunk_size = std::cmp::min(total - processed, SLICE);
-        let encoder = RaptorQEncoder::with_data(&self.data[processed..processed + chunk_size]);
+        let encoder = self.encoder.insert(RaptorQEncoder::with_data(
+            &self.data[processed..processed + chunk_size],
+        ));
 
-        let message = self.message();
-        message.part = part as i32;
-        message.total_size = total as i64;
-
-        let result = encoder.params().symbols_count;
-        match &mut message.fec_type {
-            ton::fec::Type::Fec_RaptorQ(fec_type) => {
-                fec_type.data_size = encoder.params().data_size;
-                fec_type.symbols_count = result;
-            }
-            _ => return Err(OutgoingTransferError::UnsupportedFecType.into()),
-        }
-
-        self.encoder = Some(encoder);
-        Ok((result > 0).then(|| result as u32))
+        let symbols_count = encoder.params().symbols_count;
+        Ok(if symbols_count > 0 {
+            Some(symbols_count)
+        } else {
+            None
+        })
     }
 
     pub fn prepare_chunk(&mut self) -> Result<&[u8]> {
@@ -94,11 +72,7 @@ impl OutgoingTransfer {
         let mut seqno_out = self.state.seqno_out();
         let previous_seqno_out = seqno_out;
 
-        let chunk = encoder.encode(&mut seqno_out)?;
-
-        let message = self.message();
-        message.seqno = seqno_out as i32;
-        message.data = ton::bytes(chunk);
+        let data = encoder.encode(&mut seqno_out)?;
 
         let seqno_in = self.state.seqno_in();
         if seqno_out - seqno_in <= WINDOW {
@@ -108,8 +82,17 @@ impl OutgoingTransfer {
             self.state.set_seqno_out(seqno_out);
         }
 
-        serialize_inplace(&mut self.buffer, &self.message);
-
+        tl_proto::serialize_into(
+            RldpMessagePartView::MessagePart {
+                transfer_id: &self.transfer_id,
+                fec_type: *encoder.params(),
+                part: self.current_message_part,
+                total_size: self.data.len() as u64,
+                seqno: seqno_out,
+                data: &data,
+            },
+            &mut self.buffer,
+        );
         Ok(&self.buffer)
     }
 
@@ -205,8 +188,6 @@ const SLICE: usize = 2000000;
 enum OutgoingTransferError {
     #[error("Encoder is not ready")]
     EncoderIsNotReady,
-    #[error("Unsupported FEC type")]
-    UnsupportedFecType,
     #[error("Part mismatch")]
     PartMismatch,
 }

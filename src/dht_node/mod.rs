@@ -244,7 +244,7 @@ impl DhtNode {
             value: ton::bytes(serialize_boxed(ton::overlay::nodes::Nodes {
                 nodes: vec![node.clone()].into(),
             })),
-            ttl: now() + self.options.value_timeout_sec as i32,
+            ttl: now() as i32 + self.options.value_timeout_sec as i32,
             signature: Default::default(),
         };
 
@@ -445,7 +445,7 @@ impl DhtNode {
     }
 
     fn process_store(&self, query: ton::rpc::dht::Store) -> Result<ton::dht::Stored> {
-        if query.value.ttl <= now() {
+        if query.value.ttl as u32 <= now() {
             return Err(DhtNodeError::InsertedValueExpired.into());
         }
 
@@ -657,9 +657,9 @@ impl DhtNode {
 
     fn sign_local_node(&self) -> ton::dht::node::Node {
         let node = ton::dht::node::Node {
-            id: self.node_key.full_id().as_tl().into_boxed(),
+            id: self.node_key.full_id().as_old_tl().into_boxed(),
             addr_list: self.adnl.build_address_list(None),
-            version: now(),
+            version: now() as i32,
             signature: Default::default(),
         };
         self.node_key.sign_boxed(node, |node, signature| {

@@ -1,6 +1,3 @@
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
 use anyhow::Result;
 use ton_api::ton::TLObject;
 use ton_api::{BoxedSerialize, IntoBoxed};
@@ -12,10 +9,6 @@ mod ping_subscriber;
 
 #[async_trait::async_trait]
 pub trait Subscriber: Send + Sync {
-    async fn poll(&self, _start: &Arc<Instant>) {
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    }
-
     async fn try_consume_custom(
         &self,
         _local_id: &AdnlNodeIdShort,

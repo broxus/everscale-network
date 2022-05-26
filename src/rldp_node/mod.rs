@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use ton_api::ton;
 
 pub use self::decoder::RaptorQDecoder;
 pub use self::encoder::RaptorQEncoder;
@@ -89,7 +88,8 @@ impl RldpNode {
             }
         }
 
-        let (query_id, query) = make_query(data, self.options.max_answer_size);
+        let (query_id, query) = make_query(&data, self.options.max_answer_size);
+        drop(data);
 
         let peer = self
             .peers
@@ -106,7 +106,7 @@ impl RldpNode {
         };
 
         match result? {
-            (Some(answer), roundtrip) => match deserialize_view(answer.as_slice()) {
+            (Some(answer), roundtrip) => match tl_proto::deserialize(&answer) {
                 Ok(RldpMessageView::Answer {
                     query_id: answer_id,
                     data,
@@ -123,7 +123,7 @@ impl RldpNode {
                 }
                 Err(e) => Err(RldpNodeError::InvalidPacketContent(e)),
             }
-            .with_context(|| format!("RLDP query from peer {} failed", peer_id)),
+            .with_context(|| format!("RLDP query from peer {peer_id} failed")),
             (None, roundtrip) => Ok((None, roundtrip)),
         }
     }
@@ -137,7 +137,7 @@ impl Subscriber for RldpNode {
         peer_id: &AdnlNodeIdShort,
         data: &[u8],
     ) -> Result<bool> {
-        let message = match deserialize_view(data) {
+        let message = match tl_proto::deserialize(data) {
             Ok(message) => message,
             Err(_) => return Ok(false),
         };
@@ -157,10 +157,10 @@ pub struct RldpNodeMetrics {
 }
 
 pub struct MessagePart {
-    fec_type: Option<ton::fec::type_::RaptorQ>,
-    part: i32,
-    total_size: i64,
-    seqno: i32,
+    fec_type: RaptorQFecType,
+    part: u32,
+    total_size: u64,
+    seqno: u32,
     data: Vec<u8>,
 }
 
@@ -169,7 +169,7 @@ enum RldpNodeError {
     #[error("Unexpected answer: {0}")]
     UnexpectedAnswer(&'static str),
     #[error("Invalid packet content: {0:?}")]
-    InvalidPacketContent(PacketContentsError),
+    InvalidPacketContent(tl_proto::TlError),
     #[error("Unknown query id")]
     QueryIdMismatch,
 }

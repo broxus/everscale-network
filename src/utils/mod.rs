@@ -138,11 +138,11 @@ pub fn deserialize_bundle(mut bytes: &[u8]) -> Result<Vec<TLObject>> {
     Ok(result)
 }
 
-pub fn now() -> i32 {
+pub fn now() -> u32 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs() as i32
+        .as_secs() as u32
 }
 
 pub fn ordered_boundaries<T>(min: T, max: T) -> (T, T)

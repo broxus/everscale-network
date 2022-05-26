@@ -1,9 +1,10 @@
 use anyhow::Result;
-use ton_api::ton;
+
+use crate::utils::*;
 
 pub struct RaptorQEncoder {
     engine: raptorq::Encoder,
-    params: ton::fec::type_::RaptorQ,
+    params: RaptorQFecType,
     source_packets: Vec<raptorq::EncodingPacket>,
     encoder_index: usize,
 }
@@ -19,10 +20,10 @@ impl RaptorQEncoder {
 
         Self {
             engine,
-            params: ton::fec::type_::RaptorQ {
-                data_size: data.len() as i32,
-                symbol_size: MAX_TRANSMISSION_UNIT as i32,
-                symbols_count: source_packets.len() as i32,
+            params: RaptorQFecType {
+                data_size: data.len() as u32,
+                symbol_size: MAX_TRANSMISSION_UNIT,
+                symbols_count: source_packets.len() as u32,
             },
             source_packets,
             encoder_index: 0,
@@ -47,12 +48,13 @@ impl RaptorQEncoder {
         Ok(packet.data().to_vec())
     }
 
-    pub fn params(&self) -> &ton::fec::type_::RaptorQ {
+    #[inline(always)]
+    pub fn params(&self) -> &RaptorQFecType {
         &self.params
     }
 }
 
-pub const MAX_TRANSMISSION_UNIT: usize = 768;
+pub const MAX_TRANSMISSION_UNIT: u32 = 768;
 
 #[derive(thiserror::Error, Debug)]
 enum EncoderError {

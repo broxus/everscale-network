@@ -7,6 +7,7 @@ use anyhow::Result;
 use crossbeam_queue::SegQueue;
 use parking_lot::Mutex;
 use sha2::Digest;
+use tl_proto::{HashWrapper, TlWrite};
 use tokio::sync::mpsc;
 use ton_api::{ton, IntoBoxed};
 
@@ -392,10 +393,13 @@ impl OverlayShard {
                 let broadcast_to_sign =
                     make_broadcast_to_sign(&decompressed, broadcast.date, source.as_ref());
                 match node_id.verify(&broadcast_to_sign, broadcast.signature) {
-                    Ok(()) => match self.create_broadcast(&broadcast_to_sign) {
-                        Some(broadcast_id) => Some((broadcast_id, decompressed)),
-                        None => return Ok(()),
-                    },
+                    Ok(()) => {
+                        let broadcast_id = broadcast_to_sign.compute_broadcast_id();
+                        if !self.create_broadcast(broadcast_id) {
+                            return Ok(());
+                        }
+                        Some((broadcast_id, decompressed))
+                    }
                     Err(_) => None,
                 }
             }
@@ -408,10 +412,12 @@ impl OverlayShard {
                 let broadcast_to_sign =
                     make_broadcast_to_sign(broadcast.data, broadcast.date, source.as_ref());
                 node_id.verify(&broadcast_to_sign, broadcast.signature)?;
-                match self.create_broadcast(&broadcast_to_sign) {
-                    Some(broadcast_id) => (broadcast_id, broadcast.data.to_vec()),
-                    None => return Ok(()),
+
+                let broadcast_id = broadcast_to_sign.compute_broadcast_id();
+                if !self.create_broadcast(broadcast_id) {
+                    return Ok(());
                 }
+                (broadcast_id, broadcast.data.to_vec())
             }
         };
 
@@ -447,19 +453,6 @@ impl OverlayShard {
         let node_id = AdnlNodeIdFull::try_from(broadcast.src)?;
         let source = node_id.compute_short_id();
 
-        let fec_type = match broadcast.fec {
-            FecTypeView::RaptorQ {
-                data_size,
-                symbol_size,
-                symbols_count,
-            } => ton::fec::type_::RaptorQ {
-                data_size,
-                symbol_size,
-                symbols_count,
-            },
-            _ => return Err(OverlayShardError::UnsupportedFecType.into()),
-        };
-
         let signature = match broadcast.signature.len() {
             64 => broadcast.signature.try_into().unwrap(),
             _ => return Err(OverlayShardError::UnsupportedSignature.into()),
@@ -468,7 +461,7 @@ impl OverlayShard {
         let transfer = match self.owned_broadcasts.entry(broadcast_id) {
             Entry::Vacant(entry) => {
                 let incoming_transfer =
-                    self.create_incoming_fec_transfer(fec_type.clone(), broadcast_id, source)?;
+                    self.create_incoming_fec_transfer(broadcast.fec, broadcast_id, source)?;
                 entry
                     .insert(Arc::new(OwnedBroadcast::Incoming(incoming_transfer)))
                     .clone()
@@ -486,7 +479,7 @@ impl OverlayShard {
             return Ok(());
         }
 
-        if !transfer.history.deliver_packet(broadcast.seqno as i64) {
+        if !transfer.history.deliver_packet(broadcast.seqno as u64) {
             return Ok(());
         }
 
@@ -498,7 +491,7 @@ impl OverlayShard {
                 flags: broadcast.flags,
                 data: broadcast.data.to_vec(),
                 seqno: broadcast.seqno,
-                fec_type,
+                fec_type: broadcast.fec,
                 date: broadcast.date,
                 signature,
             })?;
@@ -521,14 +514,12 @@ impl OverlayShard {
     ) -> OutgoingBroadcastInfo {
         let date = now();
         let broadcast_to_sign = make_broadcast_to_sign(&data, date, None);
-        let broadcast_id = match self.create_broadcast(&broadcast_to_sign) {
-            Some(broadcast_id) => broadcast_id,
-            None => {
-                tracing::warn!("Trying to send duplicated broadcast");
-                return Default::default();
-            }
-        };
-        let signature = key.sign(&broadcast_to_sign);
+        let broadcast_id = broadcast_to_sign.compute_broadcast_id();
+        if !self.create_broadcast(broadcast_id) {
+            tracing::warn!("Trying to send duplicated broadcast");
+            return Default::default();
+        }
+        let signature = key.sign(broadcast_to_sign);
 
         if self.options.force_compression {
             if let Err(e) = compression::compress(&mut data) {
@@ -536,17 +527,19 @@ impl OverlayShard {
             }
         }
 
-        let broadcast = ton::overlay::broadcast::Broadcast {
-            src: key.full_id().as_tl().into_boxed(),
-            certificate: ton::overlay::Certificate::Overlay_EmptyCertificate,
+        let broadcast = OverlayBroadcastView::Broadcast(OverlayBroadcastViewBroadcast {
+            src: key.full_id().as_tl(),
+            certificate: CertificateView::EmptyCertificate,
             flags: BROADCAST_FLAG_ANY_SENDER,
-            data: ton::bytes(data),
+            data: &data,
             date,
-            signature: ton::bytes(signature.as_ref().to_vec()),
-        }
-        .into_boxed();
+            signature: &signature,
+        });
+
         let mut buffer = self.message_prefix.clone();
-        serialize_append(&mut buffer, &broadcast);
+        buffer.reserve(broadcast.max_size_hint());
+        broadcast.write_to(&mut buffer);
+        drop(data);
 
         let neighbours = self
             .neighbours
@@ -566,13 +559,11 @@ impl OverlayShard {
         mut data: Vec<u8>,
         key: &Arc<StoredAdnlNodeKey>,
     ) -> OutgoingBroadcastInfo {
-        let broadcast_id = match self.create_broadcast(&data) {
-            Some(id) => id,
-            None => {
-                tracing::warn!("Trying to send duplicated broadcast");
-                return Default::default();
-            }
-        };
+        let broadcast_id = sha2::Sha256::digest(&data).into();
+        if !self.create_broadcast(broadcast_id) {
+            tracing::warn!("Trying to send duplicated broadcast");
+            return Default::default();
+        }
 
         if self.options.force_compression {
             if let Err(e) = compression::compress(&mut data) {
@@ -592,8 +583,7 @@ impl OverlayShard {
         // NOTE: Data is already in encoder and not needed anymore
         drop(data);
 
-        let max_seqno =
-            (data_size / outgoing_transfer.encoder.params().symbol_size as u32 + 1) * 3 / 2;
+        let max_seqno = (data_size / outgoing_transfer.encoder.params().symbol_size + 1) * 3 / 2;
 
         // Spawn data producer
         tokio::spawn({
@@ -712,17 +702,17 @@ impl OverlayShard {
         let key = self.overlay_key();
         let version = now();
 
-        let signature = serialize_boxed(ton::overlay::node::tosign::ToSign {
-            id: key.id().as_tl(),
-            overlay: ton::int256(self.id().into()),
+        let node_to_sign = OverlayNodeToSign {
+            id: key.id().as_slice(),
+            overlay: self.id().as_slice(),
             version,
-        });
-        let signature = key.sign(&signature);
+        };
+        let signature = key.sign(&node_to_sign);
 
         ton::overlay::node::Node {
-            id: key.full_id().as_tl().into_boxed(),
+            id: key.full_id().as_old_tl().into_boxed(),
             overlay: ton::int256(self.id().into()),
-            version,
+            version: version as i32,
             signature: ton::bytes(signature.to_vec()),
         }
     }
@@ -815,27 +805,25 @@ impl OverlayShard {
         }
     }
 
-    fn is_broadcast_outdated(&self, date: i32) -> bool {
-        date + (self.options.broadcast_timeout_sec as i32) < now()
+    fn is_broadcast_outdated(&self, date: u32) -> bool {
+        date + (self.options.broadcast_timeout_sec as u32) < now()
     }
 
-    fn create_broadcast(&self, data: &[u8]) -> Option<BroadcastId> {
+    fn create_broadcast(&self, broadcast_id: BroadcastId) -> bool {
         use dashmap::mapref::entry::Entry;
-
-        let broadcast_id = sha2::Sha256::digest(data).into();
 
         match self.owned_broadcasts.entry(broadcast_id) {
             Entry::Vacant(entry) => {
                 entry.insert(Arc::new(OwnedBroadcast::Other));
-                Some(broadcast_id)
+                true
             }
-            Entry::Occupied(_) => None,
+            Entry::Occupied(_) => false,
         }
     }
 
     fn create_incoming_fec_transfer(
         self: &Arc<Self>,
-        fec_type: ton::fec::type_::RaptorQ,
+        fec_type: RaptorQFecType,
         broadcast_id: BroadcastId,
         peer_id: AdnlNodeIdShort,
     ) -> Result<IncomingFecTransfer> {
@@ -935,28 +923,28 @@ impl OverlayShard {
             BROADCAST_FLAG_ANY_SENDER,
             transfer.encoder.params(),
             &chunk,
-            transfer.seqno as i32,
+            transfer.seqno,
             None,
         );
-        let signature = key.sign(&signature);
+        let signature = key.sign(signature);
 
-        let broadcast = ton::overlay::broadcast::BroadcastFec {
-            src: key.full_id().as_tl().into_boxed(),
-            certificate: ton::overlay::Certificate::Overlay_EmptyCertificate,
-            data_hash: ton::int256(transfer.broadcast_id),
+        let broadcast = OverlayBroadcastView::BroadcastFec(OverlayBroadcastViewBroadcastFec {
+            src: key.full_id().as_tl(),
+            certificate: CertificateView::EmptyCertificate,
+            data_hash: &transfer.broadcast_id,
             data_size: transfer.encoder.params().data_size,
             flags: BROADCAST_FLAG_ANY_SENDER,
-            data: ton::bytes(chunk),
-            seqno: transfer.seqno as i32,
-            fec: transfer.encoder.params().clone().into_boxed(),
+            data: &chunk,
+            seqno: transfer.seqno,
+            fec: *transfer.encoder.params(),
             date,
-            signature: ton::bytes(signature.as_ref().to_vec()),
-        }
-        .into_boxed();
+            signature: &signature,
+        });
 
         transfer.seqno += 1;
         let mut buffer = self.message_prefix.clone();
-        serialize_append(&mut buffer, &broadcast);
+        buffer.reserve(broadcast.max_size_hint());
+        broadcast.write_to(&mut buffer);
 
         Ok(buffer)
     }
@@ -1050,50 +1038,83 @@ fn process_fec_broadcast(
     }
 }
 
-fn make_broadcast_to_sign(data: &[u8], date: i32, source: Option<&AdnlNodeIdShort>) -> Vec<u8> {
-    let broadcast_id = ton::overlay::broadcast::id::Id {
-        src: ton::int256(source.map(|id| *id.as_slice()).unwrap_or_default()),
-        data_hash: ton::int256(sha2::Sha256::digest(data).into()),
-        flags: BROADCAST_FLAG_ANY_SENDER,
-    };
-    let broadcast_hash = hash(broadcast_id);
+#[derive(TlWrite)]
+#[tl(boxed, id = 0xfa374e7c)]
+struct OverlayBroadcastToSign {
+    hash: [u8; 32],
+    date: u32,
+}
 
-    serialize_boxed(ton::overlay::broadcast::tosign::ToSign {
-        hash: ton::int256(broadcast_hash),
+impl OverlayBroadcastToSign {
+    fn compute_broadcast_id(&self) -> BroadcastId {
+        let mut broadcast_id = sha2::Sha256::new();
+        HashWrapper(self).update_hasher(&mut broadcast_id);
+        broadcast_id.finalize().into()
+    }
+}
+
+fn make_broadcast_to_sign(
+    data: &[u8],
+    date: u32,
+    source: Option<&AdnlNodeIdShort>,
+) -> OverlayBroadcastToSign {
+    const BROADCAST_ID: u32 = 0x51fd789a;
+
+    let mut broadcast_hash = sha2::Sha256::new();
+    broadcast_hash.update(BROADCAST_ID.to_le_bytes());
+    broadcast_hash.update(source.map(AdnlNodeIdShort::as_slice).unwrap_or(&[0; 32]));
+    broadcast_hash.update(sha2::Sha256::digest(data).as_slice());
+    broadcast_hash.update(BROADCAST_FLAG_ANY_SENDER.to_le_bytes());
+    let broadcast_hash = broadcast_hash.finalize();
+
+    OverlayBroadcastToSign {
+        hash: broadcast_hash.into(),
         date,
-    })
+    }
 }
 
 fn make_fec_part_to_sign(
     data_hash: &[u8; 32],
-    data_size: i32,
-    date: i32,
-    flags: i32,
-    params: &ton::fec::type_::RaptorQ,
+    data_size: u32,
+    date: u32,
+    flags: u32,
+    params: &RaptorQFecType,
     part: &[u8],
-    seqno: i32,
+    seqno: u32,
     source: Option<AdnlNodeIdShort>,
-) -> Vec<u8> {
-    let broadcast_id = ton::overlay::broadcast_fec::id::Id {
-        src: ton::int256(source.map(|id| id.into()).unwrap_or_default()),
-        type_: ton::int256(hash(params.clone())),
-        data_hash: ton::int256(*data_hash),
-        size: data_size,
-        flags,
-    };
-    let broadcast_hash = hash(broadcast_id);
+) -> OverlayBroadcastToSign {
+    const BROADCAST_FEC_ID: u32 = 0xfb3155a6;
+    const BROADCAST_FEC_PART_ID: u32 = 0xa46962d0;
 
-    let part_id = ton::overlay::broadcast_fec::partid::PartId {
-        broadcast_hash: ton::int256(broadcast_hash),
-        data_hash: ton::int256(sha2::Sha256::digest(part).into()),
-        seqno,
-    };
-    let part_hash = hash(part_id);
+    let mut broadcast_hash = sha2::Sha256::new();
+    broadcast_hash.update(BROADCAST_FEC_ID.to_le_bytes());
+    broadcast_hash.update(
+        source
+            .as_ref()
+            .map(AdnlNodeIdShort::as_slice)
+            .unwrap_or(&[0; 32]),
+    );
+    broadcast_hash.update({
+        let mut hash = sha2::Sha256::new();
+        HashWrapper(params).update_hasher(&mut hash);
+        hash.finalize().as_slice()
+    });
+    broadcast_hash.update(data_hash);
+    broadcast_hash.update(data_size.to_le_bytes());
+    broadcast_hash.update(flags.to_le_bytes());
+    let broadcast_hash = broadcast_hash.finalize();
 
-    serialize_boxed(ton::overlay::broadcast::tosign::ToSign {
-        hash: ton::int256(part_hash),
+    let mut part_hash = sha2::Sha256::new();
+    part_hash.update(BROADCAST_FEC_PART_ID.to_le_bytes());
+    part_hash.update(broadcast_hash);
+    part_hash.update(sha2::Sha256::digest(part).as_slice());
+    part_hash.update(seqno.to_le_bytes());
+    let part_hash = part_hash.finalize();
+
+    OverlayBroadcastToSign {
+        hash: part_hash.into(),
         date,
-    })
+    }
 }
 
 pub struct IncomingBroadcastInfo {
@@ -1137,12 +1158,12 @@ enum OwnedBroadcast {
 struct BroadcastFec {
     node_id: AdnlNodeIdFull,
     data_hash: BroadcastId,
-    data_size: i32,
-    flags: i32,
+    data_size: u32,
+    flags: u32,
     data: Vec<u8>,
-    seqno: i32,
-    fec_type: ton::fec::type_::RaptorQ,
-    date: i32,
+    seqno: u32,
+    fec_type: RaptorQFecType,
+    date: u32,
     signature: [u8; 64],
 }
 
@@ -1154,8 +1175,6 @@ type BroadcastId = [u8; 32];
 
 #[derive(thiserror::Error, Debug)]
 enum OverlayShardError {
-    #[error("Unsupported fec type")]
-    UnsupportedFecType,
     #[error("Unsupported signature")]
     UnsupportedSignature,
     #[error("Data size mismatch")]
@@ -1168,6 +1187,6 @@ enum OverlayShardError {
 
 const MAX_RANDOM_PEERS: usize = 4;
 
-const BROADCAST_FLAG_ANY_SENDER: i32 = 1; // Any sender
+const BROADCAST_FLAG_ANY_SENDER: u32 = 1; // Any sender
 
 const TRANSFER_LOOP_INTERVAL: u64 = 10; // Milliseconds

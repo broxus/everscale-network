@@ -138,12 +138,12 @@ impl OverlayNode {
         }
     }
 
-    pub fn compute_overlay_id(&self, workchain: i32, shard: i64) -> OverlayIdFull {
-        compute_overlay_id(workchain, shard, self.zero_state_file_hash)
+    pub fn compute_overlay_id(&self, workchain: i32) -> OverlayIdFull {
+        compute_overlay_id(workchain, self.zero_state_file_hash)
     }
 
-    pub fn compute_overlay_short_id(&self, workchain: i32, shard: i64) -> OverlayIdShort {
-        self.compute_overlay_id(workchain, shard).compute_short_id()
+    pub fn compute_overlay_short_id(&self, workchain: i32) -> OverlayIdShort {
+        self.compute_overlay_id(workchain).compute_short_id()
     }
 
     pub fn get_overlay_shard(&self, overlay_id: &OverlayIdShort) -> Result<Arc<OverlayShard>> {
@@ -187,15 +187,16 @@ impl Subscriber for OverlayNode {
         peer_id: &AdnlNodeIdShort,
         data: &[u8],
     ) -> Result<bool> {
-        let bundle = match deserialize_view::<PublicOverlayQueryBundleView>(data) {
-            Ok(bundle) => bundle,
-            Err(_) => return Ok(false),
-        };
+        let (message, broadcast) =
+            match tl_proto::deserialize::<(OverlayMessageView, OverlayBroadcastView)>(data) {
+                Ok(bundle) => bundle,
+                Err(_) => return Ok(false),
+            };
 
-        let overlay_id = OverlayIdShort::from(*bundle.message.overlay);
+        let overlay_id = OverlayIdShort::from(*message.overlay);
         let shard = self.get_overlay_shard(&overlay_id)?;
 
-        match bundle.broadcast {
+        match broadcast {
             OverlayBroadcastView::Broadcast(broadcast) => {
                 shard
                     .receive_broadcast(local_id, peer_id, broadcast, data)

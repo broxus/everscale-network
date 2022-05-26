@@ -2,14 +2,14 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use anyhow::Result;
-use ton_api::{ton, BoxedSerialize, IntoBoxed, Serializer};
+use ton_api::{ton, BoxedSerialize, Serializer};
 
 use super::node_id::*;
 use super::{deserialize_bundle, serialize};
 use crate::subscriber::*;
 use crate::utils::compression;
 
-pub fn build_query(prefix: Option<&[u8]>, query: &ton::TLObject) -> (QueryId, ton::adnl::Message) {
+pub fn build_query(prefix: Option<&[u8]>, query: &ton::TLObject) -> (QueryId, Vec<u8>) {
     use rand::Rng;
 
     let query_id: QueryId = rand::thread_rng().gen();
@@ -22,14 +22,7 @@ pub fn build_query(prefix: Option<&[u8]>, query: &ton::TLObject) -> (QueryId, to
         None => serialize(query),
     };
 
-    (
-        query_id,
-        ton::adnl::message::message::Query {
-            query_id: ton::int256(query_id),
-            query: ton::bytes(query),
-        }
-        .into_boxed(),
-    )
+    (query_id, query)
 }
 
 pub async fn process_message_custom(
@@ -53,18 +46,11 @@ pub async fn process_message_adnl_query(
     local_id: &AdnlNodeIdShort,
     peer_id: &AdnlNodeIdShort,
     subscribers: &[Arc<dyn Subscriber>],
-    query_id: &QueryId,
     query: &[u8],
-) -> Result<QueryProcessingResult<ton::adnl::Message>> {
+) -> Result<QueryProcessingResult<Vec<u8>>> {
     match process_query(local_id, peer_id, subscribers, Cow::Borrowed(query)).await? {
         QueryProcessingResult::Processed(answer) => Ok(QueryProcessingResult::Processed(
-            convert_answer(answer, |answer| {
-                ton::adnl::message::message::Answer {
-                    query_id: ton::int256(*query_id),
-                    answer: ton::bytes(answer),
-                }
-                .into_boxed()
-            }),
+            convert_answer(answer, std::convert::identity),
         )),
         _ => Ok(QueryProcessingResult::Rejected),
     }

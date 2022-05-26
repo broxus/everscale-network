@@ -1,12 +1,12 @@
 use std::convert::TryFrom;
 
 use anyhow::Result;
-use everscale_crypto::ed25519;
+use everscale_crypto::{ed25519, tl};
 use rand::Rng;
+use sha2::Digest;
 use ton_api::{ton, IntoBoxed};
 
-use super::tl_view::PublicKeyView;
-use super::{hash, serialize, serialize_boxed};
+use super::{serialize, serialize_boxed};
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct AdnlNodeIdFull(ed25519::PublicKey);
@@ -22,13 +22,32 @@ impl AdnlNodeIdFull {
     }
 
     #[inline(always)]
-    pub fn as_tl(&self) -> ton::pub_::publickey::Ed25519 {
+    pub fn as_tl(&self) -> tl::PublicKey {
+        self.0.as_tl()
+    }
+
+    pub fn as_old_tl(&self) -> ton::pub_::publickey::Ed25519 {
         ton::pub_::publickey::Ed25519 {
             key: ton::int256(self.0.to_bytes()),
         }
     }
 
-    pub fn verify(
+    pub fn verify<T: tl_proto::TlWrite>(
+        &self,
+        message: T,
+        other_signature: &[u8],
+    ) -> Result<(), AdnlNodeIdFullError> {
+        let other_signature = <[u8; 64]>::try_from(other_signature)
+            .map_err(|_| AdnlNodeIdFullError::InvalidSignature)?;
+
+        if self.0.verify(message, &other_signature) {
+            Ok(())
+        } else {
+            Err(AdnlNodeIdFullError::InvalidSignature)
+        }
+    }
+
+    pub fn verify_raw(
         &self,
         message: &[u8],
         other_signature: &[u8],
@@ -51,11 +70,13 @@ impl AdnlNodeIdFull {
         let mut data = data.clone();
         let signature = std::mem::take(&mut extractor(&mut data).0);
         let buffer = serialize_boxed(data);
-        self.verify(&buffer, &signature)
+        self.verify_raw(&buffer, &signature)
     }
 
     pub fn compute_short_id(&self) -> AdnlNodeIdShort {
-        AdnlNodeIdShort::new(hash(self.as_tl()))
+        let mut hash = sha2::Sha256::new();
+        tl_proto::HashWrapper(self.0.as_tl()).update_hasher(&mut hash);
+        AdnlNodeIdShort::new(hash.finalize().into())
     }
 }
 
@@ -80,12 +101,12 @@ impl TryFrom<&ton::PublicKey> for AdnlNodeIdFull {
     }
 }
 
-impl<'a> TryFrom<PublicKeyView<'a>> for AdnlNodeIdFull {
+impl<'a> TryFrom<tl::PublicKey<'a>> for AdnlNodeIdFull {
     type Error = anyhow::Error;
 
-    fn try_from(value: PublicKeyView<'a>) -> Result<Self, Self::Error> {
+    fn try_from(value: tl::PublicKey<'a>) -> Result<Self, Self::Error> {
         match value {
-            PublicKeyView::Ed25519 { key } => {
+            tl::PublicKey::Ed25519 { key } => {
                 let public_key = ed25519::PublicKey::from_bytes(*key)
                     .ok_or(AdnlNodeIdError::InvalidPublicKey)?;
                 Ok(Self::new(public_key))
@@ -243,7 +264,12 @@ impl StoredAdnlNodeKey {
     }
 
     #[inline(always)]
-    pub fn sign(&self, data: &[u8]) -> [u8; 64] {
+    pub fn sign<T: tl_proto::TlWrite>(&self, data: T) -> [u8; 64] {
+        self.private_key.sign(data, self.full_id.public_key())
+    }
+
+    #[inline(always)]
+    pub fn sign_raw(&self, data: &[u8]) -> [u8; 64] {
         self.private_key.sign_raw(data, self.full_id.public_key())
     }
 
@@ -254,7 +280,7 @@ impl StoredAdnlNodeKey {
     {
         let data = data.into_boxed();
         let mut buffer = serialize(&data);
-        let signature = self.sign(&buffer);
+        let signature = self.sign_raw(&buffer);
         buffer.truncate(0);
         buffer.extend_from_slice(signature.as_ref());
         inserter(data, ton::bytes(buffer))

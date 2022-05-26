@@ -1,50 +1,58 @@
 use std::convert::TryFrom;
 
 use anyhow::Result;
+use sha2::Digest;
+use tl_proto::{HashWrapper, TlWrite};
 use ton_api::ton;
 
-use super::{hash, serialize, serialize_boxed};
-use crate::utils::AdnlNodeIdFull;
+use super::hash;
+use crate::utils::{AdnlNodeIdFull, HashRef};
+
+#[derive(TlWrite)]
+#[tl(boxed, id = 0x03d8a8e1)]
+pub struct OverlayNodeToSign<'tl> {
+    pub id: HashRef<'tl>,
+    pub overlay: HashRef<'tl>,
+    pub version: u32,
+}
 
 pub fn verify_node(overlay_id: &OverlayIdShort, node: &ton::overlay::node::Node) -> Result<()> {
     if node.overlay.0 != overlay_id.0 {
         return Err(OverlayError::OverlayIdMismatch.into());
     }
 
-    let node_id = AdnlNodeIdFull::try_from(&node.id)?;
+    let full_id = AdnlNodeIdFull::try_from(&node.id)?;
+    let peer_id = full_id.compute_short_id();
 
-    let node_to_sign = serialize_boxed(ton::overlay::node::tosign::ToSign {
-        id: node_id.compute_short_id().as_tl(),
-        overlay: node.overlay,
-        version: node.version,
-    });
+    let node_to_sign = OverlayNodeToSign {
+        id: peer_id.as_slice(),
+        overlay: &node.overlay.0,
+        version: node.version as u32,
+    };
 
-    node_id.verify(&node_to_sign, &node.signature)?;
+    full_id.verify(&node_to_sign, &node.signature)?;
 
     Ok(())
 }
 
-pub fn compute_overlay_id(
-    workchain: i32,
-    _shard: i64,
-    zero_state_file_hash: FileHash,
-) -> OverlayIdFull {
-    let overlay = ton::ton_node::shardpublicoverlayid::ShardPublicOverlayId {
-        workchain,
-        shard: 1i64 << 63, // WHY?!!
-        zero_state_file_hash: ton::int256(zero_state_file_hash),
-    };
-    OverlayIdFull(hash(overlay))
-}
+pub fn compute_overlay_id(workchain: i32, zero_state_file_hash: FileHash) -> OverlayIdFull {
+    #[derive(TlWrite)]
+    #[tl(boxed, id = 0x4d9ed329)]
+    struct ShardPublicOverlayId<'tl> {
+        workchain: i32,
+        shard: u64,
+        zero_state_file_hash: HashRef<'tl>,
+    }
 
-pub fn compute_private_overlay_short_id(
-    first_block: &ton::catchain::FirstBlock,
-) -> PrivateOverlayIdShort {
-    let first_block = serialize(first_block);
-    let overlay_id = ton::pub_::publickey::Overlay {
-        name: first_block.into(),
-    };
-    PrivateOverlayIdShort(hash(overlay_id))
+    let mut hash = sha2::Sha256::new();
+    HashWrapper(ShardPublicOverlayId {
+        workchain,
+        shard: 1u64 << 63,
+        zero_state_file_hash: &zero_state_file_hash,
+    })
+    .update_hasher(&mut hash);
+
+    OverlayIdFull(hash.finalize().into())
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]

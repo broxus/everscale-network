@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use parking_lot::Mutex;
+use tl_proto::TlWrite;
 use tokio::sync::mpsc;
 use ton_api::ton;
 
@@ -48,8 +49,8 @@ impl TransfersCache {
         roundtrip: Option<u64>,
     ) -> Result<(Option<Vec<u8>>, u64)> {
         // Initiate outgoing transfer with new id
-        let mut outgoing_transfer = OutgoingTransfer::new(data, None);
-        let outgoing_transfer_id = outgoing_transfer.message().transfer_id.0;
+        let outgoing_transfer = OutgoingTransfer::new(data, None);
+        let outgoing_transfer_id = *outgoing_transfer.transfer_id();
         let outgoing_transfer_state = outgoing_transfer.state().clone();
         self.transfers.insert(
             outgoing_transfer_id,
@@ -184,7 +185,7 @@ impl TransfersCache {
                         // Forward message part on `incoming` state
                         RldpTransfer::Incoming(parts_tx) => {
                             let _ = parts_tx.send(MessagePart {
-                                fec_type: fec_type.into(),
+                                fec_type,
                                 part,
                                 total_size,
                                 seqno,
@@ -197,19 +198,20 @@ impl TransfersCache {
                             drop(item); // drop item ref to prevent DashMap deadlocks
 
                             // Send confirm message
-                            let reply = serialize_boxed(ton::rldp::messagepart::Confirm {
-                                transfer_id: ton::int256(*transfer_id),
+                            let mut buffer = Vec::with_capacity(44);
+                            RldpMessagePartView::Confirm {
+                                transfer_id,
                                 part,
                                 seqno,
-                            });
-                            self.adnl.send_custom_message(local_id, peer_id, &reply)?;
+                            }
+                            .write_to(&mut buffer);
+                            self.adnl.send_custom_message(local_id, peer_id, &buffer)?;
 
                             // Send complete message
-                            let reply = serialize_boxed(ton::rldp::messagepart::Complete {
-                                transfer_id: ton::int256(*transfer_id),
-                                part,
-                            });
-                            self.adnl.send_custom_message(local_id, peer_id, &reply)?;
+                            buffer.clear();
+                            RldpMessagePartView::Complete { transfer_id, part }
+                                .write_to(&mut buffer);
+                            self.adnl.send_custom_message(local_id, peer_id, &buffer)?;
 
                             // Done
                             break;
@@ -223,7 +225,7 @@ impl TransfersCache {
                         // Forward message part on `incoming` state (for newly created transfer)
                         Some(parts_tx) => {
                             let _ = parts_tx.send(MessagePart {
-                                fec_type: fec_type.into(),
+                                fec_type,
                                 part,
                                 total_size,
                                 seqno,
@@ -335,18 +337,17 @@ impl TransfersCache {
     }
 }
 
-pub fn make_query(data: Vec<u8>, max_answer_size: u32) -> (QueryId, Vec<u8>) {
+pub fn make_query(data: &[u8], max_answer_size: u32) -> (QueryId, Vec<u8>) {
     use rand::Rng;
 
     let query_id: QueryId = rand::thread_rng().gen();
-    let data = serialize_boxed(ton::rldp::message::Query {
-        query_id: ton::int256(query_id),
-        max_answer_size: max_answer_size as i64,
-        timeout: now() + MAX_TIMEOUT as i32 / 1000,
-        data: ton::bytes(data),
-    });
-
-    (query_id, data)
+    let data = RldpMessageView::Query {
+        query_id: &query_id,
+        max_answer_size: max_answer_size as u64,
+        timeout: now() + MAX_TIMEOUT as u32 / 1000,
+        data,
+    };
+    (query_id, tl_proto::serialize(data))
 }
 
 #[tracing::instrument(level = "debug", skip_all)]
@@ -561,23 +562,6 @@ struct IncomingContext {
     parts_rx: MessagePartsRx,
     transfer: IncomingTransfer,
     transfer_id: TransferId,
-}
-
-impl From<FecTypeView> for Option<ton::fec::type_::RaptorQ> {
-    fn from(ty: FecTypeView) -> Self {
-        match ty {
-            FecTypeView::RaptorQ {
-                data_size,
-                symbol_size,
-                symbols_count,
-            } => Some(ton::fec::type_::RaptorQ {
-                data_size,
-                symbol_size,
-                symbols_count,
-            }),
-            _ => None,
-        }
-    }
 }
 
 type MessagePartsTx = mpsc::UnboundedSender<MessagePart>;

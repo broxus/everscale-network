@@ -1,5 +1,5 @@
 use std::convert::TryInto;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use aes::cipher::StreamCipher;
 use anyhow::Result;
@@ -8,7 +8,7 @@ use ton_api::ton;
 
 use crate::utils::*;
 
-const CHANNEL_RESET_TIMEOUT: i32 = 30; // Seconds
+const CHANNEL_RESET_TIMEOUT: u32 = 30; // Seconds
 
 pub struct AdnlChannel {
     ready: AtomicBool,
@@ -18,8 +18,8 @@ pub struct AdnlChannel {
     peer_id: AdnlNodeIdShort,
     /// Public key of the keypair from the peer side
     peer_channel_public_key: ed25519::PublicKey,
-    peer_channel_date: i32,
-    drop: AtomicI32,
+    peer_channel_date: u32,
+    drop: AtomicU32,
 }
 
 impl AdnlChannel {
@@ -28,7 +28,7 @@ impl AdnlChannel {
         peer_id: AdnlNodeIdShort,
         channel_key: &ed25519::KeyPair,
         peer_channel_public_key: ed25519::PublicKey,
-        peer_channel_date: i32,
+        peer_channel_date: u32,
         context: ChannelCreationContext,
     ) -> Self {
         let shared_secret = channel_key.compute_shared_secret(&peer_channel_public_key);
@@ -56,7 +56,7 @@ impl AdnlChannel {
     pub fn is_still_valid(
         &self,
         peer_channel_public_key: &ed25519::PublicKey,
-        peer_channel_date: i32,
+        peer_channel_date: u32,
     ) -> bool {
         &self.peer_channel_public_key == peer_channel_public_key
             || self.peer_channel_date >= peer_channel_date
@@ -76,7 +76,7 @@ impl AdnlChannel {
     }
 
     #[inline(always)]
-    pub fn peer_channel_date(&self) -> i32 {
+    pub fn peer_channel_date(&self) -> u32 {
         self.peer_channel_date
     }
 
@@ -100,7 +100,7 @@ impl AdnlChannel {
         &self.peer_id
     }
 
-    pub fn update_drop_timeout(&self, now: i32) -> i32 {
+    pub fn update_drop_timeout(&self, now: u32) -> u32 {
         self.drop
             .compare_exchange(
                 0,

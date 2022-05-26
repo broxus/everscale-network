@@ -1,13 +1,13 @@
-use ton_api::ton;
+use crate::utils::RaptorQFecType;
 
 pub struct RaptorQDecoder {
     engine: raptorq::Decoder,
-    params: ton::fec::type_::RaptorQ,
+    params: RaptorQFecType,
     seqno: u32,
 }
 
 impl RaptorQDecoder {
-    pub fn with_params(params: ton::fec::type_::RaptorQ) -> Self {
+    pub fn with_params(params: RaptorQFecType) -> Self {
         Self {
             engine: raptorq::Decoder::new(raptorq::ObjectTransmissionInformation::with_defaults(
                 params.data_size as u64,
@@ -24,7 +24,7 @@ impl RaptorQDecoder {
         self.engine.decode(packet)
     }
 
-    pub fn params(&self) -> &ton::fec::type_::RaptorQ {
+    pub fn params(&self) -> &RaptorQFecType {
         &self.params
     }
 

@@ -17,7 +17,7 @@ pub fn sign_dht_value(
     let value = ton::dht::value::Value {
         key: sign_dht_key_description(key, name),
         value: ton::bytes(value.to_vec()),
-        ttl: now() + timeout as i32,
+        ttl: (now() + timeout) as i32,
         signature: Default::default(),
     };
     key.sign_boxed(value, |value, signature| {
@@ -27,13 +27,15 @@ pub fn sign_dht_value(
     })
 }
 
-pub fn sign_dht_key_description(
+fn sign_dht_key_description(
     key: &StoredAdnlNodeKey,
     name: &str,
 ) -> ton::dht::keydescription::KeyDescription {
+    // TODO: replace with tl_proto
+
     let key_description = ton::dht::keydescription::KeyDescription {
         key: make_dht_key(key.id(), name),
-        id: key.full_id().as_tl().into_boxed(),
+        id: key.full_id().as_old_tl().into_boxed(),
         update_rule: ton::dht::UpdateRule::Dht_UpdateRule_Signature,
         signature: Default::default(),
     };
@@ -58,7 +60,7 @@ where
 pub fn parse_dht_value_address(
     key: ton::dht::keydescription::KeyDescription,
     value: TLObject,
-    clock_tolerance_sec: i32,
+    clock_tolerance_sec: u32,
 ) -> Result<(AdnlAddressUdp, AdnlNodeIdFull)> {
     let address_list = match value.downcast::<ton::adnl::AddressList>() {
         Ok(address_list) => address_list,
