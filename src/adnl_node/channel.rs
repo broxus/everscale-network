@@ -4,7 +4,6 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use aes::cipher::StreamCipher;
 use anyhow::Result;
 use everscale_crypto::ed25519;
-use ton_api::ton;
 
 use crate::utils::*;
 
@@ -225,11 +224,11 @@ impl ChannelSide {
         let priority_secret = build_priority_secret(secret);
         Self {
             ordinary: SubChannelSide {
-                id: compute_channel_id(secret),
+                id: compute_channel_id(&secret),
                 secret,
             },
             priority: SubChannelSide {
-                id: compute_channel_id(priority_secret),
+                id: compute_channel_id(&priority_secret),
                 secret: priority_secret,
             },
         }
@@ -280,10 +279,10 @@ fn build_priority_secret(ordinary_secret: [u8; 32]) -> [u8; 32] {
 
 pub type AdnlChannelId = [u8; 32];
 
-fn compute_channel_id(secret: [u8; 32]) -> AdnlChannelId {
-    hash(ton::pub_::publickey::Aes {
-        key: ton::int256(secret),
-    })
+#[inline(always)]
+fn compute_channel_id(key: &[u8; 32]) -> AdnlChannelId {
+    let key = everscale_crypto::tl::PublicKey::Aes { key };
+    tl_proto::hash(key)
 }
 
 fn decode_version(prefix: &[u8; 68]) -> Option<u16> {

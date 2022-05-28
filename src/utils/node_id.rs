@@ -3,10 +3,6 @@ use std::convert::TryFrom;
 use anyhow::Result;
 use everscale_crypto::{ed25519, tl};
 use rand::Rng;
-use sha2::Digest;
-use ton_api::{ton, IntoBoxed};
-
-use super::{serialize, serialize_boxed};
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct AdnlNodeIdFull(ed25519::PublicKey);
@@ -26,12 +22,6 @@ impl AdnlNodeIdFull {
         self.0.as_tl()
     }
 
-    pub fn as_old_tl(&self) -> ton::pub_::publickey::Ed25519 {
-        ton::pub_::publickey::Ed25519 {
-            key: ton::int256(self.0.to_bytes()),
-        }
-    }
-
     pub fn verify<T: tl_proto::TlWrite>(
         &self,
         message: T,
@@ -47,57 +37,14 @@ impl AdnlNodeIdFull {
         }
     }
 
-    pub fn verify_raw(
-        &self,
-        message: &[u8],
-        other_signature: &[u8],
-    ) -> Result<(), AdnlNodeIdFullError> {
-        let other_signature = <[u8; 64]>::try_from(other_signature)
-            .map_err(|_| AdnlNodeIdFullError::InvalidSignature)?;
-
-        if self.0.verify_raw(message, &other_signature) {
-            Ok(())
-        } else {
-            Err(AdnlNodeIdFullError::InvalidSignature)
-        }
-    }
-
-    pub fn verify_boxed<T, F>(&self, data: &T, extractor: F) -> Result<(), AdnlNodeIdFullError>
-    where
-        T: IntoBoxed + Clone,
-        F: FnOnce(&mut T) -> &mut ton::bytes,
-    {
-        let mut data = data.clone();
-        let signature = std::mem::take(&mut extractor(&mut data).0);
-        let buffer = serialize_boxed(data);
-        self.verify_raw(&buffer, &signature)
-    }
-
     pub fn compute_short_id(&self) -> AdnlNodeIdShort {
-        let mut hash = sha2::Sha256::new();
-        tl_proto::HashWrapper(self.0.as_tl()).update_hasher(&mut hash);
-        AdnlNodeIdShort::new(hash.finalize().into())
+        AdnlNodeIdShort::new(tl_proto::hash(self.0.as_tl()))
     }
 }
 
 impl From<ed25519::PublicKey> for AdnlNodeIdFull {
     fn from(key: ed25519::PublicKey) -> Self {
         Self::new(key)
-    }
-}
-
-impl TryFrom<&ton::PublicKey> for AdnlNodeIdFull {
-    type Error = anyhow::Error;
-
-    fn try_from(public_key: &ton::PublicKey) -> Result<Self> {
-        match public_key {
-            ton::PublicKey::Pub_Ed25519(public_key) => {
-                let public_key = ed25519::PublicKey::from_bytes(public_key.key.0)
-                    .ok_or(AdnlNodeIdError::InvalidPublicKey)?;
-                Ok(Self::new(public_key))
-            }
-            _ => Err(AdnlNodeIdError::UnsupportedPublicKey.into()),
-        }
     }
 }
 
@@ -142,12 +89,6 @@ impl AdnlNodeIdShort {
     pub fn is_zero(&self) -> bool {
         self == &[0; 32]
     }
-
-    pub const fn as_tl(&self) -> ton::adnl::id::short::Short {
-        ton::adnl::id::short::Short {
-            id: ton::int256(self.0),
-        }
-    }
 }
 
 impl std::fmt::Display for AdnlNodeIdShort {
@@ -183,12 +124,6 @@ impl PartialEq<[u8; 32]> for AdnlNodeIdShort {
 impl From<AdnlNodeIdShort> for [u8; 32] {
     fn from(id: AdnlNodeIdShort) -> Self {
         id.0
-    }
-}
-
-impl From<AdnlNodeIdShort> for ton::int256 {
-    fn from(id: AdnlNodeIdShort) -> Self {
-        ton::int256(id.0)
     }
 }
 
@@ -265,24 +200,7 @@ impl StoredAdnlNodeKey {
 
     #[inline(always)]
     pub fn sign<T: tl_proto::TlWrite>(&self, data: T) -> [u8; 64] {
+        let _ = tl_proto::TlAssert::<T>::BOXED_WRITE;
         self.private_key.sign(data, self.full_id.public_key())
-    }
-
-    #[inline(always)]
-    pub fn sign_raw(&self, data: &[u8]) -> [u8; 64] {
-        self.private_key.sign_raw(data, self.full_id.public_key())
-    }
-
-    pub fn sign_boxed<T, F, R>(&self, data: T, inserter: F) -> R
-    where
-        T: IntoBoxed,
-        F: FnOnce(T::Boxed, ton::bytes) -> R,
-    {
-        let data = data.into_boxed();
-        let mut buffer = serialize(&data);
-        let signature = self.sign_raw(&buffer);
-        buffer.truncate(0);
-        buffer.extend_from_slice(signature.as_ref());
-        inserter(data, ton::bytes(buffer))
     }
 }

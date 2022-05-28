@@ -5,7 +5,6 @@ use anyhow::Result;
 use parking_lot::Mutex;
 use tl_proto::TlWrite;
 use tokio::sync::mpsc;
-use ton_api::ton;
 
 use super::incoming_transfer::*;
 use super::outgoing_transfer::*;
@@ -465,21 +464,17 @@ async fn answer_loop(
     force_compression: bool,
 ) -> Result<Option<TransferId>> {
     // Deserialize incoming query
-    let query = match deserialize(&incoming_context.transfer.take_data())?
-        .downcast::<ton::rldp::Message>()
-    {
-        Ok(ton::rldp::Message::Rldp_Query(query)) => query,
-        _ => return Err(TransfersCacheError::UnexpectedMessage.into()),
+    let query = match OwnedRldpMessageQuery::from_data(incoming_context.transfer.take_data()) {
+        Some(query) => query,
+        None => return Err(TransfersCacheError::UnexpectedMessage.into()),
     };
-
-    let max_answer_size = query.max_answer_size as usize;
 
     // Process query
     let answer = match process_message_rldp_query(
         &incoming_context.local_id,
         &incoming_context.peer_id,
         &subscribers,
-        *query,
+        query,
         force_compression,
     )
     .await?
@@ -489,13 +484,7 @@ async fn answer_loop(
         QueryProcessingResult::Rejected => return Err(TransfersCacheError::NoSubscribers.into()),
     };
 
-    // Check answer
-    if answer.data.len() > max_answer_size {
-        return Err(TransfersCacheError::AnswerSizeExceeded.into());
-    }
-
     // Create outgoing transfer
-    let answer = serialize_boxed(answer);
     let outgoing_transfer_id = negate_id(incoming_context.transfer_id);
     let outgoing_transfer = OutgoingTransfer::new(answer, Some(outgoing_transfer_id));
     transfers.insert(
@@ -577,8 +566,6 @@ const TRANSFER_LOOP_INTERVAL: u64 = 10; // Milliseconds
 enum TransfersCacheError {
     #[error("Unexpected message")]
     UnexpectedMessage,
-    #[error("Answer size exceeded")]
-    AnswerSizeExceeded,
     #[error("No subscribers for query")]
     NoSubscribers,
 }

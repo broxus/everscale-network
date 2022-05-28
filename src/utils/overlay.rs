@@ -1,41 +1,35 @@
 use std::convert::TryFrom;
 
 use anyhow::Result;
-use sha2::Digest;
-use ton_api::ton;
 
 use crate::proto;
 use crate::utils::AdnlNodeIdFull;
 
-pub fn verify_node(overlay_id: &OverlayIdShort, node: &ton::overlay::node::Node) -> Result<()> {
-    if node.overlay.0 != overlay_id.0 {
+pub fn verify_node(overlay_id: &OverlayIdShort, node: &proto::overlay::Node) -> Result<()> {
+    if node.overlay != &overlay_id.0 {
         return Err(OverlayError::OverlayIdMismatch.into());
     }
 
-    let full_id = AdnlNodeIdFull::try_from(&node.id)?;
+    let full_id = AdnlNodeIdFull::try_from(node.id)?;
     let peer_id = full_id.compute_short_id();
 
     let node_to_sign = proto::overlay::NodeToSign {
         id: peer_id.as_slice(),
-        overlay: &node.overlay.0,
-        version: node.version as u32,
+        overlay: node.overlay,
+        version: node.version,
     };
 
-    full_id.verify(&node_to_sign, &node.signature)?;
+    full_id.verify(&node_to_sign, node.signature)?;
 
     Ok(())
 }
 
 pub fn compute_overlay_id(workchain: i32, zero_state_file_hash: FileHash) -> OverlayIdFull {
-    let mut hash = sha2::Sha256::new();
-    tl_proto::HashWrapper(proto::overlay::ShardPublicOverlayId {
+    OverlayIdFull(tl_proto::hash(proto::overlay::ShardPublicOverlayId {
         workchain,
         shard: 1u64 << 63,
         zero_state_file_hash: &zero_state_file_hash,
-    })
-    .update_hasher(&mut hash);
-
-    OverlayIdFull(hash.finalize().into())
+    }))
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -47,10 +41,8 @@ impl OverlayIdFull {
     }
 
     pub fn compute_short_id(&self) -> OverlayIdShort {
-        let mut hash = sha2::Sha256::new();
-        tl_proto::HashWrapper(everscale_crypto::tl::PublicKey::Overlay { name: &self.0 })
-            .update_hasher(&mut hash);
-        OverlayIdShort(hash.finalize().into())
+        let key = everscale_crypto::tl::PublicKey::Overlay { name: &self.0 };
+        OverlayIdShort(tl_proto::hash(key))
     }
 }
 
@@ -84,18 +76,6 @@ impl From<OverlayIdShort> for [u8; 32] {
 impl From<&OverlayIdShort> for [u8; 32] {
     fn from(id: &OverlayIdShort) -> Self {
         id.0
-    }
-}
-
-impl From<ton::overlay::Message> for OverlayIdShort {
-    fn from(message: ton::overlay::Message) -> Self {
-        Self(message.only().overlay.0)
-    }
-}
-
-impl From<ton::rpc::overlay::Query> for OverlayIdShort {
-    fn from(query: ton::rpc::overlay::Query) -> Self {
-        Self(query.overlay.0)
     }
 }
 

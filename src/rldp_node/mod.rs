@@ -136,15 +136,19 @@ impl Subscriber for RldpNode {
         &self,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
+        constructor: u32,
         data: &[u8],
     ) -> Result<bool> {
-        let message = match tl_proto::deserialize(data) {
-            Ok(message) => message,
-            Err(_) => return Ok(false),
-        };
+        if constructor != proto::rldp::MessagePart::TL_ID_MESSAGE_PART
+            && constructor != proto::rldp::MessagePart::TL_ID_CONFIRM
+            && constructor != proto::rldp::MessagePart::TL_ID_COMPLETE
+        {
+            return Ok(false);
+        }
 
+        let message_part = tl_proto::deserialize(data)?;
         self.transfers
-            .handle_message(local_id, peer_id, message)
+            .handle_message(local_id, peer_id, message_part)
             .await?;
 
         Ok(true)

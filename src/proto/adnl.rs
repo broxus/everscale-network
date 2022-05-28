@@ -1,5 +1,5 @@
 use smallvec::SmallVec;
-use tl_proto::{TlError, TlPacket, TlRead, TlResult, TlWrite};
+use tl_proto::{BoxedConstructor, TlError, TlPacket, TlRead, TlResult, TlWrite};
 
 use super::HashRef;
 use crate::utils::PacketView;
@@ -10,7 +10,7 @@ pub struct OutgoingPacketContents<'tl> {
     pub rand1: &'tl [u8],
     pub from: Option<everscale_crypto::tl::PublicKey<'tl>>,
     pub messages: OutgoingMessages<'tl>,
-    pub address: AddressList<'tl>,
+    pub address: AddressList,
     pub seqno: u64,
     pub confirm_seqno: u64,
     pub reinit_dates: Option<ReinitDates>,
@@ -20,6 +20,8 @@ pub struct OutgoingPacketContents<'tl> {
 }
 
 impl<'tl> TlWrite for OutgoingPacketContents<'tl> {
+    const TL_WRITE_BOXED: bool = true;
+
     fn max_size_hint(&self) -> usize {
         8 // rand1 (1 byte length, 7 bytes data)
             + 4 // flags
@@ -77,6 +79,8 @@ impl OutgoingMessages<'_> {
 }
 
 impl<'tl> TlWrite for OutgoingMessages<'tl> {
+    const TL_WRITE_BOXED: bool = false;
+
     #[inline(always)]
     fn max_size_hint(&self) -> usize {
         match self {
@@ -106,7 +110,7 @@ pub struct IncomingPacketContents<'tl> {
     pub from_short: Option<HashRef<'tl>>,
 
     pub messages: SmallVec<[Message<'tl>; 2]>,
-    pub address: Option<AddressList<'tl>>,
+    pub address: Option<AddressList>,
 
     pub seqno: Option<u64>,
     pub confirm_seqno: Option<u64>,
@@ -117,6 +121,8 @@ pub struct IncomingPacketContents<'tl> {
 }
 
 impl<'tl> TlRead<'tl> for IncomingPacketContents<'tl> {
+    const TL_READ_BOXED: bool = true;
+
     fn read_from(packet: &'tl [u8], offset: &mut usize) -> TlResult<Self> {
         #[inline(always)]
         fn read_optional<'tl, T: TlRead<'tl>, const N: usize>(
@@ -314,16 +320,22 @@ pub enum Message<'tl> {
 }
 
 #[derive(Debug, Copy, Clone)]
-pub struct AddressList<'tl> {
+pub struct AddressList {
     /// Single address instead of list, because only one is always passed
-    pub address: Option<Address<'tl>>,
+    pub address: Option<Address>,
     pub version: u32,
     pub reinit_date: u32,
     pub priority: u32,
     pub expire_at: u32,
 }
 
-impl TlWrite for AddressList<'_> {
+impl BoxedConstructor for AddressList {
+    const TL_ID: u32 = 0x2227e658;
+}
+
+impl TlWrite for AddressList {
+    const TL_WRITE_BOXED: bool = false;
+
     fn max_size_hint(&self) -> usize {
         // 4 bytes - address vector size
         // optional address size
@@ -347,7 +359,9 @@ impl TlWrite for AddressList<'_> {
     }
 }
 
-impl<'tl> TlRead<'tl> for AddressList<'tl> {
+impl<'tl> TlRead<'tl> for AddressList {
+    const TL_READ_BOXED: bool = false;
+
     fn read_from(packet: &'tl [u8], offset: &mut usize) -> TlResult<Self> {
         let address_count = u32::read_from(packet, offset)?;
         let mut address = None;
@@ -375,15 +389,17 @@ impl<'tl> TlRead<'tl> for AddressList<'tl> {
 
 #[derive(Debug, Copy, Clone, TlRead, TlWrite)]
 #[tl(boxed)]
-pub enum Address<'tl> {
+#[non_exhaustive]
+pub enum Address {
     #[tl(id = 0x670da6e7, size_hint = 8)]
     Udp { ip: u32, port: u32 },
-    #[tl(id = 0xe31d63fa, size_hint = 20)]
-    Udp6 { ip: &'tl [u8; 16], port: u32 },
-    #[tl(id = 0x092b02eb)]
-    Tunnel {
-        #[tl(size_hint = 32)]
-        to: HashRef<'tl>,
-        pubkey: everscale_crypto::tl::PublicKey<'tl>,
-    },
+    // Disabled until ipv6 is widely supported
+    // #[tl(id = 0xe31d63fa, size_hint = 20)]
+    // Udp6 { ip: [u8; 16], port: u32 },
+}
+
+#[derive(Copy, Clone, TlRead, TlWrite)]
+#[tl(boxed, id = 0x20747c0e, size_hint = 8)]
+pub struct Pong {
+    pub value: u64,
 }

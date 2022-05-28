@@ -1,100 +1,10 @@
-use std::hash::{BuildHasherDefault, Hash};
+use std::hash::Hash;
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::sync::atomic::{AtomicI32, Ordering};
 
 use anyhow::Result;
-use ton_api::ton::adnl::Address;
-use ton_api::{ton, IntoBoxed};
 
-use super::{now, FxDashSet};
+use super::now;
 use crate::proto;
-
-pub trait AdnlAddress: Sized {
-    fn is_public(&self) -> bool;
-    fn serialized_size(&self) -> usize;
-    fn as_tl(&self) -> proto::adnl::Address;
-    fn as_old_tl(&self) -> ton::adnl::Address;
-}
-
-pub struct AdnlAddressList<T> {
-    version: AtomicI32,
-    reinit_date: AtomicI32,
-    expire_at: AtomicI32,
-    priority: AtomicI32,
-    addresses: FxDashSet<T>,
-}
-
-impl<T> AdnlAddressList<T>
-where
-    T: AdnlAddress + Hash + Eq,
-{
-    pub fn version(&self) -> i32 {
-        self.version.load(Ordering::Acquire)
-    }
-
-    pub fn set_version(&self, version: i32) {
-        self.version.store(version, Ordering::Release);
-    }
-
-    pub fn reinit_date(&self) -> i32 {
-        self.reinit_date.load(Ordering::Acquire)
-    }
-
-    pub fn set_reinit_date(&self, reinit_date: i32) {
-        self.reinit_date.store(reinit_date, Ordering::Release);
-    }
-
-    pub fn expire_at(&self) -> i32 {
-        self.expire_at.load(Ordering::Acquire)
-    }
-
-    pub fn set_expire_at(&self, date: i32) {
-        self.expire_at.store(date, Ordering::Release);
-    }
-
-    pub fn priority(&self) -> i32 {
-        self.priority.load(Ordering::Acquire)
-    }
-
-    pub fn public_only(&self) -> bool {
-        self.addresses.iter().all(|addr| addr.is_public())
-    }
-
-    pub fn iter(
-        &self,
-    ) -> impl Iterator<
-        Item = dashmap::setref::multiple::RefMulti<T, BuildHasherDefault<rustc_hash::FxHasher>>,
-    > {
-        self.addresses.iter()
-    }
-
-    pub fn push(&self, address: T) {
-        self.addresses.insert(address);
-    }
-
-    pub fn len(&self) -> usize {
-        self.addresses.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.addresses.is_empty()
-    }
-
-    pub fn as_tl(&self) -> ton::adnl::addresslist::AddressList {
-        ton::adnl::addresslist::AddressList {
-            addrs: self
-                .addresses
-                .iter()
-                .map(|item| item.key().as_old_tl())
-                .collect::<Vec<_>>()
-                .into(),
-            version: self.version(),
-            reinit_date: self.reinit_date(),
-            priority: self.priority(),
-            expire_at: self.expire_at(),
-        }
-    }
-}
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct AdnlAddressUdp(u64);
@@ -115,6 +25,13 @@ impl AdnlAddressUdp {
 
     pub fn port(&self) -> u16 {
         self.0 as u16
+    }
+
+    pub fn as_tl(&self) -> proto::adnl::Address {
+        proto::adnl::Address::Udp {
+            ip: (self.0 >> 16) as u32,
+            port: self.0 as u16 as u32,
+        }
     }
 }
 
@@ -143,31 +60,6 @@ impl From<AdnlAddressUdp> for u64 {
     }
 }
 
-impl AdnlAddress for AdnlAddressUdp {
-    fn is_public(&self) -> bool {
-        true
-    }
-
-    fn serialized_size(&self) -> usize {
-        12
-    }
-
-    fn as_tl(&self) -> proto::adnl::Address {
-        proto::adnl::Address::Udp {
-            ip: (self.0 >> 16) as u32,
-            port: self.0 as u16 as u32,
-        }
-    }
-
-    fn as_old_tl(&self) -> Address {
-        ton::adnl::address::address::Udp {
-            ip: (self.0 >> 16) as i32,
-            port: self.0 as u16 as i32,
-        }
-        .into_boxed()
-    }
-}
-
 impl std::fmt::Display for AdnlAddressUdp {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_fmt(format_args!(
@@ -181,8 +73,8 @@ impl std::fmt::Display for AdnlAddressUdp {
     }
 }
 
-pub fn parse_address_list_view(
-    list: &proto::adnl::AddressList<'_>,
+pub fn parse_address_list(
+    list: &proto::adnl::AddressList,
     clock_tolerance: u32,
 ) -> Result<AdnlAddressUdp> {
     let address = list.address.ok_or(AdnlAddressListError::ListIsEmpty)?;
@@ -199,34 +91,7 @@ pub fn parse_address_list_view(
     match address {
         proto::adnl::Address::Udp { ip, port } => {
             Ok(AdnlAddressUdp::from_ip_and_port(ip, port as u16))
-        }
-        _ => Err(AdnlAddressListError::UnsupportedAddress.into()),
-    }
-}
-
-pub fn parse_address_list(
-    list: &ton::adnl::addresslist::AddressList,
-    clock_tolerance: u32,
-) -> Result<AdnlAddressUdp> {
-    if list.addrs.is_empty() {
-        return Err(AdnlAddressListError::ListIsEmpty.into());
-    }
-
-    let version = now() as i32;
-    if list.reinit_date > version + clock_tolerance as i32 {
-        return Err(AdnlAddressListError::TooNewVersion.into());
-    }
-
-    if list.expire_at != 0 && list.expire_at < version {
-        return Err(AdnlAddressListError::Expired.into());
-    }
-
-    match &list.addrs[0] {
-        Address::Adnl_Address_Udp(address) => Ok(AdnlAddressUdp::from_ip_and_port(
-            address.ip as u32,
-            address.port as u16,
-        )),
-        _ => Err(AdnlAddressListError::UnsupportedAddress.into()),
+        } // _ => Err(AdnlAddressListError::UnsupportedAddress.into()),
     }
 }
 
@@ -238,6 +103,4 @@ enum AdnlAddressListError {
     TooNewVersion,
     #[error("Address list is expired")]
     Expired,
-    #[error("Unsupported address")]
-    UnsupportedAddress,
 }

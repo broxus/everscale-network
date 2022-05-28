@@ -7,9 +7,9 @@ use anyhow::Result;
 use crossbeam_queue::SegQueue;
 use parking_lot::Mutex;
 use sha2::Digest;
+use smallvec::SmallVec;
 use tl_proto::{HashWrapper, TlWrite};
 use tokio::sync::mpsc;
-use ton_api::{ton, IntoBoxed};
 
 use super::{broadcast_receiver::*, MAX_OVERLAY_PEERS};
 use crate::adnl_node::*;
@@ -30,9 +30,8 @@ pub struct OverlayShard {
 
     received_peers: Arc<Mutex<ReceivedPeersMap>>,
     received_broadcasts: Arc<BroadcastReceiver<IncomingBroadcastInfo>>,
-    received_catchain: Arc<BroadcastReceiver<CatchainUpdate>>,
 
-    nodes: FxDashMap<AdnlNodeIdShort, ton::overlay::node::Node>,
+    nodes: FxDashMap<AdnlNodeIdShort, proto::overlay::NodeOwned>,
     ignored_peers: FxDashSet<AdnlNodeIdShort>,
     known_peers: PeersCache,
     random_peers: PeersCache,
@@ -95,12 +94,11 @@ impl OverlayShard {
         overlay_key: Option<Arc<StoredAdnlNodeKey>>,
         options: OverlayShardOptions,
     ) -> Arc<Self> {
-        let query_prefix = serialize(&ton::rpc::overlay::Query {
-            overlay: ton::int256(overlay_id.into()),
+        let query_prefix = tl_proto::serialize(proto::rpc::OverlayQuery {
+            overlay: overlay_id.as_slice(),
         });
-
-        let message_prefix = serialize_boxed(ton::overlay::message::Message {
-            overlay: ton::int256(overlay_id.into()),
+        let message_prefix = tl_proto::serialize(proto::overlay::Message {
+            overlay: overlay_id.as_slice(),
         });
 
         let overlay = Arc::new(Self {
@@ -114,7 +112,6 @@ impl OverlayShard {
             finished_broadcast_count: AtomicU32::new(0),
             received_peers: Arc::new(Default::default()),
             received_broadcasts: Arc::new(BroadcastReceiver::default()),
-            received_catchain: Arc::new(BroadcastReceiver::default()),
             nodes: FxDashMap::default(),
             ignored_peers: FxDashSet::default(),
             known_peers: PeersCache::with_capacity(MAX_OVERLAY_PEERS),
@@ -178,8 +175,6 @@ impl OverlayShard {
             neighbours: self.neighbours.len(),
             received_broadcasts_data_len: self.received_broadcasts.data_len(),
             received_broadcasts_barrier_count: self.received_broadcasts.barriers_len(),
-            received_catchain_data_len: self.received_catchain.data_len(),
-            received_catchain_barrier_count: self.received_catchain.barriers_len(),
         }
     }
 
@@ -219,7 +214,7 @@ impl OverlayShard {
     pub fn add_public_peer(
         &self,
         ip_address: AdnlAddressUdp,
-        node: ton::overlay::node::Node,
+        node: proto::overlay::Node<'_>,
     ) -> Result<Option<AdnlNodeIdShort>> {
         if self.is_private() {
             return Err(OverlayShardError::PublicPeerToPrivateOverlay.into());
@@ -230,7 +225,7 @@ impl OverlayShard {
             return Ok(None);
         }
 
-        let peer_id_full = AdnlNodeIdFull::try_from(&node.id)?;
+        let peer_id_full = AdnlNodeIdFull::try_from(node.id)?;
         let peer_id = peer_id_full.compute_short_id();
 
         let is_new_peer = self.adnl.add_peer(
@@ -248,9 +243,9 @@ impl OverlayShard {
         }
     }
 
-    pub fn add_public_peers<I>(&self, nodes: I) -> Result<Vec<AdnlNodeIdShort>>
+    pub fn add_public_peers<'a, I>(&self, nodes: I) -> Result<Vec<AdnlNodeIdShort>>
     where
-        I: IntoIterator<Item = (AdnlAddressUdp, ton::overlay::node::Node)>,
+        I: IntoIterator<Item = (AdnlAddressUdp, proto::overlay::Node<'a>)>,
     {
         if self.is_private() {
             return Err(OverlayShardError::PublicPeerToPrivateOverlay.into());
@@ -263,7 +258,7 @@ impl OverlayShard {
                 continue;
             }
 
-            let peer_id_full = AdnlNodeIdFull::try_from(&node.id)?;
+            let peer_id_full = AdnlNodeIdFull::try_from(node.id)?;
             let peer_id = peer_id_full.compute_short_id();
 
             let is_new_peer = self.adnl.add_peer(
@@ -297,11 +292,13 @@ impl OverlayShard {
         dst.randomly_fill_from(&self.known_peers, amount, Some(&self.ignored_peers));
     }
 
-    pub fn query_prefix(&self) -> &Vec<u8> {
+    #[inline(always)]
+    pub fn query_prefix(&self) -> &[u8] {
         &self.query_prefix
     }
 
-    pub fn message_prefix(&self) -> &Vec<u8> {
+    #[inline(always)]
+    pub fn message_prefix(&self) -> &[u8] {
         &self.message_prefix
     }
 
@@ -344,31 +341,25 @@ impl OverlayShard {
         std::mem::take(&mut *peers)
     }
 
-    pub fn push_peers(&self, peers: Vec<ton::overlay::node::Node>) {
+    pub fn push_peers<'a, I>(&self, peers: I)
+    where
+        I: IntoIterator<Item = proto::overlay::Node<'a>>,
+    {
         use std::collections::hash_map::Entry;
 
         let mut known_peers = self.received_peers.lock();
         for node in peers {
-            match known_peers.entry(node.id.clone()) {
+            match known_peers.entry(HashWrapper(node.id.as_equivalent_owned())) {
                 Entry::Occupied(mut entry) => {
                     if entry.get().version < node.version {
-                        entry.insert(node);
+                        entry.insert(node.as_equivalent_owned());
                     }
                 }
                 Entry::Vacant(entry) => {
-                    entry.insert(node);
+                    entry.insert(node.as_equivalent_owned());
                 }
             }
         }
-    }
-
-    pub async fn wait_for_catchain(&self) -> CatchainUpdate {
-        self.received_catchain.pop().await
-    }
-
-    #[allow(dead_code)]
-    pub fn push_catchain(&self, update: CatchainUpdate) {
-        self.received_catchain.push(update);
     }
 
     pub async fn receive_broadcast(
@@ -646,15 +637,18 @@ impl OverlayShard {
         info
     }
 
-    pub async fn query(
+    pub async fn query<T>(
         &self,
         peer_id: &AdnlNodeIdShort,
-        query: &ton::TLObject,
+        query: T,
         timeout: Option<u64>,
-    ) -> Result<Option<ton::TLObject>> {
+    ) -> Result<Option<Vec<u8>>>
+    where
+        T: TlWrite,
+    {
         let local_id = self.overlay_key().id();
         self.adnl
-            .query_with_prefix(local_id, peer_id, Some(self.query_prefix()), query, timeout)
+            .query_with_prefix(local_id, peer_id, self.query_prefix(), query, timeout)
             .await
     }
 
@@ -672,34 +666,54 @@ impl OverlayShard {
     pub async fn get_random_peers(
         &self,
         peer_id: &AdnlNodeIdShort,
+        existing_peers: &FxDashSet<AdnlNodeIdShort>,
         timeout: Option<u64>,
-    ) -> Result<Option<Vec<ton::overlay::node::Node>>> {
-        let query = ton::TLObject::new(ton::rpc::overlay::GetRandomPeers {
+    ) -> Result<Option<Vec<AdnlNodeIdShort>>> {
+        let query = proto::rpc::OverlayGetRandomPeersOwned {
             peers: self.prepare_random_peers(),
-        });
-        match self.query(peer_id, &query, timeout).await? {
-            Some(answer) => {
-                let answer: ton::overlay::Nodes = parse_answer(answer)?;
-                tracing::trace!("Got random peers from {peer_id}");
-                Ok(Some(self.process_nodes(answer.only())))
-            }
+        };
+        let answer = match self.query(peer_id, query, timeout).await? {
+            Some(answer) => answer,
             None => {
                 tracing::trace!("No random peers from {peer_id}");
-                Ok(None)
+                return Ok(None);
             }
-        }
+        };
+
+        let answer = tl_proto::deserialize(&answer)?;
+        tracing::trace!("Got random peers from {peer_id}");
+        let proto::overlay::Nodes { nodes } = self.process_nodes(answer);
+
+        let nodes = nodes
+            .into_iter()
+            .filter_map(|node| match AdnlNodeIdFull::try_from(node.id) {
+                Ok(full_id) => {
+                    let peer_id = full_id.compute_short_id();
+                    if !existing_peers.contains(&peer_id) {
+                        Some(peer_id)
+                    } else {
+                        None
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to process peer: {e}");
+                    None
+                }
+            })
+            .collect();
+        Ok(Some(nodes))
     }
 
     pub fn process_get_random_peers(
         &self,
-        query: ton::rpc::overlay::GetRandomPeers,
-    ) -> ton::overlay::nodes::Nodes {
-        let peers = self.process_nodes(query.peers);
+        query: proto::rpc::OverlayGetRandomPeers<'_>,
+    ) -> proto::overlay::NodesOwned {
+        let peers = self.process_nodes(query.peers).nodes;
         self.push_peers(peers);
         self.prepare_random_peers()
     }
 
-    pub fn sign_local_node(&self) -> ton::overlay::node::Node {
+    pub fn sign_local_node(&self) -> proto::overlay::NodeOwned {
         let key = self.overlay_key();
         let version = now();
 
@@ -710,56 +724,51 @@ impl OverlayShard {
         };
         let signature = key.sign(&node_to_sign);
 
-        ton::overlay::node::Node {
-            id: key.full_id().as_old_tl().into_boxed(),
-            overlay: ton::int256(self.id().into()),
-            version: version as i32,
-            signature: ton::bytes(signature.to_vec()),
+        proto::overlay::NodeOwned {
+            id: key.full_id().as_tl().as_equivalent_owned(),
+            overlay: *self.id().as_slice(),
+            version,
+            signature: signature.to_vec(),
         }
     }
 
-    fn process_nodes(&self, nodes: ton::overlay::nodes::Nodes) -> Vec<ton::overlay::node::Node> {
+    fn process_nodes<'a>(&self, mut nodes: proto::overlay::Nodes<'a>) -> proto::overlay::Nodes<'a> {
         tracing::trace!("-------- Got random peers");
 
-        let mut result = Vec::new();
-
-        for node in nodes.nodes.0 {
+        nodes.nodes.retain(|node| {
             if !matches!(
-                &node.id,
-                ton::PublicKey::Pub_Ed25519(id)
-                if &id.key.0 != self.node_key.full_id().public_key().as_bytes()
+                node.id,
+                everscale_crypto::tl::PublicKey::Ed25519 { key }
+                if key != self.node_key.full_id().public_key().as_bytes()
             ) {
-                continue;
+                return false;
             }
 
             tracing::trace!("{node:?}");
-            if let Err(e) = verify_node(&self.overlay_id, &node) {
+            if let Err(e) = verify_node(&self.overlay_id, node) {
                 tracing::warn!("Error during overlay peer verification: {e:?}");
-                continue;
+                return false;
             }
 
-            result.push(node);
-        }
+            true
+        });
 
-        result
+        nodes
     }
 
-    fn prepare_random_peers(&self) -> ton::overlay::nodes::Nodes {
-        let mut result = vec![self.sign_local_node()];
+    fn prepare_random_peers(&self) -> proto::overlay::NodesOwned {
+        let mut nodes = SmallVec::with_capacity(MAX_RANDOM_PEERS + 1);
+        nodes.push(self.sign_local_node());
 
-        let amount = MAX_RANDOM_PEERS;
-
-        let peers = PeersCache::with_capacity(amount);
-        peers.randomly_fill_from(&self.random_peers, amount, None);
+        let peers = PeersCache::with_capacity(MAX_RANDOM_PEERS);
+        peers.randomly_fill_from(&self.random_peers, MAX_RANDOM_PEERS, None);
         for peer_id in &peers {
             if let Some(node) = self.nodes.get(peer_id) {
-                result.push(node.clone());
+                nodes.push(node.clone());
             }
         }
 
-        ton::overlay::nodes::Nodes {
-            nodes: result.into(),
-        }
+        proto::overlay::NodesOwned { nodes }
     }
 
     fn update_random_peers(&self, amount: usize) {
@@ -780,7 +789,7 @@ impl OverlayShard {
         }
     }
 
-    fn insert_public_peer(&self, peer_id: &AdnlNodeIdShort, node: ton::overlay::node::Node) {
+    fn insert_public_peer(&self, peer_id: &AdnlNodeIdShort, node: proto::overlay::Node<'_>) {
         use dashmap::mapref::entry::Entry;
 
         self.ignored_peers.remove(peer_id);
@@ -797,11 +806,11 @@ impl OverlayShard {
         match self.nodes.entry(*peer_id) {
             Entry::Occupied(mut entry) => {
                 if entry.get().version < node.version {
-                    entry.insert(node);
+                    entry.insert(node.as_equivalent_owned());
                 }
             }
             Entry::Vacant(entry) => {
-                entry.insert(node);
+                entry.insert(node.as_equivalent_owned());
             }
         }
     }
@@ -989,8 +998,6 @@ pub struct OverlayShardMetrics {
     pub neighbours: usize,
     pub received_broadcasts_data_len: usize,
     pub received_broadcasts_barrier_count: usize,
-    pub received_catchain_data_len: usize,
-    pub received_catchain_barrier_count: usize,
 }
 
 fn process_fec_broadcast(
@@ -1049,9 +1056,7 @@ struct OverlayBroadcastToSign {
 
 impl OverlayBroadcastToSign {
     fn compute_broadcast_id(&self) -> BroadcastId {
-        let mut broadcast_id = sha2::Sha256::new();
-        HashWrapper(self).update_hasher(&mut broadcast_id);
-        broadcast_id.finalize().into()
+        tl_proto::hash(self)
     }
 }
 
@@ -1096,11 +1101,7 @@ fn make_fec_part_to_sign(
             .map(AdnlNodeIdShort::as_slice)
             .unwrap_or(&[0; 32]),
     );
-    broadcast_hash.update({
-        let mut hash = sha2::Sha256::new();
-        HashWrapper(params).update_hasher(&mut hash);
-        hash.finalize().as_slice()
-    });
+    broadcast_hash.update(&tl_proto::hash(params));
     broadcast_hash.update(data_hash);
     broadcast_hash.update(data_size.to_le_bytes());
     broadcast_hash.update(flags.to_le_bytes());
@@ -1129,12 +1130,6 @@ pub struct IncomingBroadcastInfo {
 pub struct OutgoingBroadcastInfo {
     pub packets: u32,
     pub recipient_count: usize,
-}
-
-pub struct CatchainUpdate {
-    pub peer_id: AdnlNodeIdShort,
-    pub catchain_update: ton::catchain::blockupdate::BlockUpdate,
-    pub validator_session_update: ton::validator_session::blockupdate::BlockUpdate,
 }
 
 struct IncomingFecTransfer {
@@ -1169,7 +1164,8 @@ struct BroadcastFec {
     signature: [u8; 64],
 }
 
-pub type ReceivedPeersMap = FxHashMap<ton::PublicKey, ton::overlay::node::Node>;
+pub type ReceivedPeersMap =
+    FxHashMap<HashWrapper<everscale_crypto::tl::PublicKeyOwned>, proto::overlay::NodeOwned>;
 
 type BroadcastFecTx = mpsc::UnboundedSender<BroadcastFec>;
 

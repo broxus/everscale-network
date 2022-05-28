@@ -1,6 +1,65 @@
-use tl_proto::{TlRead, TlWrite};
+use smallvec::SmallVec;
+use tl_proto::{BoxedConstructor, TlRead, TlWrite};
 
 use super::{rldp, HashRef};
+
+#[derive(TlWrite, TlRead)]
+pub struct Nodes<'tl> {
+    pub nodes: SmallVec<[Node<'tl>; 5]>,
+}
+
+impl BoxedConstructor for Nodes<'_> {
+    const TL_ID: u32 = 0xe487290e;
+}
+
+#[derive(TlWrite, TlRead)]
+pub struct NodesOwned {
+    pub nodes: SmallVec<[NodeOwned; 5]>,
+}
+
+impl BoxedConstructor for NodesOwned {
+    const TL_ID: u32 = Nodes::TL_ID;
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, TlWrite, TlRead)]
+pub struct Node<'tl> {
+    pub id: everscale_crypto::tl::PublicKey<'tl>,
+    #[tl(size_hint = 32)]
+    pub overlay: HashRef<'tl>,
+    #[tl(size_hint = 4)]
+    pub version: u32,
+    pub signature: &'tl [u8],
+}
+
+impl Node<'_> {
+    pub fn as_equivalent_owned(&self) -> NodeOwned {
+        NodeOwned {
+            id: self.id.as_equivalent_owned(),
+            overlay: *self.overlay,
+            version: self.version,
+            signature: self.signature.to_vec(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, TlWrite, TlRead)]
+pub struct NodeOwned {
+    pub id: everscale_crypto::tl::PublicKeyOwned,
+    pub overlay: [u8; 32],
+    pub version: u32,
+    pub signature: Vec<u8>,
+}
+
+impl NodeOwned {
+    pub fn as_equivalent_ref(&self) -> Node {
+        Node {
+            id: self.id.as_equivalent_ref(),
+            overlay: &self.overlay,
+            version: self.version,
+            signature: self.signature.as_slice(),
+        }
+    }
+}
 
 #[derive(TlWrite)]
 #[tl(boxed, id = 0x03d8a8e1)]

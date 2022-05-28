@@ -1,14 +1,17 @@
 use std::convert::TryFrom;
+use std::ops::Deref;
 
 use anyhow::Result;
-use ton_api::ton;
+use smallvec::SmallVec;
+use tl_proto::{BoxedConstructor, HashWrapper, TlWrite};
 
 use super::DHT_KEY_NODES;
+use crate::proto;
 use crate::utils::*;
 
 #[derive(Default)]
 pub struct Storage {
-    storage: FxDashMap<StorageKey, ton::dht::value::Value>,
+    storage: FxDashMap<StorageKey, proto::dht::ValueOwned>,
 }
 
 impl Storage {
@@ -22,12 +25,15 @@ impl Storage {
     }
 
     pub fn total_size(&self) -> usize {
-        self.storage.iter().map(|item| item.value.0.len()).sum()
+        self.storage.iter().map(|item| item.value.len()).sum()
     }
 
-    pub fn get(&self, key: &StorageKey) -> Option<ton::dht::value::Value> {
+    pub fn get_ref(
+        &self,
+        key: &StorageKey,
+    ) -> Option<impl Deref<Target = proto::dht::ValueOwned> + '_> {
         match self.storage.get(key) {
-            Some(item) if item.ttl as u32 > now() => Some(item.value().clone()),
+            Some(item) if item.ttl as u32 > now() => Some(item),
             _ => None,
         }
     }
@@ -35,32 +41,34 @@ impl Storage {
     pub fn insert_signed_value(
         &self,
         key: StorageKey,
-        value: ton::dht::value::Value,
+        mut value: proto::dht::Value<'_>,
     ) -> Result<bool> {
         use dashmap::mapref::entry::Entry;
 
-        let full_id = AdnlNodeIdFull::try_from(&value.key.id)?;
-        full_id.verify_boxed(&value.key, |k| &mut k.signature)?;
-        full_id.verify_boxed(&value, |v| &mut v.signature)?;
+        let full_id = AdnlNodeIdFull::try_from(value.key.id)?;
+
+        let key_signature = std::mem::take(&mut value.key.signature);
+        full_id.verify(&value.key, key_signature)?;
+        value.key.signature = key_signature;
+
+        let value_signature = std::mem::take(&mut value.signature);
+        full_id.verify(&value, value_signature)?;
+        value.signature = value_signature;
 
         Ok(match self.storage.entry(key) {
             Entry::Occupied(mut entry) if entry.get().ttl < value.ttl => {
-                entry.insert(value);
+                entry.insert(value.as_equivalent_owned());
                 true
             }
             Entry::Occupied(_) => false,
             Entry::Vacant(entry) => {
-                entry.insert(value);
+                entry.insert(value.as_equivalent_owned());
                 true
             }
         })
     }
 
-    pub fn insert_overlay_nodes(
-        &self,
-        key: StorageKey,
-        value: ton::dht::value::Value,
-    ) -> Result<bool> {
+    pub fn insert_overlay_nodes(&self, key: StorageKey, value: proto::dht::Value) -> Result<bool> {
         use dashmap::mapref::entry::Entry;
 
         if !value.signature.is_empty() || !value.key.signature.is_empty() {
@@ -68,7 +76,9 @@ impl Storage {
         }
 
         let overlay_id = match value.key.id {
-            ton::PublicKey::Pub_Overlay(_) => OverlayIdShort::from(hash_boxed(&value.key.id)),
+            everscale_crypto::tl::PublicKey::Overlay { .. } => {
+                OverlayIdShort::from(tl_proto::hash(value.key.id))
+            }
             _ => return Err(StorageError::InvalidKeyDescription.into()),
         };
 
@@ -76,33 +86,30 @@ impl Storage {
             return Err(StorageError::InvalidDhtKey.into());
         }
 
-        let new_nodes = deserialize_overlay_nodes(&value.value)?
-            .into_iter()
-            .filter(|node| {
-                if verify_node(&overlay_id, node).is_err() {
-                    tracing::warn!("Bad overlay node: {node:?}");
-                    false
-                } else {
-                    true
-                }
-            })
-            .collect::<Vec<_>>();
+        let mut new_nodes = deserialize_overlay_nodes(value.value)?;
+        new_nodes.retain(|node| {
+            if verify_node(&overlay_id, node).is_err() {
+                tracing::warn!("Bad overlay node: {node:?}");
+                false
+            } else {
+                true
+            }
+        });
         if new_nodes.is_empty() {
             return Err(StorageError::EmptyOverlayNodes.into());
         }
 
         match self.storage.entry(key) {
             Entry::Occupied(mut entry) => {
-                let old_nodes = match entry.get().ttl as u32 {
-                    old_ttl if old_ttl < now() => None,
-                    old_ttl if old_ttl > value.ttl as u32 => return Ok(false),
-                    _ => {
-                        let nodes = deserialize_overlay_nodes(&entry.get().value)?;
-                        Some(nodes)
-                    }
+                let value = {
+                    let old_nodes = match entry.get().ttl as u32 {
+                        old_ttl if old_ttl < now() => None,
+                        old_ttl if old_ttl > value.ttl as u32 => return Ok(false),
+                        _ => Some(deserialize_overlay_nodes(&entry.get().value)?),
+                    };
+                    make_overlay_nodes_value(value, new_nodes, old_nodes)
                 };
-
-                entry.insert(make_overlay_nodes_value(value, new_nodes, old_nodes));
+                entry.insert(value);
             }
             Entry::Vacant(entry) => {
                 entry.insert(make_overlay_nodes_value(value, new_nodes, None));
@@ -113,23 +120,23 @@ impl Storage {
     }
 }
 
-fn make_overlay_nodes_value(
-    mut value: ton::dht::value::Value,
-    new_nodes: Vec<ton::overlay::node::Node>,
-    old_nodes: Option<Vec<ton::overlay::node::Node>>,
-) -> ton::dht::value::Value {
+fn make_overlay_nodes_value<'a, 'b, const N: usize>(
+    value: proto::dht::Value<'a>,
+    new_nodes: SmallVec<[proto::overlay::Node<'a>; N]>,
+    old_nodes: Option<SmallVec<[proto::overlay::Node<'b>; N]>>,
+) -> proto::dht::ValueOwned {
     use std::collections::hash_map::Entry;
 
     let mut result = match old_nodes {
         Some(nodes) => nodes
             .into_iter()
-            .map(|item| (item.id.clone(), item))
+            .map(|item| (HashWrapper(item.id), item))
             .collect::<FxHashMap<_, _>>(),
         None => Default::default(),
     };
 
     for node in new_nodes {
-        match result.entry(node.id.clone()) {
+        match result.entry(HashWrapper(node.id)) {
             Entry::Occupied(mut entry) => {
                 if entry.get().version < node.version {
                     entry.insert(node);
@@ -141,22 +148,31 @@ fn make_overlay_nodes_value(
         }
     }
 
-    value.value = ton::bytes(serialize_boxed(ton::overlay::nodes::Nodes {
-        nodes: result
-            .into_iter()
-            .map(|(_, node)| node)
-            .collect::<Vec<_>>()
-            .into(),
-    }));
+    let capacity = result
+        .values()
+        .map(|item| item.max_size_hint())
+        .sum::<usize>();
 
-    value
+    let mut stored_value = Vec::with_capacity(4 + 4 + capacity);
+    stored_value.extend_from_slice(&proto::overlay::Nodes::TL_ID.to_le_bytes());
+    stored_value.extend_from_slice(&(result.len() as u32).to_le_bytes());
+    for node in result.into_values() {
+        node.write_to(&mut stored_value);
+    }
+
+    proto::dht::ValueOwned {
+        key: value.key.as_equivalent_owned(),
+        value: stored_value,
+        ttl: value.ttl,
+        signature: value.signature.to_vec(),
+    }
 }
 
-fn deserialize_overlay_nodes(data: &[u8]) -> Result<Vec<ton::overlay::node::Node>> {
-    let nodes = deserialize(data)?
-        .downcast::<ton::overlay::Nodes>()
-        .map_err(|_| StorageError::InvalidOverlayNodes)?;
-    Ok(nodes.only().nodes.0)
+fn deserialize_overlay_nodes(
+    data: &[u8],
+) -> tl_proto::TlResult<SmallVec<[proto::overlay::Node; 5]>> {
+    let tl_proto::BoxedReader(proto::overlay::Nodes { nodes }) = tl_proto::deserialize(data)?;
+    Ok(nodes)
 }
 
 pub type StorageKey = [u8; 32];
@@ -169,8 +185,6 @@ enum StorageError {
     InvalidKeyDescription,
     #[error("Invalid DHT key")]
     InvalidDhtKey,
-    #[error("Invalid overlay nodes")]
-    InvalidOverlayNodes,
     #[error("Empty overlay nodes list")]
     EmptyOverlayNodes,
 }

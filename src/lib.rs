@@ -1,11 +1,8 @@
 #![allow(clippy::too_many_arguments)]
 
-extern crate core;
-
 pub use adnl_node::{
     AdnlKeystore, AdnlNode, AdnlNodeFilter, AdnlNodeMetrics, AdnlNodeOptions, PeerContext,
 };
-pub use adnl_tcp_client::{AdnlTcpClient, AdnlTcpClientConfig};
 pub use dht_node::{DhtNode, DhtNodeMetrics, DhtNodeOptions, ExternalDhtIter};
 pub use network::{Neighbour, Neighbours, NeighboursMetrics, NeighboursOptions, OverlayClient};
 pub use overlay_node::{
@@ -13,17 +10,13 @@ pub use overlay_node::{
     OverlayShardOptions, MAX_OVERLAY_PEERS,
 };
 pub use rldp_node::{RldpNode, RldpNodeMetrics, RldpNodeOptions};
-pub use subscriber::{
-    AdnlPingSubscriber, OverlaySubscriber, QueryAnswer, QueryBundleConsumingResult,
-    QueryConsumingResult, Subscriber,
-};
+pub use subscriber::{AdnlPingSubscriber, OverlaySubscriber, QueryConsumingResult, Subscriber};
 
 mod adnl_node;
-mod adnl_tcp_client;
 mod dht_node;
 mod network;
 mod overlay_node;
-mod proto;
+pub mod proto;
 mod rldp_node;
 mod subscriber;
 pub mod utils;

@@ -4,14 +4,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use bytes::Bytes;
 use everscale_crypto::ed25519;
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 use sha2::Digest;
-use tl_proto::TlWrite;
+use tl_proto::{TlRead, TlWrite};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use ton_api::ton;
 
 use crate::proto;
 use crate::subscriber::*;
@@ -69,7 +70,7 @@ impl Drop for AdnlNode {
     }
 }
 
-#[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AdnlNodeOptions {
     /// Default: 500
@@ -576,7 +577,7 @@ impl AdnlNode {
             )?;
 
             if let Some(list) = &packet.address {
-                let ip_address = parse_address_list_view(list, self.options.clock_tolerance_sec)?;
+                let ip_address = parse_address_list(list, self.options.clock_tolerance_sec)?;
                 self.add_peer(
                     PeerContext::AdnlPacket,
                     local_id,
@@ -917,17 +918,13 @@ impl AdnlNode {
         self.start_time
     }
 
-    pub fn build_address_list(
-        &self,
-        expire_at: Option<i32>,
-    ) -> ton::adnl::addresslist::AddressList {
-        let now = now();
-        ton::adnl::addresslist::AddressList {
-            addrs: vec![self.ip_address.as_old_tl()].into(),
-            version: now as i32,
-            reinit_date: self.start_time as i32,
+    pub fn build_address_list(&self) -> proto::adnl::AddressList {
+        proto::adnl::AddressList {
+            address: Some(self.ip_address.as_tl()),
+            version: now(),
+            reinit_date: self.start_time,
             priority: 0,
-            expire_at: expire_at.unwrap_or_default(),
+            expire_at: 0,
         }
     }
 
@@ -1026,42 +1023,63 @@ impl AdnlNode {
         )
     }
 
-    pub async fn query(
+    pub async fn query<Q, A>(
         &self,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
-        query: &ton::TLObject,
+        query: Q,
         timeout: Option<u64>,
-    ) -> Result<Option<ton::TLObject>> {
-        self.query_with_prefix(local_id, peer_id, None, query, timeout)
+    ) -> Result<Option<A>>
+    where
+        Q: TlWrite,
+        for<'a> A: TlRead<'a> + 'static,
+    {
+        match self
+            .query_raw(local_id, peer_id, build_query(None, query), timeout)
+            .await?
+        {
+            Some(answer) => Ok(Some(tl_proto::deserialize(&answer)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn query_with_prefix<T>(
+        &self,
+        local_id: &AdnlNodeIdShort,
+        peer_id: &AdnlNodeIdShort,
+        prefix: &[u8],
+        query: T,
+        timeout: Option<u64>,
+    ) -> Result<Option<Vec<u8>>>
+    where
+        T: TlWrite,
+    {
+        self.query_raw(local_id, peer_id, build_query(Some(prefix), query), timeout)
             .await
     }
 
-    #[tracing::instrument(level = "debug", skip_all, fields(local_id, peer_id, query))]
-    pub async fn query_with_prefix(
+    pub async fn query_raw(
         &self,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
-        prefix: Option<&[u8]>,
-        query: &ton::TLObject,
+        query: Bytes,
         timeout: Option<u64>,
-    ) -> Result<Option<ton::TLObject>> {
-        let (query_id, pending_query) = {
-            let (query_id, message) = build_query(prefix, query);
+    ) -> Result<Option<Vec<u8>>> {
+        use rand::Rng;
 
-            let pending_query = self.queries.add_query(query_id);
-            self.send_message(
-                local_id,
-                peer_id,
-                proto::adnl::Message::Query {
-                    query_id: &query_id,
-                    query: &message,
-                },
-                true,
-            )?;
+        let query_id: QueryId = rand::thread_rng().gen();
 
-            (query_id, pending_query)
-        };
+        let pending_query = self.queries.add_query(query_id);
+        self.send_message(
+            local_id,
+            peer_id,
+            proto::adnl::Message::Query {
+                query_id: &query_id,
+                query: &query,
+            },
+            true,
+        )?;
+        drop(query);
 
         let channel = self
             .channels_by_peers
@@ -1088,7 +1106,7 @@ impl AdnlNode {
         let query = pending_query.wait().await;
 
         match query {
-            Ok(Some(answer)) => Ok(Some(deserialize(&answer)?)),
+            Ok(Some(answer)) => Ok(Some(answer)),
             Ok(None) => {
                 if let Some(channel) = channel {
                     let now = now();

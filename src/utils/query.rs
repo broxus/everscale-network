@@ -2,27 +2,28 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use anyhow::Result;
-use ton_api::{ton, BoxedSerialize, Serializer};
+use bytes::Bytes;
+use tl_proto::{TlRead, TlWrite};
 
 use super::node_id::*;
-use super::{deserialize_bundle, serialize};
+use crate::proto;
 use crate::subscriber::*;
 use crate::utils::compression;
 
-pub fn build_query(prefix: Option<&[u8]>, query: &ton::TLObject) -> (QueryId, Vec<u8>) {
-    use rand::Rng;
-
-    let query_id: QueryId = rand::thread_rng().gen();
-    let query = match prefix {
+pub fn build_query<T>(prefix: Option<&[u8]>, query: T) -> Bytes
+where
+    T: TlWrite,
+{
+    match prefix {
         Some(prefix) => {
-            let mut prefix = prefix.to_vec();
-            Serializer::new(&mut prefix).write_boxed(query);
-            prefix
+            let mut data = Vec::with_capacity(prefix.len() + query.max_size_hint());
+            data.extend_from_slice(prefix);
+            query.write_to(&mut data);
+            data
         }
-        None => serialize(query),
-    };
-
-    (query_id, query)
+        None => tl_proto::serialize(query),
+    }
+    .into()
 }
 
 pub async fn process_message_custom(
@@ -31,9 +32,10 @@ pub async fn process_message_custom(
     subscribers: &[Arc<dyn Subscriber>],
     data: &[u8],
 ) -> Result<bool> {
+    let constructor = u32::read_from(data, &mut 0)?;
     for subscriber in subscribers.iter() {
         if subscriber
-            .try_consume_custom(local_id, peer_id, data)
+            .try_consume_custom(local_id, peer_id, constructor, data)
             .await?
         {
             return Ok(true);
@@ -48,11 +50,39 @@ pub async fn process_message_adnl_query(
     subscribers: &[Arc<dyn Subscriber>],
     query: &[u8],
 ) -> Result<QueryProcessingResult<Vec<u8>>> {
-    match process_query(local_id, peer_id, subscribers, Cow::Borrowed(query)).await? {
-        QueryProcessingResult::Processed(answer) => Ok(QueryProcessingResult::Processed(
-            convert_answer(answer, std::convert::identity),
-        )),
-        _ => Ok(QueryProcessingResult::Rejected),
+    process_query(local_id, peer_id, subscribers, Cow::Borrowed(query)).await
+}
+
+pub struct OwnedRldpMessageQuery {
+    pub query_id: [u8; 32],
+    pub max_answer_size: u64,
+    pub data: Vec<u8>,
+}
+
+impl OwnedRldpMessageQuery {
+    pub fn from_data(mut data: Vec<u8>) -> Option<Self> {
+        #[derive(TlRead, TlWrite)]
+        #[tl(boxed, id = 0x8a794d69)]
+        struct Query {
+            #[tl(size_hint = 32)]
+            query_id: [u8; 32],
+            max_answer_size: u64,
+            timeout: u32,
+        }
+
+        let mut offset = 0;
+        let params = Query::read_from(&data, &mut offset).ok()?;
+        unsafe {
+            let remaining = data.len() - offset;
+            std::ptr::copy(data.as_ptr().add(offset), data.as_mut_ptr(), remaining);
+            data.set_len(remaining);
+        };
+
+        Some(Self {
+            query_id: params.query_id,
+            max_answer_size: params.max_answer_size,
+            data,
+        })
     }
 }
 
@@ -60,34 +90,38 @@ pub async fn process_message_rldp_query(
     local_id: &AdnlNodeIdShort,
     peer_id: &AdnlNodeIdShort,
     subscribers: &[Arc<dyn Subscriber>],
-    ton::rldp::message::Query {
-        query_id, mut data, ..
-    }: ton::rldp::message::Query,
+    mut query: OwnedRldpMessageQuery,
     force_compression: bool,
-) -> Result<QueryProcessingResult<ton::rldp::message::Answer>> {
-    let answer_compression = match compression::decompress(&data.0) {
+) -> Result<QueryProcessingResult<Vec<u8>>> {
+    let answer_compression = match compression::decompress(&query.data) {
         Some(decompressed) => {
-            data.0 = decompressed;
+            query.data = decompressed;
             true
         }
         None => force_compression,
     };
 
-    match process_query(local_id, peer_id, subscribers, Cow::Owned(data.0)).await? {
-        QueryProcessingResult::Processed(answer) => Ok(QueryProcessingResult::Processed(
-            convert_answer(answer, move |mut answer| {
+    match process_query(local_id, peer_id, subscribers, Cow::Owned(query.data)).await? {
+        QueryProcessingResult::Processed(answer) => Ok(match answer {
+            Some(mut answer) => {
                 if answer_compression {
                     if let Err(e) = compression::compress(&mut answer) {
                         tracing::warn!("Failed to compress RLDP answer: {e:?}");
                     }
                 }
-
-                ton::rldp::message::Answer {
-                    query_id,
-                    data: ton::bytes(answer),
+                if answer.len() > query.max_answer_size as usize {
+                    return Err(QueryError::AnswerSizeExceeded.into());
                 }
-            }),
-        )),
+
+                QueryProcessingResult::Processed(Some(tl_proto::serialize(
+                    proto::rldp::Message::Answer {
+                        query_id: &query.query_id,
+                        data: &answer,
+                    },
+                )))
+            }
+            None => QueryProcessingResult::Processed(None),
+        }),
         _ => Ok(QueryProcessingResult::Rejected),
     }
 }
@@ -96,36 +130,20 @@ async fn process_query(
     local_id: &AdnlNodeIdShort,
     peer_id: &AdnlNodeIdShort,
     subscribers: &[Arc<dyn Subscriber>],
-    query: Cow<'_, [u8]>,
-) -> Result<QueryProcessingResult<QueryAnswer>> {
-    let mut queries = deserialize_bundle(&query)?;
-    drop(query);
+    mut query: Cow<'_, [u8]>,
+) -> Result<QueryProcessingResult<Vec<u8>>> {
+    let constructor = u32::read_from(&query, &mut 0)?;
 
-    if queries.len() == 1 {
-        let mut query = queries.remove(0);
-        for subscriber in subscribers.iter() {
-            query = match subscriber
-                .try_consume_query(local_id, peer_id, query)
-                .await?
-            {
-                QueryConsumingResult::Consumed(answer) => {
-                    return Ok(QueryProcessingResult::Processed(answer))
-                }
-                QueryConsumingResult::Rejected(query) => query,
-            };
-        }
-    } else {
-        for subscriber in subscribers.iter() {
-            queries = match subscriber
-                .try_consume_query_bundle(local_id, peer_id, queries)
-                .await?
-            {
-                QueryBundleConsumingResult::Consumed(answer) => {
-                    return Ok(QueryProcessingResult::Processed(answer));
-                }
-                QueryBundleConsumingResult::Rejected(queries) => queries,
-            };
-        }
+    for subscriber in subscribers {
+        query = match subscriber
+            .try_consume_query(local_id, peer_id, constructor, query)
+            .await?
+        {
+            QueryConsumingResult::Consumed(answer) => {
+                return Ok(QueryProcessingResult::Processed(answer))
+            }
+            QueryConsumingResult::Rejected(query) => query,
+        };
     }
 
     Ok(QueryProcessingResult::Rejected)
@@ -134,28 +152,6 @@ async fn process_query(
 pub enum QueryProcessingResult<T> {
     Processed(Option<T>),
     Rejected,
-}
-
-pub fn parse_answer<T>(answer: ton::TLObject) -> Result<T>
-where
-    T: BoxedSerialize + serde::Serialize + Send + Sync + 'static,
-{
-    match answer.downcast::<T>() {
-        Ok(answer) => Ok(answer),
-        Err(_) => Err(QueryError::UnsupportedResponse.into()),
-    }
-}
-
-fn convert_answer<A, F>(answer: Option<QueryAnswer>, convert: F) -> Option<A>
-where
-    F: Fn(Vec<u8>) -> A,
-{
-    match answer {
-        Some(QueryAnswer::Object(x)) => Some(serialize(&x)),
-        Some(QueryAnswer::Raw(x)) => Some(x),
-        None => None,
-    }
-    .map(convert)
 }
 
 /// Query id wrapper used for printing
@@ -174,6 +170,6 @@ pub type QueryId = [u8; 32];
 
 #[derive(thiserror::Error, Debug)]
 enum QueryError {
-    #[error("Unsupported response")]
-    UnsupportedResponse,
+    #[error("Answer size exceeded")]
+    AnswerSizeExceeded,
 }

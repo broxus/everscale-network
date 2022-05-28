@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -5,10 +6,8 @@ use std::time::Duration;
 use anyhow::Result;
 use everscale_crypto::ed25519;
 use tiny_adnl::utils::*;
-use tiny_adnl::{
-    AdnlKeystore, AdnlNode, AdnlNodeOptions, PeerContext, QueryAnswer, QueryConsumingResult,
-};
-use ton_api::ton;
+use tiny_adnl::{AdnlKeystore, AdnlNode, AdnlNodeOptions, PeerContext, QueryConsumingResult};
+use tl_proto::{TlRead, TlWrite};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -55,7 +54,7 @@ async fn main() -> Result<()> {
         let iterations = iterations.clone();
         handles.push(tokio::spawn(async move {
             loop {
-                query_data(&left_node, &left_node_id, &right_node_id, &query).await;
+                query_data::<_, DataFull>(&left_node, &left_node_id, &right_node_id, query).await;
                 iterations.fetch_add(1, Ordering::Relaxed);
             }
         }));
@@ -66,7 +65,8 @@ async fn main() -> Result<()> {
         _ = tokio::time::sleep(Duration::from_secs(10)) => {},
     }
 
-    let throughput = (serialize(&example_request()).len() + serialize(&example_response()).len())
+    let throughput = (tl_proto::serialize(example_request()).len()
+        + tl_proto::serialize(example_response()).len())
         * iterations.load(Ordering::Relaxed);
 
     println!("Total throughput: {} MB/s", throughput as f64 / 1048576.0);
@@ -74,14 +74,17 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn query_data(
+async fn query_data<Q, A>(
     left_node: &Arc<AdnlNode>,
     left_node_id: &AdnlNodeIdShort,
     right_node_id: &AdnlNodeIdShort,
-    query: &ton::TLObject,
-) {
+    query: Q,
+) where
+    Q: TlWrite,
+    for<'a> A: TlRead<'a> + 'static,
+{
     let response = left_node
-        .query(left_node_id, right_node_id, query, None)
+        .query::<Q, A>(left_node_id, right_node_id, query, None)
         .await
         .unwrap();
     if response.is_none() {
@@ -93,31 +96,52 @@ struct Service;
 
 #[async_trait::async_trait]
 impl tiny_adnl::Subscriber for Service {
-    async fn try_consume_query(
+    async fn try_consume_query<'a>(
         &self,
         _: &AdnlNodeIdShort,
         _: &AdnlNodeIdShort,
-        _: ton::TLObject,
-    ) -> Result<QueryConsumingResult> {
-        Ok(QueryConsumingResult::Consumed(Some(QueryAnswer::Object(
-            example_response(),
-        ))))
+        _: u32,
+        _: Cow<'a, [u8]>,
+    ) -> Result<QueryConsumingResult<'a>> {
+        QueryConsumingResult::consume(example_response())
     }
 }
 
-fn example_request() -> ton::TLObject {
-    ton::TLObject::new(ton::rpc::ton_node::DownloadNextBlockFull {
+fn example_request() -> DownloadNextBlockFull {
+    DownloadNextBlockFull {
         prev_block: Default::default(),
-    })
+    }
 }
 
-fn example_response() -> ton::TLObject {
-    ton::TLObject::new(ton::ton_node::DataFull::TonNode_DataFull(Box::new(
-        ton::ton_node::datafull::DataFull {
-            id: Default::default(),
-            proof: vec![1u8; 128].into(),
-            block: vec![1u8; 128].into(),
-            is_link: Default::default(),
-        },
-    )))
+fn example_response() -> DataFull {
+    DataFull {
+        id: Default::default(),
+        proof: vec![1u8; 128],
+        block: vec![1u8; 128],
+        is_link: false,
+    }
+}
+
+#[derive(Copy, Clone, TlRead, TlWrite)]
+#[tl(boxed, id = 0x6ea0374a)]
+struct DownloadNextBlockFull {
+    prev_block: BlockId,
+}
+
+#[derive(Clone, TlRead, TlWrite)]
+#[tl(boxed, id = 0xbe589f93)]
+struct DataFull {
+    id: BlockId,
+    proof: Vec<u8>,
+    block: Vec<u8>,
+    is_link: bool,
+}
+
+#[derive(Default, Copy, Clone, TlRead, TlWrite)]
+struct BlockId {
+    workchain: i32,
+    shard: u64,
+    seqno: u32,
+    root_hash: [u8; 32],
+    file_hash: [u8; 32],
 }

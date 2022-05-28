@@ -1,8 +1,9 @@
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use anyhow::Result;
 use everscale_crypto::ed25519;
-use ton_api::ton::{self, TLObject};
+use tl_proto::{BoxedConstructor, TlRead};
 
 pub use self::overlay_shard::{
     IncomingBroadcastInfo, OutgoingBroadcastInfo, OverlayShard, OverlayShardMetrics,
@@ -186,19 +187,20 @@ impl Subscriber for OverlayNode {
         &self,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
+        constructor: u32,
         data: &[u8],
     ) -> Result<bool> {
-        let (message, broadcast) =
-            match tl_proto::deserialize::<(proto::overlay::Message, proto::overlay::Broadcast)>(
-                data,
-            ) {
-                Ok(bundle) => bundle,
-                Err(_) => return Ok(false),
-            };
+        if constructor != proto::overlay::Message::TL_ID {
+            return Ok(false);
+        }
 
-        let overlay_id = OverlayIdShort::from(*message.overlay);
+        let mut offset = 4; // skip `overlay::Message` constructor
+        let overlay_id = OverlayIdShort::from(<[u8; 32]>::read_from(data, &mut offset)?);
+        let broadcast = proto::overlay::Broadcast::read_from(data, &mut offset)?;
+
+        // TODO: check that offset == data.len()
+
         let shard = self.get_overlay_shard(&overlay_id)?;
-
         match broadcast {
             proto::overlay::Broadcast::Broadcast(broadcast) => {
                 shard
@@ -214,76 +216,41 @@ impl Subscriber for OverlayNode {
             }
             _ => Err(OverlayNodeError::UnsupportedOverlayBroadcastMessage.into()),
         }
-
-        /* UNUSED UNTIL VALIDATOR LOGIC WILL BE NEEDED
-
-        // Extract messages
-        let catchain_update = match bundle.remove(0).downcast::<ton::catchain::Update>() {
-            Ok(ton::catchain::Update::Catchain_BlockUpdate(message)) => *message,
-            _ => return Err(OverlayNodeError::UnsupportedPrivateOverlayMessage.into()),
-        };
-
-        let validator_session_update = match bundle
-            .remove(0)
-            .downcast::<ton::validator_session::BlockUpdate>(
-        ) {
-            Ok(ton::validator_session::BlockUpdate::ValidatorSession_BlockUpdate(
-                message,
-            )) => *message,
-            _ => return Err(OverlayNodeError::UnsupportedPrivateOverlayMessage.into()),
-        };
-
-        // Notify waiters
-        shard.push_catchain(CatchainUpdate {
-            peer_id: *peer_id,
-            catchain_update,
-            validator_session_update,
-        });
-
-        // Done
-        Ok(true)
-
-        */
     }
 
-    async fn try_consume_query_bundle(
+    async fn try_consume_query<'a>(
         &self,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
-        mut queries: Vec<TLObject>,
-    ) -> Result<QueryBundleConsumingResult> {
-        if queries.len() != 2 {
-            return Ok(QueryBundleConsumingResult::Rejected(queries));
+        constructor: u32,
+        query: Cow<'a, [u8]>,
+    ) -> Result<QueryConsumingResult<'a>> {
+        if constructor != proto::rpc::OverlayQuery::TL_ID {
+            return Ok(QueryConsumingResult::Rejected(query));
         }
 
-        let overlay_id = match queries.remove(0).downcast::<ton::rpc::overlay::Query>() {
-            Ok(query) => query.into(),
-            Err(query) => {
-                queries.insert(0, query);
-                return Ok(QueryBundleConsumingResult::Rejected(queries));
-            }
-        };
+        let mut offset = 4; // skip `rpc::OverlqyQuery` constructor
+        let overlay_id = OverlayIdShort::from(<[u8; 32]>::read_from(&query, &mut offset)?);
 
-        let query = match queries
-            .remove(0)
-            .downcast::<ton::rpc::overlay::GetRandomPeers>()
-        {
-            Ok(query) => {
-                let shard = self.get_overlay_shard(&overlay_id)?;
-                return QueryBundleConsumingResult::consume(shard.process_get_random_peers(query));
-            }
-            Err(query) => query,
-        };
+        let constructor = u32::read_from(&query, &mut std::convert::identity(offset))?;
+        if constructor == proto::rpc::OverlayGetRandomPeers::TL_ID {
+            let query = proto::rpc::OverlayGetRandomPeers::read_from(&query, &mut offset)?;
+            let shard = self.get_overlay_shard(&overlay_id)?;
+            return QueryConsumingResult::consume(
+                shard.process_get_random_peers(query).into_boxed_writer(),
+            );
+        }
 
         let consumer = match self.subscribers.get(&overlay_id) {
             Some(consumer) => consumer.clone(),
             None => return Err(OverlayNodeError::NoConsumerFound.into()),
         };
 
-        match consumer.try_consume_query(local_id, peer_id, query).await? {
-            QueryConsumingResult::Consumed(result) => {
-                Ok(QueryBundleConsumingResult::Consumed(result))
-            }
+        match consumer
+            .try_consume_query(local_id, peer_id, constructor, query)
+            .await?
+        {
+            QueryConsumingResult::Consumed(result) => Ok(QueryConsumingResult::Consumed(result)),
             QueryConsumingResult::Rejected(_) => Err(OverlayNodeError::UnsupportedQuery.into()),
         }
     }

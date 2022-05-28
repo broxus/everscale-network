@@ -16,6 +16,7 @@ aes = "0.8.1"
 anyhow = "1.0"
 async-trait = "0.1"
 base64 = "0.13"
+bytes = "1.1.0"
 crossbeam-queue = "0.3"
 ctr = "0.9.1"
 curve25519-dalek-ng = "4.1"
@@ -29,25 +30,19 @@ libc = "0.2"
 parking_lot = { version = "0.12.0", features = ["hardware-lock-elision"] }
 rand = "0.8"
 rustc-hash = "1.1.0"
-serde = "1.0"
+serde = { version = "1.0", features = ["derive"] }
 sha2 = "0.9"
 smallvec = { version = "1.8.0", features = ["union", "const_generics"] }
 thiserror = "1.0"
 tokio = { version = "1", features = ["sync", "net", "rt", "time", "io-util", "macros"] }
 tokio-io-timeout = "1.2.0"
 tokio-util = "0.7.0"
-tl-proto = { version = "0.1", features = ["derive"] }
+tl-proto = { version = "0.2", features = ["derive"] }
 tracing = "0.1"
 x25519-dalek-ng = "1.1.1"
 zstd = "0.11"
 
 raptorq = { git = "https://github.com/Rexagon/raptorq.git" }
-
-[dependencies.ton_api]
-git = "https://github.com/broxus/ton-labs-tl.git"
-package = "ton_api"
-default-features = false
-features = ["ton_api"]
 
 [dev-dependencies]
 env_logger = "0.9.0"

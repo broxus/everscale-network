@@ -1,13 +1,12 @@
-use ton_api::ton;
-
+use crate::proto;
 use crate::utils::*;
 
 pub struct Buckets {
-    buckets: Box<[FxDashMap<AdnlNodeIdShort, ton::dht::node::Node>; 256]>,
+    buckets: Box<[FxDashMap<AdnlNodeIdShort, proto::dht::NodeOwned>; 256]>,
 }
 
 impl Buckets {
-    pub fn iter(&self) -> std::slice::Iter<FxDashMap<AdnlNodeIdShort, ton::dht::node::Node>> {
+    pub fn iter(&self) -> std::slice::Iter<FxDashMap<AdnlNodeIdShort, proto::dht::NodeOwned>> {
         self.buckets.iter()
     }
 
@@ -15,7 +14,7 @@ impl Buckets {
         &self,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
-        peer: &ton::dht::node::Node,
+        peer: proto::dht::NodeOwned,
     ) {
         use dashmap::mapref::entry::Entry;
 
@@ -23,11 +22,11 @@ impl Buckets {
         match self.buckets[affinity as usize].entry(*peer_id) {
             Entry::Occupied(mut entry) => {
                 if entry.get().version < peer.version {
-                    entry.insert(peer.clone());
+                    entry.insert(peer);
                 }
             }
             Entry::Vacant(entry) => {
-                entry.insert(peer.clone());
+                entry.insert(peer);
             }
         }
     }
@@ -36,13 +35,13 @@ impl Buckets {
         &self,
         local_id: &AdnlNodeIdShort,
         key: &[u8; 32],
-        k: i32,
-    ) -> ton::dht::nodes::Nodes {
+        k: u32,
+    ) -> proto::dht::NodesOwned {
         let key1 = local_id.as_slice();
         let key2 = key;
 
         let mut distance = 0u8;
-        let mut result = Vec::new();
+        let mut nodes = Vec::new();
 
         // Iterate over keys bytes
         'outer: for i in 0..32 {
@@ -65,8 +64,8 @@ impl Buckets {
                     // Add all nodes from this distance to the result
                     let bucket = &self.buckets[subdistance as usize];
                     for item in bucket.iter() {
-                        result.push(item.value().clone());
-                        if result.len() == k as usize {
+                        nodes.push(item.value().clone());
+                        if nodes.len() == k as usize {
                             break 'outer;
                         }
                     }
@@ -87,15 +86,13 @@ impl Buckets {
         }
 
         // Done
-        ton::dht::nodes::Nodes {
-            nodes: result.into(),
-        }
+        proto::dht::NodesOwned { nodes }
     }
 }
 
 impl<'a> IntoIterator for &'a Buckets {
-    type Item = &'a FxDashMap<AdnlNodeIdShort, ton::dht::node::Node>;
-    type IntoIter = std::slice::Iter<'a, FxDashMap<AdnlNodeIdShort, ton::dht::node::Node>>;
+    type Item = &'a FxDashMap<AdnlNodeIdShort, proto::dht::NodeOwned>;
+    type IntoIter = std::slice::Iter<'a, FxDashMap<AdnlNodeIdShort, proto::dht::NodeOwned>>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()

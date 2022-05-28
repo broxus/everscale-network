@@ -1,8 +1,8 @@
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use rand::Rng;
-use ton_api::ton;
 
+use crate::proto;
 use crate::utils::*;
 
 pub struct Neighbour {
@@ -10,8 +10,8 @@ pub struct Neighbour {
 
     last_ping: AtomicU64,
 
-    proto_version: AtomicI32,
-    capabilities: AtomicI64,
+    proto_version: AtomicU32,
+    capabilities: AtomicU64,
 
     roundtrip_adnl: AtomicU64,
     roundtrip_rldp: AtomicU64,
@@ -103,18 +103,18 @@ impl Neighbour {
         self.last_ping.store(elapsed, Ordering::Release)
     }
 
-    pub fn proto_version(&self) -> i32 {
+    pub fn proto_version(&self) -> u32 {
         self.proto_version.load(Ordering::Acquire)
     }
 
-    pub fn capabilities(&self) -> i64 {
+    pub fn capabilities(&self) -> u64 {
         self.capabilities.load(Ordering::Acquire)
     }
 
-    pub fn update_proto_version(&self, data: &ton::ton_node::Capabilities) {
-        self.proto_version.store(*data.version(), Ordering::Release);
+    pub fn update_proto_version(&self, data: proto::ton_node::Capabilities) {
+        self.proto_version.store(data.version, Ordering::Release);
         self.capabilities
-            .store(*data.capabilities(), Ordering::Release);
+            .store(data.capabilities, Ordering::Release);
     }
 
     pub fn update_stats(
@@ -224,6 +224,6 @@ fn set_roundtrip(storage: &AtomicU64, roundtrip: u64) {
     storage.store(roundtrip, Ordering::Release);
 }
 
-const PROTO_VERSION: i32 = 2;
-const PROTO_CAPABILITIES: i64 = 1;
+const PROTO_VERSION: u32 = 2;
+const PROTO_CAPABILITIES: u64 = 1;
 const FAIL_UNRELIABILITY: u32 = 10;
