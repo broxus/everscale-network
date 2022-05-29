@@ -6,6 +6,7 @@ use everscale_crypto::ed25519;
 use tokio::net::UdpSocket;
 
 use super::channel::*;
+use super::handshake::*;
 use super::peer::*;
 use super::transfer::*;
 use super::AdnlNode;

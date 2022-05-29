@@ -21,6 +21,7 @@ use crate::subscriber::*;
 use crate::utils::*;
 
 mod channel;
+mod handshake;
 mod peer;
 mod receiver;
 mod sender;
@@ -137,13 +138,6 @@ pub struct AdnlNode {
 
     /// Token, used to cancel all spawned tasks
     cancellation_token: CancellationToken,
-}
-
-impl Drop for AdnlNode {
-    fn drop(&mut self) {
-        // Cancel all tasks on drop
-        self.shutdown()
-    }
 }
 
 impl AdnlNode {
@@ -498,6 +492,13 @@ impl AdnlNode {
         peer.reset();
 
         Ok(())
+    }
+}
+
+impl Drop for AdnlNode {
+    fn drop(&mut self) {
+        // Cancel all tasks on drop
+        self.shutdown()
     }
 }
 

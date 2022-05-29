@@ -1,9 +1,10 @@
 use std::convert::TryInto;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use aes::cipher::StreamCipher;
+use aes::cipher::{StreamCipher, StreamCipherSeek};
 use everscale_crypto::ed25519;
 
+use super::handshake::*;
 use crate::utils::*;
 
 /// ADNL channel state
@@ -140,7 +141,17 @@ impl AdnlChannel {
         buffer: &mut PacketView,
         priority: bool,
     ) -> Result<Option<u16>, AdnlChannelError> {
-        if buffer.len() < 64 {
+        // Ordinary data ranges
+        const DATA_START: usize = 64;
+        const CHECKSUM_RANGE: std::ops::Range<usize> = 32..DATA_START;
+        const DATA_RANGE: std::ops::RangeFrom<usize> = DATA_START..;
+
+        // Data ranges for packets with ADNL version
+        const EXT_DATA_START: usize = 68;
+        const EXT_CHECKSUM_RANGE: std::ops::Range<usize> = 36..EXT_DATA_START;
+        const EXT_DATA_RANGE: std::ops::RangeFrom<usize> = EXT_DATA_START..;
+
+        if buffer.len() < DATA_START {
             return Err(AdnlChannelError::ChannelMessageIsTooShort(buffer.len()));
         }
 
@@ -150,32 +161,45 @@ impl AdnlChannel {
             &self.channel_in.ordinary.secret
         };
 
-        // NOTE: macros is used here to avoid useless bound checks, saving the `.len()` context
-        macro_rules! process {
-            ($buffer:ident, $shared_secret:ident, $version:expr, $start:literal .. $end:literal) => {
-                build_packet_cipher($shared_secret, &$buffer[$start..$end].try_into().unwrap())
-                    .apply_keystream(&mut $buffer[$end..]);
+        if buffer.len() > EXT_DATA_START {
+            if let Some(version) = decode_version((&buffer[..EXT_DATA_START]).try_into().unwrap()) {
+                // Build cipher
+                let mut cipher = build_packet_cipher(
+                    shared_secret,
+                    &buffer[EXT_CHECKSUM_RANGE].try_into().unwrap(),
+                );
 
-                // Check checksum
-                if compute_packet_data_hash($version, &$buffer[$end..]).as_slice()
-                    != &$buffer[$start..$end]
+                // Decode data
+                cipher.apply_keystream(&mut buffer[EXT_DATA_RANGE]);
+
+                // If hash is ok
+                if compute_packet_data_hash(Some(version), &buffer[EXT_DATA_RANGE]).as_slice()
+                    == &buffer[EXT_CHECKSUM_RANGE]
                 {
-                    return Err(AdnlChannelError::InvalidChannelMessageChecksum);
+                    // Leave only data in the buffer and return version
+                    buffer.remove_prefix(EXT_DATA_START);
+                    return Ok(Some(version));
                 }
 
-                // Leave only data in the buffer
-                $buffer.remove_prefix($end);
-            };
-        }
-
-        if buffer.len() > 68 {
-            if let Some(version) = decode_version((&buffer[..68]).try_into().unwrap()) {
-                process!(buffer, shared_secret, Some(version), 36..68);
-                return Ok(Some(version));
+                // Otherwise restore data
+                cipher.seek(0);
+                cipher.apply_keystream(&mut buffer[EXT_DATA_RANGE]);
             }
         }
 
-        process!(buffer, shared_secret, None, 32..64);
+        // Decode data
+        build_packet_cipher(shared_secret, &buffer[CHECKSUM_RANGE].try_into().unwrap())
+            .apply_keystream(&mut buffer[DATA_RANGE]);
+
+        // Check checksum
+        if compute_packet_data_hash(None, &buffer[DATA_RANGE]).as_slice() != &buffer[CHECKSUM_RANGE]
+        {
+            return Err(AdnlChannelError::InvalidChannelMessageChecksum);
+        }
+
+        // Leave only data in the buffer
+        buffer.remove_prefix(DATA_START);
+
         Ok(None)
     }
 

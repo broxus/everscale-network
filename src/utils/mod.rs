@@ -6,7 +6,6 @@ pub use rustc_hash::{FxHashMap, FxHashSet};
 
 pub use self::address_list::*;
 pub use self::dht::*;
-pub use self::handshake::*;
 pub use self::keystore::*;
 pub use self::node_id::*;
 pub use self::overlay::*;
@@ -22,7 +21,6 @@ pub use self::updated_at::*;
 mod address_list;
 pub mod compression;
 mod dht;
-mod handshake;
 mod keystore;
 mod node_id;
 mod overlay;
@@ -73,5 +71,28 @@ where
         (max, min)
     } else {
         (min, max)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use aes::cipher::{StreamCipher, StreamCipherSeek};
+    use rand::Rng;
+
+    use super::*;
+
+    #[test]
+    fn double_encode() {
+        let data: [u8; 32] = rand::thread_rng().gen();
+
+        let mut cipher = build_packet_cipher(&rand::thread_rng().gen(), &rand::thread_rng().gen());
+
+        let mut encoded_data = data;
+        cipher.apply_keystream(&mut encoded_data);
+        assert_ne!(encoded_data, data);
+
+        cipher.seek(0);
+        cipher.apply_keystream(&mut encoded_data);
+        assert_eq!(encoded_data, data);
     }
 }

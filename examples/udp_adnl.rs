@@ -87,13 +87,14 @@ async fn query_data<Q, A>(
     Q: TlWrite,
     for<'a> A: TlRead<'a> + 'static,
 {
-    let response = left_node
+    match left_node
         .query::<Q, A>(left_node_id, right_node_id, query, None)
         .await
-        .unwrap();
-    if response.is_none() {
-        println!("Packet lost");
-    }
+    {
+        Ok(Some(_)) => {}
+        Ok(None) => println!("Packet lost"),
+        Err(e) => println!("Error: {e:?}"),
+    };
 }
 
 struct Service;
