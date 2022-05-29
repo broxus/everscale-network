@@ -213,7 +213,7 @@ impl OverlayShard {
 
     pub fn add_public_peer(
         &self,
-        ip_address: AdnlAddressUdp,
+        ip_address: PackedSocketAddr,
         node: proto::overlay::Node<'_>,
     ) -> Result<Option<AdnlNodeIdShort>> {
         if self.is_private() {
@@ -245,7 +245,7 @@ impl OverlayShard {
 
     pub fn add_public_peers<'a, I>(&self, nodes: I) -> Result<Vec<AdnlNodeIdShort>>
     where
-        I: IntoIterator<Item = (AdnlAddressUdp, proto::overlay::Node<'a>)>,
+        I: IntoIterator<Item = (PackedSocketAddr, proto::overlay::Node<'a>)>,
     {
         if self.is_private() {
             return Err(OverlayShardError::PublicPeerToPrivateOverlay.into());

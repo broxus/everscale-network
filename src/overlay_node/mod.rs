@@ -68,7 +68,7 @@ impl OverlayNode {
     pub fn add_private_peers(
         &self,
         local_id: &AdnlNodeIdShort,
-        peers: &[(AdnlAddressUdp, ed25519::PublicKey)],
+        peers: &[(PackedSocketAddr, ed25519::PublicKey)],
     ) -> Result<Vec<AdnlNodeIdShort>> {
         let mut new_peers = Vec::new();
 

@@ -4,11 +4,11 @@ use std::hash::BuildHasherDefault;
 use rustc_hash::FxHasher;
 pub use rustc_hash::{FxHashMap, FxHashSet};
 
-pub use self::address_list::*;
 pub use self::dht::*;
 pub use self::keystore::*;
 pub use self::node_id::*;
 pub use self::overlay::*;
+pub use self::packed_socket_addr::*;
 pub use self::packet_view::*;
 pub use self::packets_history::*;
 pub use self::peers_cache::*;
@@ -18,12 +18,12 @@ pub use self::response_collector::*;
 pub use self::socket::*;
 pub use self::updated_at::*;
 
-mod address_list;
 pub mod compression;
 mod dht;
 mod keystore;
 mod node_id;
 mod overlay;
+mod packed_socket_addr;
 mod packet_view;
 mod packets_history;
 mod peers_cache;

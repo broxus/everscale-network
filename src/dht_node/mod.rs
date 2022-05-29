@@ -151,7 +151,7 @@ impl DhtNode {
         self: &Arc<Self>,
         overlay_id: &OverlayIdShort,
         external_iter: &mut Option<ExternalDhtIter>,
-    ) -> Result<Vec<(AdnlAddressUdp, proto::overlay::NodeOwned)>> {
+    ) -> Result<Vec<(PackedSocketAddr, proto::overlay::NodeOwned)>> {
         let mut result = Vec::new();
         let mut nodes = Vec::new();
 
@@ -261,7 +261,7 @@ impl DhtNode {
     pub async fn find_address(
         self: &Arc<Self>,
         peer_id: &AdnlNodeIdShort,
-    ) -> Result<(AdnlAddressUdp, AdnlNodeIdFull)> {
+    ) -> Result<(PackedSocketAddr, AdnlNodeIdFull)> {
         type Value = BoxedReader<proto::adnl::AddressList>;
         let mut address_list = self
             .find_value::<Value>(make_dht_key(peer_id, DHT_KEY_ADDRESS), false, &mut None)
@@ -324,7 +324,7 @@ impl DhtNode {
     pub fn fetch_address_locally(
         &self,
         peer_id: &AdnlNodeIdShort,
-    ) -> Result<Option<(AdnlAddressUdp, AdnlNodeIdFull)>> {
+    ) -> Result<Option<(PackedSocketAddr, AdnlNodeIdFull)>> {
         let key = make_dht_key(peer_id, DHT_KEY_ADDRESS);
         Ok(match self.storage.get_ref(&tl_proto::hash_as_boxed(key)) {
             Some(stored) => Some(parse_dht_value_address(

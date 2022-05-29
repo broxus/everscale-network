@@ -1,6 +1,5 @@
 use std::convert::TryFrom;
 
-use anyhow::Result;
 use everscale_crypto::{ed25519, tl};
 use rand::Rng;
 
@@ -49,22 +48,26 @@ impl From<ed25519::PublicKey> for AdnlNodeIdFull {
 }
 
 impl<'a> TryFrom<tl::PublicKey<'a>> for AdnlNodeIdFull {
-    type Error = anyhow::Error;
+    type Error = AdnlNodeIdFullError;
 
     fn try_from(value: tl::PublicKey<'a>) -> Result<Self, Self::Error> {
         match value {
             tl::PublicKey::Ed25519 { key } => {
                 let public_key = ed25519::PublicKey::from_bytes(*key)
-                    .ok_or(AdnlNodeIdError::InvalidPublicKey)?;
+                    .ok_or(AdnlNodeIdFullError::InvalidPublicKey)?;
                 Ok(Self::new(public_key))
             }
-            _ => Err(AdnlNodeIdError::UnsupportedPublicKey.into()),
+            _ => Err(AdnlNodeIdFullError::UnsupportedPublicKey),
         }
     }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum AdnlNodeIdFullError {
+    #[error("Unsupported public key")]
+    UnsupportedPublicKey,
+    #[error("Invalid public key")]
+    InvalidPublicKey,
     #[error("Invalid signature")]
     InvalidSignature,
 }
@@ -152,14 +155,6 @@ impl ComputeNodeIds for ed25519::PublicKey {
         let short_id = full_id.compute_short_id();
         (full_id, short_id)
     }
-}
-
-#[derive(thiserror::Error, Debug)]
-enum AdnlNodeIdError {
-    #[error("Unsupported public key")]
-    UnsupportedPublicKey,
-    #[error("Invalid public key")]
-    InvalidPublicKey,
 }
 
 pub struct StoredAdnlNodeKey {

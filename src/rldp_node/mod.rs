@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use tokio::sync::Semaphore;
 
 pub use self::decoder::RaptorQDecoder;
 pub use self::encoder::RaptorQEncoder;
-use self::peer::*;
 use self::transfers_cache::*;
 use crate::adnl_node::AdnlNode;
 use crate::proto;
@@ -15,23 +16,35 @@ mod decoder;
 mod encoder;
 mod incoming_transfer;
 mod outgoing_transfer;
-mod peer;
 mod transfers_cache;
 
-pub struct RldpNode {
-    options: RldpNodeOptions,
-    peers: FxDashMap<AdnlNodeIdShort, Arc<RldpPeer>>,
-    transfers: TransfersCache,
-}
-
-#[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RldpNodeOptions {
-    /// Default: 10485760 (10 MB)
+    /// Max allowed RLDP answer size in bytes. Query will be rejected
+    /// if answer is bigger.
+    ///
+    /// Default: `10485760` (10 MB)
     pub max_answer_size: u32,
-    /// Default: 16
-    pub max_peer_queries: u32,
-    /// Default: false
+
+    /// Max parallel RLDP queries per peer.
+    ///
+    /// Default: `16`
+    pub max_peer_queries: usize,
+
+    /// Min RLDP query timeout.
+    ///
+    /// Default: `500` ms
+    pub query_min_timeout_ms: u64,
+
+    /// Max RLDP query timeout
+    ///
+    /// Default: `10000` ms
+    pub query_max_timeout_ms: u64,
+
+    /// Whether requests will be compressed.
+    ///
+    /// Default: `false`
     pub force_compression: bool,
 }
 
@@ -40,24 +53,41 @@ impl Default for RldpNodeOptions {
         Self {
             max_answer_size: 10 * 1024 * 1024,
             max_peer_queries: 16,
+            query_min_timeout_ms: 500,
+            query_max_timeout_ms: 10000,
             force_compression: false,
         }
     }
 }
 
+/// Reliable UDP transport layer
+pub struct RldpNode {
+    /// Parallel requests limiter
+    semaphores: FxDashMap<AdnlNodeIdShort, Arc<Semaphore>>,
+    /// Transfers handler
+    transfers: TransfersCache,
+    /// Configuration
+    options: RldpNodeOptions,
+}
+
 impl RldpNode {
+    /// Create new RLDP node on top of the given ADNL node
     pub fn new(
         adnl: Arc<AdnlNode>,
         subscribers: Vec<Arc<dyn Subscriber>>,
         options: RldpNodeOptions,
     ) -> Arc<Self> {
         Arc::new(Self {
-            peers: Default::default(),
+            semaphores: Default::default(),
             transfers: TransfersCache::new(
                 adnl,
                 subscribers,
-                options.max_answer_size,
-                options.force_compression,
+                TransfersCacheOptions {
+                    query_min_timeout_ms: options.query_min_timeout_ms,
+                    query_max_timeout_ms: options.query_max_timeout_ms,
+                    max_answer_size: options.max_answer_size,
+                    force_compression: options.force_compression,
+                },
             ),
             options,
         })
@@ -70,7 +100,7 @@ impl RldpNode {
 
     pub fn metrics(&self) -> RldpNodeMetrics {
         RldpNodeMetrics {
-            peer_count: self.peers.len(),
+            peer_count: self.semaphores.len(),
             transfers_cache_len: self.transfers.len(),
         }
     }
@@ -80,27 +110,20 @@ impl RldpNode {
         &self,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
-        mut data: Vec<u8>,
+        data: Vec<u8>,
         roundtrip: Option<u64>,
     ) -> Result<(Option<Vec<u8>>, u64)> {
-        if self.options.force_compression {
-            if let Err(e) = compression::compress(&mut data) {
-                tracing::warn!("Failed to compress RLDP query: {e:?}");
-            }
-        }
-
-        let (query_id, query) = make_query(&data, self.options.max_answer_size);
-        drop(data);
+        let (query_id, query) = self.make_query(data);
 
         let peer = self
-            .peers
+            .semaphores
             .entry(*peer_id)
-            .or_insert_with(|| Arc::new(RldpPeer::new(self.options.max_peer_queries)))
+            .or_insert_with(|| Arc::new(Semaphore::new(self.options.max_peer_queries)))
             .value()
             .clone();
 
         let result = {
-            let _guard = peer.begin_query().await;
+            let _permit = peer.acquire().await.ok();
             self.transfers
                 .query(local_id, peer_id, query, roundtrip)
                 .await
@@ -115,18 +138,40 @@ impl RldpNode {
                     Some(compression::decompress(data).unwrap_or_else(|| data.to_vec())),
                     roundtrip,
                 )),
-                Ok(proto::rldp::Message::Answer { .. }) => Err(RldpNodeError::QueryIdMismatch),
+                Ok(proto::rldp::Message::Answer { .. }) => {
+                    Err(RldpNodeError::QueryIdMismatch.into())
+                }
                 Ok(proto::rldp::Message::Message { .. }) => {
-                    Err(RldpNodeError::UnexpectedAnswer("RldpMessageView::Message"))
+                    Err(RldpNodeError::UnexpectedAnswer("RldpMessageView::Message").into())
                 }
                 Ok(proto::rldp::Message::Query { .. }) => {
-                    Err(RldpNodeError::UnexpectedAnswer("RldpMessageView::Query"))
+                    Err(RldpNodeError::UnexpectedAnswer("RldpMessageView::Query").into())
                 }
-                Err(e) => Err(RldpNodeError::InvalidPacketContent(e)),
-            }
-            .with_context(|| format!("RLDP query from peer {peer_id} failed")),
+                Err(e) => Err(RldpNodeError::InvalidPacketContent(e).into()),
+            },
             (None, roundtrip) => Ok((None, roundtrip)),
         }
+    }
+
+    fn make_query(&self, mut data: Vec<u8>) -> (QueryId, Vec<u8>) {
+        use rand::Rng;
+
+        if self.options.force_compression {
+            if let Err(e) = compression::compress(&mut data) {
+                tracing::warn!("Failed to compress RLDP query: {e:?}");
+            }
+        }
+
+        // TODO: compress data inplace
+
+        let query_id: QueryId = rand::thread_rng().gen();
+        let data = proto::rldp::Message::Query {
+            query_id: &query_id,
+            max_answer_size: self.options.max_answer_size as u64,
+            timeout: now() + self.options.query_max_timeout_ms as u32 / 1000,
+            data: &data,
+        };
+        (query_id, tl_proto::serialize(data))
     }
 }
 

@@ -41,7 +41,7 @@ impl OverlayClient {
         &self.overlay_shard
     }
 
-    pub fn resolve_ip(&self, neighbour: &Neighbour) -> Option<AdnlAddressUdp> {
+    pub fn resolve_ip(&self, neighbour: &Neighbour) -> Option<PackedSocketAddr> {
         self.overlay_shard
             .adnl()
             .get_peer_ip(self.overlay_shard.overlay_key().id(), neighbour.peer_id())
@@ -243,7 +243,7 @@ impl OverlayClient {
 
 const DEFAULT_ADNL_ATTEMPTS: u32 = 50;
 
-struct ResolvedIp(Option<AdnlAddressUdp>);
+struct ResolvedIp(Option<PackedSocketAddr>);
 
 impl std::fmt::Display for ResolvedIp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

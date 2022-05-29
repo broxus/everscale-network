@@ -14,28 +14,31 @@ use crate::proto;
 use crate::subscriber::*;
 use crate::utils::*;
 
-#[derive(Clone)]
+pub struct TransfersCacheOptions {
+    pub query_min_timeout_ms: u64,
+    pub query_max_timeout_ms: u64,
+    pub max_answer_size: u32,
+    pub force_compression: bool,
+}
+
 pub struct TransfersCache {
     adnl: Arc<AdnlNode>,
     transfers: Arc<FxDashMap<TransferId, RldpTransfer>>,
     subscribers: Arc<Vec<Arc<dyn Subscriber>>>,
-    max_answer_size: u32,
-    force_compression: bool,
+    options: TransfersCacheOptions,
 }
 
 impl TransfersCache {
     pub fn new(
         adnl: Arc<AdnlNode>,
         subscribers: Vec<Arc<dyn Subscriber>>,
-        max_answer_size: u32,
-        force_compression: bool,
+        options: TransfersCacheOptions,
     ) -> Self {
         Self {
             adnl,
             transfers: Arc::new(Default::default()),
             subscribers: Arc::new(subscribers),
-            max_answer_size,
-            force_compression,
+            options,
         }
     }
 
@@ -58,7 +61,8 @@ impl TransfersCache {
 
         // Initiate incoming transfer with derived id
         let incoming_transfer_id = negate_id(outgoing_transfer_id);
-        let incoming_transfer = IncomingTransfer::new(incoming_transfer_id, self.max_answer_size);
+        let incoming_transfer =
+            IncomingTransfer::new(incoming_transfer_id, self.options.max_answer_size);
         let incoming_transfer_state = incoming_transfer.state().clone();
         let (parts_tx, parts_rx) = mpsc::unbounded_channel();
         self.transfers
@@ -289,7 +293,7 @@ impl TransfersCache {
             local_id: *local_id,
             peer_id: *peer_id,
             parts_rx,
-            transfer: IncomingTransfer::new(transfer_id, self.max_answer_size),
+            transfer: IncomingTransfer::new(transfer_id, self.options.max_answer_size),
             transfer_id,
         };
 
@@ -297,7 +301,7 @@ impl TransfersCache {
         tokio::spawn({
             let subscribers = self.subscribers.clone();
             let transfers = self.transfers.clone();
-            let force_compression = self.force_compression;
+            let force_compression = self.options.force_compression;
             async move {
                 // Wait until incoming query is received
                 receive_loop(&mut incoming_context, None).await;
@@ -334,19 +338,6 @@ impl TransfersCache {
         // Done
         Ok(Some(parts_tx))
     }
-}
-
-pub fn make_query(data: &[u8], max_answer_size: u32) -> (QueryId, Vec<u8>) {
-    use rand::Rng;
-
-    let query_id: QueryId = rand::thread_rng().gen();
-    let data = proto::rldp::Message::Query {
-        query_id: &query_id,
-        max_answer_size: max_answer_size as u64,
-        timeout: now() + MAX_TIMEOUT as u32 / 1000,
-        data,
-    };
-    (query_id, tl_proto::serialize(data))
 }
 
 #[tracing::instrument(level = "debug", skip_all)]
@@ -470,7 +461,7 @@ async fn answer_loop(
     };
 
     // Process query
-    let answer = match process_message_rldp_query(
+    let answer = match process_rldp_query(
         &incoming_context.local_id,
         &incoming_context.peer_id,
         &subscribers,

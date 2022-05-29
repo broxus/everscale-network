@@ -2,7 +2,6 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use anyhow::Result;
-use bytes::Bytes;
 use tl_proto::{TlRead, TlWrite};
 
 use super::node_id::*;
@@ -10,41 +9,7 @@ use crate::proto;
 use crate::subscriber::*;
 use crate::utils::compression;
 
-pub fn build_query<T>(prefix: Option<&[u8]>, query: T) -> Bytes
-where
-    T: TlWrite,
-{
-    match prefix {
-        Some(prefix) => {
-            let mut data = Vec::with_capacity(prefix.len() + query.max_size_hint());
-            data.extend_from_slice(prefix);
-            query.write_to(&mut data);
-            data
-        }
-        None => tl_proto::serialize(query),
-    }
-    .into()
-}
-
-pub async fn process_message_custom(
-    local_id: &AdnlNodeIdShort,
-    peer_id: &AdnlNodeIdShort,
-    subscribers: &[Arc<dyn Subscriber>],
-    data: &[u8],
-) -> Result<bool> {
-    let constructor = u32::read_from(data, &mut 0)?;
-    for subscriber in subscribers.iter() {
-        if subscriber
-            .try_consume_custom(local_id, peer_id, constructor, data)
-            .await?
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-pub async fn process_message_adnl_query(
+pub async fn process_adnl_query(
     local_id: &AdnlNodeIdShort,
     peer_id: &AdnlNodeIdShort,
     subscribers: &[Arc<dyn Subscriber>],
@@ -53,40 +18,7 @@ pub async fn process_message_adnl_query(
     process_query(local_id, peer_id, subscribers, Cow::Borrowed(query)).await
 }
 
-pub struct OwnedRldpMessageQuery {
-    pub query_id: [u8; 32],
-    pub max_answer_size: u64,
-    pub data: Vec<u8>,
-}
-
-impl OwnedRldpMessageQuery {
-    pub fn from_data(mut data: Vec<u8>) -> Option<Self> {
-        #[derive(TlRead, TlWrite)]
-        #[tl(boxed, id = 0x8a794d69)]
-        struct Query {
-            #[tl(size_hint = 32)]
-            query_id: [u8; 32],
-            max_answer_size: u64,
-            timeout: u32,
-        }
-
-        let mut offset = 0;
-        let params = Query::read_from(&data, &mut offset).ok()?;
-        unsafe {
-            let remaining = data.len() - offset;
-            std::ptr::copy(data.as_ptr().add(offset), data.as_mut_ptr(), remaining);
-            data.set_len(remaining);
-        };
-
-        Some(Self {
-            query_id: params.query_id,
-            max_answer_size: params.max_answer_size,
-            data,
-        })
-    }
-}
-
-pub async fn process_message_rldp_query(
+pub async fn process_rldp_query(
     local_id: &AdnlNodeIdShort,
     peer_id: &AdnlNodeIdShort,
     subscribers: &[Arc<dyn Subscriber>],
@@ -123,6 +55,39 @@ pub async fn process_message_rldp_query(
             None => QueryProcessingResult::Processed(None),
         }),
         _ => Ok(QueryProcessingResult::Rejected),
+    }
+}
+
+pub struct OwnedRldpMessageQuery {
+    pub query_id: [u8; 32],
+    pub max_answer_size: u64,
+    pub data: Vec<u8>,
+}
+
+impl OwnedRldpMessageQuery {
+    pub fn from_data(mut data: Vec<u8>) -> Option<Self> {
+        #[derive(TlRead, TlWrite)]
+        #[tl(boxed, id = 0x8a794d69)]
+        struct Query {
+            #[tl(size_hint = 32)]
+            query_id: [u8; 32],
+            max_answer_size: u64,
+            timeout: u32,
+        }
+
+        let mut offset = 0;
+        let params = Query::read_from(&data, &mut offset).ok()?;
+        unsafe {
+            let remaining = data.len() - offset;
+            std::ptr::copy(data.as_ptr().add(offset), data.as_mut_ptr(), remaining);
+            data.set_len(remaining);
+        };
+
+        Some(Self {
+            query_id: params.query_id,
+            max_answer_size: params.max_answer_size,
+            data,
+        })
     }
 }
 

@@ -18,7 +18,7 @@ async fn main() -> Result<()> {
     let first_key = ed25519::SecretKey::generate(&mut rand::thread_rng());
 
     let left_node = AdnlNode::new(
-        AdnlAddressUdp::localhost(20000),
+        PackedSocketAddr::localhost(20000),
         Keystore::builder()
             .with_tagged_keys([(first_key.to_bytes(), 0)])?
             .build(),
@@ -28,7 +28,7 @@ async fn main() -> Result<()> {
     let left_node_id = *left_node.key_by_tag(0)?.id();
 
     let right_node = AdnlNode::new(
-        AdnlAddressUdp::localhost(20001),
+        PackedSocketAddr::localhost(20001),
         Keystore::builder()
             .with_tagged_keys([(first_key.to_bytes(), 0)])?
             .build(),

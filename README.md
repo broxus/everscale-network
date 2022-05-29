@@ -12,4 +12,4 @@
 </p>
 
 ### Requirements
-- Rust 1.51+
+- Rust 1.60+

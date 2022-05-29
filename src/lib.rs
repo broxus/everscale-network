@@ -8,7 +8,7 @@ pub use overlay_node::{
     OverlayShardOptions, MAX_OVERLAY_PEERS,
 };
 pub use rldp_node::{RldpNode, RldpNodeMetrics, RldpNodeOptions};
-pub use subscriber::{AdnlPingSubscriber, OverlaySubscriber, QueryConsumingResult, Subscriber};
+pub use subscriber::{OverlaySubscriber, QueryConsumingResult, Subscriber};
 
 mod adnl_node;
 mod dht_node;

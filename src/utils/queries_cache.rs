@@ -1,6 +1,5 @@
 use std::sync::{Arc, Weak};
 
-use anyhow::Result;
 use tokio::sync::Barrier;
 
 use super::query::*;
@@ -35,7 +34,11 @@ impl QueriesCache {
         }
     }
 
-    pub async fn update_query(&self, query_id: QueryId, answer: Option<&[u8]>) -> Result<bool> {
+    pub async fn update_query(
+        &self,
+        query_id: QueryId,
+        answer: Option<&[u8]>,
+    ) -> Result<bool, QueriesCacheError> {
         use dashmap::mapref::entry::Entry;
 
         let old = match self.queries.entry(query_id) {
@@ -54,7 +57,7 @@ impl QueriesCache {
                 barrier.wait().await;
                 Ok(true)
             }
-            Some(_) => Err(QueriesCacheError::UnexpectedState.into()),
+            Some(_) => Err(QueriesCacheError::UnexpectedState),
             None => Ok(false),
         }
     }
@@ -68,20 +71,20 @@ pub struct PendingAdnlQuery {
 }
 
 impl PendingAdnlQuery {
-    pub async fn wait(mut self) -> Result<Option<Vec<u8>>> {
+    pub async fn wait(mut self) -> Result<Option<Vec<u8>>, QueriesCacheError> {
         self.barrier.wait().await;
         self.finished = true;
 
         let cache = match self.cache.upgrade() {
             Some(cache) => cache,
-            None => return Err(QueriesCacheError::CacheDropped.into()),
+            None => return Err(QueriesCacheError::CacheDropped),
         };
 
         match cache.queries.remove(&self.query_id) {
             Some((_, QueryState::Received(answer))) => Ok(Some(answer)),
             Some((_, QueryState::Timeout)) => Ok(None),
-            Some(_) => Err(QueriesCacheError::InvalidQueryState.into()),
-            None => Err(QueriesCacheError::UnknownId.into()),
+            Some(_) => Err(QueriesCacheError::InvalidQueryState),
+            None => Err(QueriesCacheError::UnknownId),
         }
     }
 }
@@ -108,7 +111,7 @@ enum QueryState {
 }
 
 #[derive(thiserror::Error, Debug)]
-enum QueriesCacheError {
+pub enum QueriesCacheError {
     #[error("Queries cache was dropped")]
     CacheDropped,
     #[error("Invalid query state")]

@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use everscale_crypto::ed25519;
+use tl_proto::TlRead;
 use tokio::net::UdpSocket;
 
 use super::channel::*;
@@ -250,8 +251,7 @@ impl AdnlNode {
             }
             proto::adnl::Message::Nop => Ok(()),
             proto::adnl::Message::Query { query_id, query } => {
-                let result =
-                    process_message_adnl_query(local_id, peer_id, subscribers, query).await?;
+                let result = process_adnl_query(local_id, peer_id, subscribers, query).await?;
 
                 match result {
                     QueryProcessingResult::Processed(Some(answer)) => self.send_message(
@@ -543,6 +543,24 @@ impl AdnlNode {
 pub enum ChannelReceiver {
     Ordinary(Arc<AdnlChannel>),
     Priority(Arc<AdnlChannel>),
+}
+
+async fn process_message_custom(
+    local_id: &AdnlNodeIdShort,
+    peer_id: &AdnlNodeIdShort,
+    subscribers: &[Arc<dyn Subscriber>],
+    data: &[u8],
+) -> Result<bool> {
+    let constructor = u32::read_from(data, &mut 0)?;
+    for subscriber in subscribers {
+        if subscriber
+            .try_consume_custom(local_id, peer_id, constructor, data)
+            .await?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 const ADNL_INITIAL_VERSION: u16 = 0;

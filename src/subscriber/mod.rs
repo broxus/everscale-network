@@ -2,10 +2,7 @@ use std::borrow::Cow;
 
 use anyhow::Result;
 
-pub use self::ping_subscriber::AdnlPingSubscriber;
 use crate::utils::*;
-
-mod ping_subscriber;
 
 #[async_trait::async_trait]
 pub trait Subscriber: Send + Sync {

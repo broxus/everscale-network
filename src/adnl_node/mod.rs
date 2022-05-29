@@ -13,6 +13,7 @@ pub use self::peer::{AdnlPeerFilter, PeerContext};
 
 use self::channel::{AdnlChannel, AdnlChannelId};
 use self::peer::{AdnlPeer, AdnlPeers};
+use self::ping_subscriber::AdnlPingSubscriber;
 use self::receiver::*;
 use self::sender::*;
 use self::transfer::*;
@@ -23,6 +24,7 @@ use crate::utils::*;
 mod channel;
 mod handshake;
 mod peer;
+mod ping_subscriber;
 mod receiver;
 mod sender;
 mod transfer;
@@ -103,9 +105,10 @@ impl Default for AdnlNodeOptions {
     }
 }
 
+/// Unreliable UDP transport layer
 pub struct AdnlNode {
     /// IPv4 address of the node
-    ip_address: AdnlAddressUdp,
+    ip_address: PackedSocketAddr,
     /// Immutable keystore
     keystore: Keystore,
     /// Configuration
@@ -143,7 +146,7 @@ pub struct AdnlNode {
 impl AdnlNode {
     /// Create new ADNL node on the specified address
     pub fn new(
-        ip_address: AdnlAddressUdp,
+        ip_address: PackedSocketAddr,
         keystore: Keystore,
         options: AdnlNodeOptions,
         peer_filter: Option<Arc<dyn AdnlPeerFilter>>,
@@ -226,7 +229,7 @@ impl AdnlNode {
 
     /// IPv4 address of the node
     #[inline(always)]
-    pub fn ip_address(&self) -> AdnlAddressUdp {
+    pub fn ip_address(&self) -> PackedSocketAddr {
         self.ip_address
     }
 
@@ -271,7 +274,7 @@ impl AdnlNode {
         ctx: PeerContext,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
-        peer_ip_address: AdnlAddressUdp,
+        peer_ip_address: PackedSocketAddr,
         peer_full_id: AdnlNodeIdFull,
     ) -> Result<bool> {
         use dashmap::mapref::entry::Entry;
@@ -337,7 +340,7 @@ impl AdnlNode {
         &self,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
-    ) -> Option<AdnlAddressUdp> {
+    ) -> Option<PackedSocketAddr> {
         let peers = self.get_peers(local_id).ok()?;
         let peer = peers.get(peer_id)?;
         Some(peer.ip_address())
@@ -358,7 +361,7 @@ impl AdnlNode {
         for<'a> A: TlRead<'a> + 'static,
     {
         match self
-            .query_raw(local_id, peer_id, build_query(None, query), timeout)
+            .query_raw(local_id, peer_id, make_query(None, query), timeout)
             .await?
         {
             Some(answer) => Ok(Some(tl_proto::deserialize(&answer)?)),
@@ -382,7 +385,7 @@ impl AdnlNode {
         for<'a> A: TlRead<'a> + 'static,
     {
         match self
-            .query_raw(local_id, peer_id, build_query(Some(prefix), query), timeout)
+            .query_raw(local_id, peer_id, make_query(Some(prefix), query), timeout)
             .await?
         {
             Some(answer) => Ok(Some(tl_proto::deserialize(&answer)?)),
@@ -430,28 +433,22 @@ impl AdnlNode {
 
                 match queries.update_query(query_id, None).await {
                     Ok(true) => { /* dropped query */ }
-                    Err(e) => {
-                        tracing::warn!("Failed to drop query {} ({e})", ShortQueryId(&query_id))
-                    }
+                    Err(_) => tracing::warn!("Failed to drop query"),
                     _ => { /* do nothing */ }
                 }
             }
         });
 
-        let query = pending_query.wait().await;
-
-        match query {
-            Ok(Some(answer)) => Ok(Some(answer)),
-            Ok(None) => {
-                if let Some(channel) = channel {
-                    if channel.update_drop_timeout(now(), self.options.channel_reset_timeout_sec) {
-                        self.reset_peer(local_id, peer_id)?;
-                    }
+        let answer = pending_query.wait().await?;
+        if answer.is_none() {
+            if let Some(channel) = channel {
+                if channel.update_drop_timeout(now(), self.options.channel_reset_timeout_sec) {
+                    self.reset_peer(local_id, peer_id)?;
                 }
-                Ok(None)
             }
-            Err(e) => Err(e),
         }
+
+        Ok(answer)
     }
 
     pub fn send_custom_message(
@@ -514,6 +511,22 @@ pub struct AdnlNodeMetrics {
     pub incoming_transfers_len: usize,
     /// Current queries cache len
     pub query_count: usize,
+}
+
+pub fn make_query<T>(prefix: Option<&[u8]>, query: T) -> Bytes
+where
+    T: TlWrite,
+{
+    match prefix {
+        Some(prefix) => {
+            let mut data = Vec::with_capacity(prefix.len() + query.max_size_hint());
+            data.extend_from_slice(prefix);
+            query.write_to(&mut data);
+            data
+        }
+        None => tl_proto::serialize(query),
+    }
+    .into()
 }
 
 #[derive(thiserror::Error, Debug)]

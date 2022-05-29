@@ -22,7 +22,7 @@ pub struct AdnlPeer {
 
 impl AdnlPeer {
     /// Creates new peer with receiver state initialized with the local reinit date
-    pub fn new(local_reinit_date: u32, ip_address: AdnlAddressUdp, id: AdnlNodeIdFull) -> Self {
+    pub fn new(local_reinit_date: u32, ip_address: PackedSocketAddr, id: AdnlNodeIdFull) -> Self {
         Self {
             id,
             ip_address: AtomicU64::new(ip_address.into()),
@@ -61,12 +61,12 @@ impl AdnlPeer {
     }
 
     #[inline(always)]
-    pub fn ip_address(&self) -> AdnlAddressUdp {
+    pub fn ip_address(&self) -> PackedSocketAddr {
         self.ip_address.load(Ordering::Acquire).into()
     }
 
     #[inline(always)]
-    pub fn set_ip_address(&self, ip_address: AdnlAddressUdp) {
+    pub fn set_ip_address(&self, ip_address: PackedSocketAddr) {
         self.ip_address.store(ip_address.into(), Ordering::Release);
     }
 
@@ -152,5 +152,5 @@ pub enum PeerContext {
 }
 
 pub trait AdnlPeerFilter: Send + Sync {
-    fn check(&self, ctx: PeerContext, ip: AdnlAddressUdp, peer_id: &AdnlNodeIdShort) -> bool;
+    fn check(&self, ctx: PeerContext, ip: PackedSocketAddr, peer_id: &AdnlNodeIdShort) -> bool;
 }

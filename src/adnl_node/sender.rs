@@ -302,7 +302,7 @@ enum MessageSigner<'a> {
 }
 
 pub struct PacketToSend {
-    destination: AdnlAddressUdp,
+    destination: PackedSocketAddr,
     data: Vec<u8>,
 }
 
