@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::Result;
 use everscale_crypto::ed25519;
 use tiny_adnl::utils::*;
-use tiny_adnl::{AdnlKeystore, AdnlNode, AdnlNodeOptions, PeerContext, QueryConsumingResult};
+use tiny_adnl::{AdnlNode, AdnlNodeOptions, PeerContext, QueryConsumingResult};
 use tl_proto::{TlRead, TlWrite};
 
 #[tokio::main]
@@ -19,7 +19,9 @@ async fn main() -> Result<()> {
 
     let left_node = AdnlNode::new(
         AdnlAddressUdp::localhost(20000),
-        AdnlKeystore::from_tagged_keys([(first_key.to_bytes(), 0)])?,
+        Keystore::builder()
+            .with_tagged_keys([(first_key.to_bytes(), 0)])?
+            .build(),
         adnl_node_options,
         None,
     );
@@ -27,7 +29,9 @@ async fn main() -> Result<()> {
 
     let right_node = AdnlNode::new(
         AdnlAddressUdp::localhost(20001),
-        AdnlKeystore::from_tagged_keys([(first_key.to_bytes(), 0)])?,
+        Keystore::builder()
+            .with_tagged_keys([(first_key.to_bytes(), 0)])?
+            .build(),
         adnl_node_options,
         None,
     );

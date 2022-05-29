@@ -6,49 +6,43 @@ use everscale_crypto::ed25519;
 
 use crate::utils::*;
 
-pub struct AdnlKeystore {
+/// Tagged keystore for ADNL keys
+#[derive(Default)]
+pub struct Keystore {
     keys: FxHashMap<AdnlNodeIdShort, Arc<StoredAdnlNodeKey>>,
     tags: FxHashMap<usize, AdnlNodeIdShort>,
 }
 
-impl AdnlKeystore {
-    pub fn from_tagged_keys<I>(keys: I) -> Result<Self>
-    where
-        I: IntoIterator<Item = ([u8; 32], usize)>,
-    {
-        let mut result = AdnlKeystore {
-            keys: Default::default(),
-            tags: Default::default(),
-        };
-
-        for (key, tag) in keys {
-            result.add_key(key, tag)?;
-        }
-
-        Ok(result)
+impl Keystore {
+    pub fn builder() -> KeystoreBuilder {
+        KeystoreBuilder::default()
     }
 
-    pub fn key_by_id(&self, id: &AdnlNodeIdShort) -> Result<Arc<StoredAdnlNodeKey>> {
+    pub fn key_by_id(
+        &self,
+        id: &AdnlNodeIdShort,
+    ) -> Result<&Arc<StoredAdnlNodeKey>, KeystoreError> {
         if let Some(key) = self.keys.get(id) {
-            Ok(key.clone())
+            Ok(key)
         } else {
-            Err(AdnlNodeConfigError::KeyIdNotFound(*id).into())
+            Err(KeystoreError::KeyIdNotFound(*id))
         }
     }
 
-    pub fn key_by_tag(&self, tag: usize) -> Result<Arc<StoredAdnlNodeKey>> {
+    pub fn key_by_tag(&self, tag: usize) -> Result<&Arc<StoredAdnlNodeKey>, KeystoreError> {
         if let Some(id) = self.tags.get(&tag) {
             self.key_by_id(id)
         } else {
-            Err(AdnlNodeConfigError::KeyTagNotFound(tag).into())
+            Err(KeystoreError::KeyTagNotFound(tag))
         }
     }
 
+    #[inline(always)]
     pub fn keys(&self) -> &FxHashMap<AdnlNodeIdShort, Arc<StoredAdnlNodeKey>> {
         &self.keys
     }
 
-    pub fn add_key(&mut self, key: [u8; 32], tag: usize) -> Result<AdnlNodeIdShort> {
+    pub fn add_key(&mut self, key: [u8; 32], tag: usize) -> Result<AdnlNodeIdShort, KeystoreError> {
         let secret_key = ed25519::SecretKey::from_bytes(key);
         let (full_id, short_id) = secret_key.compute_node_ids();
 
@@ -64,41 +58,56 @@ impl AdnlKeystore {
                         )));
                         Ok(short_id)
                     }
-                    hash_map::Entry::Occupied(_) => {
-                        Err(AdnlNodeConfigError::DuplicatedKey(short_id).into())
-                    }
+                    hash_map::Entry::Occupied(_) => Err(KeystoreError::DuplicatedKey(tag)),
                 }
             }
             hash_map::Entry::Occupied(entry) => {
                 if entry.get() == &short_id {
                     Ok(short_id)
                 } else {
-                    Err(AdnlNodeConfigError::DuplicatedKeyTag(tag).into())
+                    Err(KeystoreError::DuplicatedKeyTag(tag))
                 }
             }
         }
     }
+}
 
-    pub fn delete_key(&mut self, key: &AdnlNodeIdShort, tag: usize) -> Result<bool> {
-        let removed_key = self.keys.remove(key);
-        if let Some(ref removed) = self.tags.remove(&tag) {
-            if removed != key {
-                return Err(AdnlNodeConfigError::UnexpectedKey.into());
-            }
+#[derive(Default)]
+pub struct KeystoreBuilder {
+    keystore: Keystore,
+}
+
+impl KeystoreBuilder {
+    pub fn build(self) -> Keystore {
+        self.keystore
+    }
+
+    pub fn with_tagged_key(mut self, key: [u8; 32], tag: usize) -> Result<Self, KeystoreError> {
+        self.keystore.add_key(key, tag)?;
+        Ok(self)
+    }
+
+    /// Creates new keystore from tagged secret keys
+    pub fn with_tagged_keys<I>(mut self, keys: I) -> Result<Self, KeystoreError>
+    where
+        I: IntoIterator<Item = ([u8; 32], usize)>,
+    {
+        for (key, tag) in keys {
+            self.keystore.add_key(key, tag)?;
         }
-        Ok(removed_key.is_some())
+        Ok(self)
     }
 }
 
 #[derive(thiserror::Error, Debug)]
-enum AdnlNodeConfigError {
-    #[error("Duplicated key tag {} in node config", .0)]
+pub enum KeystoreError {
+    #[error("Duplicated key tag {0}")]
     DuplicatedKeyTag(usize),
-    #[error("Duplicated key {} in node", .0)]
-    DuplicatedKey(AdnlNodeIdShort),
-    #[error("Key is not found: {}", .0)]
+    #[error("Duplicated secret key {0}")]
+    DuplicatedKey(usize),
+    #[error("Key is not found: {0}")]
     KeyIdNotFound(AdnlNodeIdShort),
-    #[error("Key tag not found: {}", .0)]
+    #[error("Key tag not found: {0}")]
     KeyTagNotFound(usize),
     #[error("Unexpected key")]
     UnexpectedKey,
@@ -112,10 +121,10 @@ mod tests {
 
     #[test]
     fn test_handshake() -> Result<()> {
-        let mut first_peer_config = AdnlKeystore::from_tagged_keys(Vec::new())?;
+        let mut keystore = Keystore::default();
 
-        let first_peer_id = first_peer_config.add_key(rand::thread_rng().gen(), 1)?;
-        let first_peer = first_peer_config.key_by_tag(1).unwrap();
+        let first_peer_id = keystore.add_key(rand::thread_rng().gen(), 1)?;
+        let first_peer = keystore.key_by_tag(1).unwrap();
 
         let text = "Hello world";
 
@@ -130,7 +139,7 @@ mod tests {
 
             let mut buffer = packet.as_mut_slice().into();
             let (_, parsed_version) =
-                parse_handshake_packet(first_peer_config.keys(), &mut buffer)?.unwrap();
+                parse_handshake_packet(keystore.keys(), &mut buffer)?.unwrap();
             assert_eq!(parsed_version, version);
 
             println!("Packet decoded: {}", hex::encode(buffer.as_slice()));

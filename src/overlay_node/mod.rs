@@ -31,7 +31,7 @@ impl OverlayNode {
         zero_state_file_hash: [u8; 32],
         key_tag: usize,
     ) -> Result<Arc<Self>> {
-        let node_key = adnl.key_by_tag(key_tag)?;
+        let node_key = adnl.key_by_tag(key_tag)?.clone();
         Ok(Arc::new(Self {
             adnl,
             node_key,
@@ -89,18 +89,6 @@ impl OverlayNode {
         }
 
         Ok(new_peers)
-    }
-
-    pub fn delete_private_peers(
-        &self,
-        local_id: &AdnlNodeIdShort,
-        peers: &[AdnlNodeIdShort],
-    ) -> Result<bool> {
-        let mut changed = false;
-        for peer_id in peers {
-            changed |= self.adnl.delete_peer(local_id, peer_id)?;
-        }
-        Ok(changed)
     }
 
     pub fn add_public_overlay(

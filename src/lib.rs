@@ -1,8 +1,6 @@
 #![allow(clippy::too_many_arguments)]
 
-pub use adnl_node::{
-    AdnlKeystore, AdnlNode, AdnlNodeFilter, AdnlNodeMetrics, AdnlNodeOptions, PeerContext,
-};
+pub use adnl_node::{AdnlNode, AdnlNodeMetrics, AdnlNodeOptions, AdnlPeerFilter, PeerContext};
 pub use dht_node::{DhtNode, DhtNodeMetrics, DhtNodeOptions, ExternalDhtIter};
 pub use network::{Neighbour, Neighbours, NeighboursMetrics, NeighboursOptions, OverlayClient};
 pub use overlay_node::{

@@ -637,19 +637,24 @@ impl OverlayShard {
         info
     }
 
-    pub async fn query<T>(
+    pub async fn query<Q>(
         &self,
         peer_id: &AdnlNodeIdShort,
-        query: T,
+        query: Q,
         timeout: Option<u64>,
     ) -> Result<Option<Vec<u8>>>
     where
-        T: TlWrite,
+        Q: TlWrite,
     {
         let local_id = self.overlay_key().id();
-        self.adnl
+        match self
+            .adnl
             .query_with_prefix(local_id, peer_id, self.query_prefix(), query, timeout)
-            .await
+            .await?
+        {
+            Some(tl_proto::OwnedRawBytes(answer)) => Ok(Some(answer)),
+            None => Ok(None),
+        }
     }
 
     pub async fn query_via_rldp(

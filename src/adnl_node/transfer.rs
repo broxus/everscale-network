@@ -1,14 +1,16 @@
-use std::ops::Deref;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use anyhow::Result;
-use dashmap::mapref::one::Ref;
 use sha2::Digest;
 
 use crate::utils::*;
 
 pub type TransferId = [u8; 32];
 
+/// Multipart transfer
+///
+/// It is used to collect multiple values of ADNL `Part` messages.
+///
+/// See [crate::proto::adnl::Message]
 pub struct Transfer {
     /// Data parts labeled with offset
     parts: FxDashMap<usize, Vec<u8>>,
@@ -21,6 +23,7 @@ pub struct Transfer {
 }
 
 impl Transfer {
+    /// Creates new multipart transfer with target length in bytes
     pub fn new(total_len: usize) -> Self {
         Self {
             parts: Default::default(),
@@ -30,16 +33,21 @@ impl Transfer {
         }
     }
 
+    /// Returns transfer timings info (when it was last updated)
+    #[inline(always)]
     pub fn timings(&self) -> &UpdatedAt {
         &self.timings
     }
 
+    /// Tries to add new part to the transfer at given offset
+    ///
+    /// Will do nothing if part at given offset already exists
     pub fn add_part(
         &self,
         offset: usize,
         data: Vec<u8>,
         transfer_id: &TransferId,
-    ) -> Result<Option<Vec<u8>>> {
+    ) -> Result<Option<Vec<u8>>, TransferError> {
         let length = data.len();
         if self.parts.insert(offset, data).is_some() {
             return Ok(None);
@@ -59,7 +67,7 @@ impl Transfer {
                 Ordering::Acquire,
                 Ordering::Acquire,
             )
-            .unwrap_or_else(|was| was);
+            .unwrap_or_else(std::convert::identity);
 
         // Handle part
         match received.cmp(&self.total_len) {
@@ -75,20 +83,20 @@ impl Transfer {
                         received += data.len();
                         buffer.extend_from_slice(data);
                     } else {
-                        return Err(TransferError::PartMissing.into());
+                        return Err(TransferError::PartMissing);
                     }
                 }
 
                 // Check hash
                 let hash = sha2::Sha256::digest(&buffer);
                 if hash.as_slice() != transfer_id {
-                    return Err(TransferError::InvalidHash.into());
+                    return Err(TransferError::InvalidHash);
                 }
 
                 // Done
                 Ok(Some(buffer))
             }
-            std::cmp::Ordering::Greater => Err(TransferError::ReceivedTooMuch.into()),
+            std::cmp::Ordering::Greater => Err(TransferError::ReceivedTooMuch),
             std::cmp::Ordering::Less => {
                 tracing::debug!(
                     "Received ADNL transfer part ({received} of {})",
@@ -100,18 +108,8 @@ impl Transfer {
     }
 }
 
-pub struct TransferPartRef<'a>(Ref<'a, usize, Vec<u8>>);
-
-impl<'a> Deref for TransferPartRef<'a> {
-    type Target = [u8];
-
-    fn deref(&self) -> &Self::Target {
-        self.0.value().as_slice()
-    }
-}
-
 #[derive(thiserror::Error, Debug)]
-enum TransferError {
+pub enum TransferError {
     #[error("Invalid transfer part (received too much)")]
     ReceivedTooMuch,
     #[error("Invalid transfer (part is missing)")]

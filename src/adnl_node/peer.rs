@@ -6,27 +6,37 @@ use crate::utils::*;
 
 pub type AdnlPeers = FxDashMap<AdnlNodeIdShort, AdnlPeer>;
 
+/// Remote peer info
 pub struct AdnlPeer {
+    /// Remove peer public key
     id: AdnlNodeIdFull,
+    /// IPv4 address
     ip_address: AtomicU64,
+    /// Adnl channel key pair to encrypt messages from our side
     channel_key: ed25519::KeyPair,
+    /// Packets receiver state
     receiver_state: AdnlPeerState,
+    /// Packets sender state
     sender_state: AdnlPeerState,
 }
 
 impl AdnlPeer {
-    pub fn new(reinit_date: u32, ip_address: AdnlAddressUdp, id: AdnlNodeIdFull) -> Self {
+    /// Creates new peer with receiver state initialized with the local reinit date
+    pub fn new(local_reinit_date: u32, ip_address: AdnlAddressUdp, id: AdnlNodeIdFull) -> Self {
         Self {
             id,
             ip_address: AtomicU64::new(ip_address.into()),
             channel_key: ed25519::KeyPair::generate(&mut rand::thread_rng()),
-            receiver_state: AdnlPeerState::for_receive_with_reinit_date(reinit_date),
+            receiver_state: AdnlPeerState::for_receive_with_reinit_date(local_reinit_date),
             sender_state: AdnlPeerState::for_send(),
         }
     }
 
+    /// Tries to update peer reinit date
+    ///
+    /// It is only allowed to update peer reinit date if it is greater or equal to the known one
     #[inline(always)]
-    pub fn try_reinit(&self, reinit_date: u32) -> bool {
+    pub fn try_reinit_sender(&self, reinit_date: u32) -> bool {
         let sender_reinit_date = self.sender_state.reinit_date();
         match reinit_date.cmp(&sender_reinit_date) {
             std::cmp::Ordering::Equal => true,
@@ -44,31 +54,44 @@ impl AdnlPeer {
         }
     }
 
+    /// Returns peer full id (public key)
     #[inline(always)]
     pub fn id(&self) -> &AdnlNodeIdFull {
         &self.id
     }
 
+    #[inline(always)]
     pub fn ip_address(&self) -> AdnlAddressUdp {
         self.ip_address.load(Ordering::Acquire).into()
     }
 
-    pub fn channel_key(&self) -> &ed25519::KeyPair {
-        &self.channel_key
-    }
-
+    #[inline(always)]
     pub fn set_ip_address(&self, ip_address: AdnlAddressUdp) {
         self.ip_address.store(ip_address.into(), Ordering::Release);
     }
 
+    /// Adnl channel key pair to encrypt messages from our side
+    #[inline(always)]
+    pub fn channel_key(&self) -> &ed25519::KeyPair {
+        &self.channel_key
+    }
+
+    /// Packets receiver state
+    #[inline(always)]
     pub fn receiver_state(&self) -> &AdnlPeerState {
         &self.receiver_state
     }
 
+    /// Packets sender state
+    #[inline(always)]
     pub fn sender_state(&self) -> &AdnlPeerState {
         &self.sender_state
     }
 
+    /// Generates new channel key pair and resets receiver/sender states
+    ///
+    /// NOTE: Receiver state increments its reinit date so the peer will reset states
+    /// on the next message (see [`AdnlPeer::try_reinit_sender`])
     pub fn reset(&mut self) {
         let reinit_date = self.receiver_state.reinit_date();
 
@@ -78,6 +101,7 @@ impl AdnlPeer {
     }
 }
 
+/// Connection side packets histories and reinit date
 pub struct AdnlPeerState {
     ordinary_history: PacketsHistory,
     priority_history: PacketsHistory,
@@ -117,4 +141,16 @@ impl AdnlPeerState {
     pub fn set_reinit_date(&self, reinit_date: u32) {
         self.reinit_date.store(reinit_date, Ordering::Release)
     }
+}
+
+#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
+pub enum PeerContext {
+    AdnlPacket,
+    Dht,
+    PublicOverlay,
+    PrivateOverlay,
+}
+
+pub trait AdnlPeerFilter: Send + Sync {
+    fn check(&self, ctx: PeerContext, ip: AdnlAddressUdp, peer_id: &AdnlNodeIdShort) -> bool;
 }

@@ -325,7 +325,6 @@ pub struct AddressList {
     pub address: Option<Address>,
     pub version: u32,
     pub reinit_date: u32,
-    pub priority: u32,
     pub expire_at: u32,
 }
 
@@ -354,7 +353,7 @@ impl TlWrite for AddressList {
         self.address.write_to(packet);
         self.version.write_to(packet);
         self.reinit_date.write_to(packet);
-        self.priority.write_to(packet);
+        0u32.write_to(packet); // priority
         self.expire_at.write_to(packet);
     }
 }
@@ -374,14 +373,13 @@ impl<'tl> TlRead<'tl> for AddressList {
 
         let version = u32::read_from(packet, offset)?;
         let reinit_date = u32::read_from(packet, offset)?;
-        let priority = u32::read_from(packet, offset)?;
+        let _priority = u32::read_from(packet, offset)?;
         let expire_at = u32::read_from(packet, offset)?;
 
         Ok(Self {
             address,
             version,
             reinit_date,
-            priority,
             expire_at,
         })
     }

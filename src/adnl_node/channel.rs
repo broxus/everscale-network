@@ -2,26 +2,32 @@ use std::convert::TryInto;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use aes::cipher::StreamCipher;
-use anyhow::Result;
 use everscale_crypto::ed25519;
 
 use crate::utils::*;
 
-const CHANNEL_RESET_TIMEOUT: u32 = 30; // Seconds
-
+/// ADNL channel state
 pub struct AdnlChannel {
+    /// Whether channel was confirmed by both sides
     ready: AtomicBool,
+    /// Id and secret, used to encrypt outgoing messages
     channel_out: ChannelSide,
+    /// Id and secret, used to decrypt incoming messages
     channel_in: ChannelSide,
+    /// Short id of the local peer for which this channel is established
     local_id: AdnlNodeIdShort,
+    /// Short id of the remote peer for which this channel is established
     peer_id: AdnlNodeIdShort,
-    /// Public key of the keypair from the peer side
+    /// Public key of the keypair from the peer's side
     peer_channel_public_key: ed25519::PublicKey,
+    /// Channel creation time
     peer_channel_date: u32,
+    /// Channel drop timestamp
     drop: AtomicU32,
 }
 
 impl AdnlChannel {
+    /// Creates new channel state between `local_id` and `peer_id`
     pub fn new(
         local_id: AdnlNodeIdShort,
         peer_id: AdnlNodeIdShort,
@@ -41,6 +47,7 @@ impl AdnlChannel {
         };
 
         Self {
+            // Confirmed channel instantly becomes ready because other side already has it
             ready: AtomicBool::new(context == ChannelCreationContext::ConfirmChannel),
             channel_out: ChannelSide::from_secret(out_secret),
             channel_in: ChannelSide::from_secret(in_secret),
@@ -52,6 +59,7 @@ impl AdnlChannel {
         }
     }
 
+    /// Checks whether channel it initialized by the given key and date
     pub fn is_still_valid(
         &self,
         peer_channel_public_key: &ed25519::PublicKey,
@@ -61,63 +69,79 @@ impl AdnlChannel {
             || self.peer_channel_date >= peer_channel_date
     }
 
+    /// Whether channel can be used for sending messages
+    #[inline(always)]
     pub fn ready(&self) -> bool {
         self.ready.load(Ordering::Acquire)
     }
 
+    /// Sets channel ready
+    #[inline(always)]
     pub fn set_ready(&self) {
         self.ready.store(true, Ordering::Release)
     }
 
+    /// Public key of the keypair from the peer's side
     #[inline(always)]
     pub fn peer_channel_public_key(&self) -> &ed25519::PublicKey {
         &self.peer_channel_public_key
     }
 
+    /// Channel creation time
     #[inline(always)]
     pub fn peer_channel_date(&self) -> u32 {
         self.peer_channel_date
     }
 
+    /// Local channel id (priority)
     #[inline(always)]
     pub fn priority_channel_in_id(&self) -> &AdnlChannelId {
         &self.channel_in.priority.id
     }
 
+    /// Local channel id (ordinary)
     #[inline(always)]
     pub fn ordinary_channel_in_id(&self) -> &AdnlChannelId {
         &self.channel_in.ordinary.id
     }
 
+    /// Short id of the local peer for which this channel is established
     #[inline(always)]
     pub fn local_id(&self) -> &AdnlNodeIdShort {
         &self.local_id
     }
 
+    /// Short id of the remote peer for which this channel is established
     #[inline(always)]
     pub fn peer_id(&self) -> &AdnlNodeIdShort {
         &self.peer_id
     }
 
-    pub fn update_drop_timeout(&self, now: u32) -> u32 {
-        self.drop
-            .compare_exchange(
-                0,
-                now + CHANNEL_RESET_TIMEOUT,
-                Ordering::Acquire,
-                Ordering::Relaxed,
-            )
-            .unwrap_or_else(|was| was)
+    /// Sets channel drop timestamp if it wasn't set before.
+    /// Returns whether channel should be dropped
+    pub fn update_drop_timeout(&self, now: u32, timeout: u32) -> bool {
+        let drop_timestamp = self
+            .drop
+            .compare_exchange(0, now + timeout, Ordering::Acquire, Ordering::Relaxed)
+            .unwrap_or_else(std::convert::identity);
+
+        drop_timestamp > 0 && drop_timestamp < now
     }
 
+    /// Resets channel drop timestamp
+    #[inline(always)]
     pub fn reset_drop_timeout(&self) {
         self.drop.store(0, Ordering::Release);
     }
 
-    /// Decrypts data from the channel. Returns the version of the ADNL version
-    pub fn decrypt(&self, buffer: &mut PacketView, priority: bool) -> Result<Option<u16>> {
+    /// Decrypts data from the channel. Returns the version of the ADNL
+    pub fn decrypt(
+        &self,
+        buffer: &mut PacketView,
+        priority: bool,
+    ) -> Result<Option<u16>, AdnlChannelError> {
         if buffer.len() < 64 {
-            return Err(AdnlChannelError::ChannelMessageIsTooShort(buffer.len()).into());
+            return Err(AdnlChannelError::ChannelMessageIsTooShort(buffer.len()));
         }
 
         let shared_secret = if priority {
@@ -136,7 +160,7 @@ impl AdnlChannel {
                 if compute_packet_data_hash($version, &$buffer[$end..]).as_slice()
                     != &$buffer[$start..$end]
                 {
-                    return Err(AdnlChannelError::InvalidChannelMessageChecksum.into());
+                    return Err(AdnlChannelError::InvalidChannelMessageChecksum);
                 }
 
                 // Leave only data in the buffer
@@ -281,8 +305,7 @@ pub type AdnlChannelId = [u8; 32];
 
 #[inline(always)]
 fn compute_channel_id(key: &[u8; 32]) -> AdnlChannelId {
-    let key = everscale_crypto::tl::PublicKey::Aes { key };
-    tl_proto::hash(key)
+    tl_proto::hash(everscale_crypto::tl::PublicKey::Aes { key })
 }
 
 fn decode_version(prefix: &[u8; 68]) -> Option<u16> {
@@ -301,7 +324,7 @@ fn decode_version(prefix: &[u8; 68]) -> Option<u16> {
 }
 
 #[derive(thiserror::Error, Debug)]
-enum AdnlChannelError {
+pub enum AdnlChannelError {
     #[error("Channel message is too short: {}", .0)]
     ChannelMessageIsTooShort(usize),
     #[error("Invalid channel message checksum")]

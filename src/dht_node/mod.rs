@@ -59,7 +59,7 @@ impl Default for DhtNodeOptions {
 
 impl DhtNode {
     pub fn new(adnl: Arc<AdnlNode>, key_tag: usize, options: DhtNodeOptions) -> Result<Arc<Self>> {
-        let node_key = adnl.key_by_tag(key_tag)?;
+        let node_key = adnl.key_by_tag(key_tag)?.clone();
 
         let mut dht_node = Self {
             adnl,
@@ -466,14 +466,8 @@ impl DhtNode {
     {
         let result = self
             .adnl
-            .query_with_prefix(self.node_key.id(), peer_id, &self.query_prefix, query, None)
-            .await
-            .and_then(|answer| {
-                Ok(match answer {
-                    Some(answer) => Some(tl_proto::deserialize(&answer)?),
-                    None => None,
-                })
-            });
+            .query_with_prefix::<Q, A>(self.node_key.id(), peer_id, &self.query_prefix, query, None)
+            .await;
         self.update_peer_status(peer_id, result.is_ok());
         result
     }
