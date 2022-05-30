@@ -378,7 +378,7 @@ impl Neighbours {
         let query = proto::rpc::TonNodeGetCapabilities;
         match self
             .overlay_shard
-            .query(neighbour.peer_id(), query, timeout)
+            .adnl_query(neighbour.peer_id(), query, timeout)
             .await
         {
             Ok(Some(answer)) => {

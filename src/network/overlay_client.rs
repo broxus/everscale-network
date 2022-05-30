@@ -170,7 +170,10 @@ impl OverlayClient {
         let peer_id = neighbour.peer_id();
 
         let now = Instant::now();
-        let answer = self.overlay_shard.query(peer_id, query, timeout).await?;
+        let answer = self
+            .overlay_shard
+            .adnl_query(peer_id, query, timeout)
+            .await?;
         let roundtrip = now.elapsed().as_millis() as u64;
 
         match answer.map(|answer| tl_proto::deserialize::<A>(&answer)) {
@@ -215,7 +218,7 @@ impl OverlayClient {
 
         let (answer, roundtrip) = self
             .overlay_shard
-            .query_via_rldp(
+            .rldp_query(
                 neighbour.peer_id(),
                 query_data,
                 &self.rldp,

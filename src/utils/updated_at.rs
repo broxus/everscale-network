@@ -20,7 +20,7 @@ impl UpdatedAt {
     }
 
     pub fn is_expired(&self, timeout: u64) -> bool {
-        self.started_at.elapsed().as_secs() - self.updated_at.load(Ordering::Acquire) >= timeout
+        self.started_at.elapsed().as_secs() >= self.updated_at.load(Ordering::Acquire) + timeout
     }
 }
 

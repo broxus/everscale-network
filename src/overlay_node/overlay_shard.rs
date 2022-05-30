@@ -1,4 +1,5 @@
 use std::convert::{TryFrom, TryInto};
+use std::hash::BuildHasherDefault;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,54 +18,73 @@ use crate::proto;
 use crate::rldp_node::*;
 use crate::utils::*;
 
-pub struct OverlayShard {
-    adnl: Arc<AdnlNode>,
-    overlay_id: OverlayIdShort,
-    node_key: Arc<StoredAdnlNodeKey>,
-    overlay_key: Option<Arc<StoredAdnlNodeKey>>,
-    options: OverlayShardOptions,
-
-    owned_broadcasts: FxDashMap<BroadcastId, Arc<OwnedBroadcast>>,
-    finished_broadcasts: SegQueue<BroadcastId>,
-    finished_broadcast_count: AtomicU32,
-
-    received_peers: Arc<Mutex<ReceivedPeersMap>>,
-    received_broadcasts: Arc<BroadcastReceiver<IncomingBroadcastInfo>>,
-
-    nodes: FxDashMap<AdnlNodeIdShort, proto::overlay::NodeOwned>,
-    ignored_peers: FxDashSet<AdnlNodeIdShort>,
-    known_peers: PeersCache,
-    random_peers: PeersCache,
-    neighbours: PeersCache,
-
-    query_prefix: Vec<u8>,
-    message_prefix: Vec<u8>,
-}
-
 #[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct OverlayShardOptions {
-    /// Default: 20
+    /// Instant random peers list length. Used to select neighbours.
+    ///
+    /// Default: `20`
     pub max_shard_peers: usize,
-    /// Default: 5
+
+    /// More persistent list of peers. Used to distribute broadcasts.
+    ///
+    /// Default: `5`
     pub max_shard_neighbours: usize,
-    /// Default: 1000
+
+    /// Max simultaneous broadcasts.
+    ///
+    /// Default: `1000`
     pub max_broadcast_log: u32,
-    /// Default: 1000
-    pub broadcast_gc_timeout_ms: u64,
-    /// Default: 60000
+
+    /// Broadcasts GC interval. Will leave at most `max_broadcast_log` each iteration.
+    ///
+    /// Default: `1000` ms
+    pub broadcast_gc_interval_ms: u64,
+
+    /// Neighbours or random peers update interval.
+    ///
+    /// Default: `60000` ms
     pub overlay_peers_timeout_ms: u64,
-    /// Default: 3
+
+    /// Packets with length bigger than this will be sent using FEC broadcast.
+    /// See [`OverlayShard::broadcast`]
+    ///
+    /// Default: `768` bytes
+    pub max_ordinary_broadcast_len: usize,
+
+    /// Max number of peers to distribute broadcast to.
+    ///
+    /// Default: `3`
     pub broadcast_target_count: usize,
-    /// Default: 3
+
+    /// Max number of peers to redistribute ordinary broadcast to.
+    ///
+    /// Default: `3`
     pub secondary_broadcast_target_count: usize,
-    /// Default: 5
+
+    /// Max number of peers to redistribute FEC broadcast to.
+    ///
+    /// Default: `5`
     pub secondary_fec_broadcast_target_count: usize,
-    /// Default: 20
-    pub max_broadcast_wave: usize,
-    /// Default: 60
+
+    /// Number of FEC messages to send in group. There will be a short delay between them.
+    ///
+    /// Default: `20`
+    pub broadcast_wave_len: usize,
+
+    /// Interval between FEC broadcast waves.
+    ///
+    /// Default: `10` ms
+    pub broadcast_wave_interval_ms: u64,
+
+    /// Overlay broadcast timeout. It will be forcefully dropped if not received in this time.
+    ///
+    /// Default: `60` sec
     pub broadcast_timeout_sec: u64,
-    /// Default: false
+
+    /// Whether requests will be compressed.
+    ///
+    /// Default: `false`
     pub force_compression: bool,
 }
 
@@ -74,19 +94,65 @@ impl Default for OverlayShardOptions {
             max_shard_peers: 20,
             max_shard_neighbours: 5,
             max_broadcast_log: 1000,
-            broadcast_gc_timeout_ms: 1000,
+            broadcast_gc_interval_ms: 1000,
             overlay_peers_timeout_ms: 60000,
+            max_ordinary_broadcast_len: 768,
             broadcast_target_count: 3,
             secondary_broadcast_target_count: 3,
             secondary_fec_broadcast_target_count: 5,
-            max_broadcast_wave: 20,
+            broadcast_wave_len: 20,
+            broadcast_wave_interval_ms: 10,
             broadcast_timeout_sec: 60,
             force_compression: false,
         }
     }
 }
 
+/// Reliable P2P messages distribution layer
+pub struct OverlayShard {
+    /// Underlying ADNL node
+    adnl: Arc<AdnlNode>,
+    /// Unique overlay id
+    overlay_id: OverlayIdShort,
+    /// Local ADNL key
+    node_key: Arc<StoredAdnlNodeKey>,
+    // TODO: must ensure that it was added to ADNL keystore
+    /// Optional private overlay key
+    overlay_key: Option<Arc<StoredAdnlNodeKey>>,
+    // Configuration
+    options: OverlayShardOptions,
+
+    /// Broadcasts in progress
+    owned_broadcasts: FxDashMap<BroadcastId, Arc<OwnedBroadcast>>,
+    /// Broadcasts removal queue
+    finished_broadcasts: SegQueue<BroadcastId>,
+    /// Broadcasts removal queue len
+    finished_broadcast_count: AtomicU32,
+
+    /// New peers to add
+    received_peers: Arc<Mutex<ReceivedPeersMap>>,
+    /// Complete incoming broadcasts queue
+    received_broadcasts: Arc<BroadcastReceiver<IncomingBroadcastInfo>>,
+
+    /// Raw overlay nodes
+    nodes: FxDashMap<AdnlNodeIdShort, proto::overlay::NodeOwned>,
+    /// Peers to exclude from random selection
+    ignored_peers: FxDashSet<AdnlNodeIdShort>,
+    /// All known peers
+    known_peers: PeersCache,
+    /// Known peers subset
+    random_peers: PeersCache,
+    /// Random peers subset
+    neighbours: PeersCache,
+
+    /// Serialized [`proto::rpc::OverlayQuery`] with own overlay id
+    query_prefix: Vec<u8>,
+    /// Serialized [`proto::overlay::Message`] with own overlay id
+    message_prefix: Vec<u8>,
+}
+
 impl OverlayShard {
+    /// Create new overlay node on top of the given ADNL node
     pub fn new(
         adnl: Arc<AdnlNode>,
         node_key: Arc<StoredAdnlNodeKey>,
@@ -121,50 +187,46 @@ impl OverlayShard {
             message_prefix,
         });
 
-        overlay.update_neighbours(options.max_shard_neighbours);
-
-        tokio::spawn({
-            let overlay = Arc::downgrade(&overlay);
-
-            let gc_interval = Duration::from_millis(options.broadcast_gc_timeout_ms);
-
-            async move {
-                let mut peers_timeout = 0;
-                while let Some(overlay) = overlay.upgrade() {
-                    while overlay.finished_broadcast_count.load(Ordering::Acquire)
-                        > options.max_broadcast_log
-                    {
-                        if let Some(broadcast_id) = overlay.finished_broadcasts.pop() {
-                            overlay.owned_broadcasts.remove(&broadcast_id);
-                        }
-                        overlay
-                            .finished_broadcast_count
-                            .fetch_sub(1, Ordering::Release);
+        let overlay_ref = Arc::downgrade(&overlay);
+        let gc_interval = Duration::from_millis(options.broadcast_gc_interval_ms);
+        tokio::spawn(async move {
+            let mut peers_timeout = 0;
+            while let Some(overlay) = overlay_ref.upgrade() {
+                while overlay.finished_broadcast_count.load(Ordering::Acquire)
+                    > options.max_broadcast_log
+                {
+                    if let Some(broadcast_id) = overlay.finished_broadcasts.pop() {
+                        overlay.owned_broadcasts.remove(&broadcast_id);
                     }
-
-                    peers_timeout += options.broadcast_gc_timeout_ms;
-                    if peers_timeout > options.overlay_peers_timeout_ms {
-                        if overlay.is_private() {
-                            overlay.update_neighbours(1);
-                        } else {
-                            overlay.update_random_peers(1);
-                        }
-                        peers_timeout = 0;
-                    }
-
-                    tokio::time::sleep(gc_interval).await;
+                    overlay
+                        .finished_broadcast_count
+                        .fetch_sub(1, Ordering::Release);
                 }
+
+                peers_timeout += options.broadcast_gc_interval_ms;
+                if peers_timeout > options.overlay_peers_timeout_ms {
+                    if overlay.is_private() {
+                        overlay.update_neighbours(1);
+                    } else {
+                        overlay.update_random_peers(1);
+                    }
+                    peers_timeout = 0;
+                }
+
+                tokio::time::sleep(gc_interval).await;
             }
         });
 
         overlay
     }
 
+    /// Configuration
     #[inline(always)]
     pub fn options(&self) -> &OverlayShardOptions {
         &self.options
     }
 
+    /// Instant metrics
     pub fn metrics(&self) -> OverlayShardMetrics {
         OverlayShardMetrics {
             owned_broadcasts_len: self.owned_broadcasts.len(),
@@ -178,18 +240,22 @@ impl OverlayShard {
         }
     }
 
+    /// Underlying ADNL node
     pub fn adnl(&self) -> &Arc<AdnlNode> {
         &self.adnl
     }
 
+    /// Short overlay id
     pub fn id(&self) -> &OverlayIdShort {
         &self.overlay_id
     }
 
+    #[inline(always)]
     pub fn is_private(&self) -> bool {
         self.overlay_key.is_some()
     }
 
+    /// Returns local ADNL key for public overlay or explicit key for the private one
     pub fn overlay_key(&self) -> &Arc<StoredAdnlNodeKey> {
         match &self.overlay_key {
             Some(overlay_key) => overlay_key,
@@ -197,6 +263,7 @@ impl OverlayShard {
         }
     }
 
+    /// Extends known peers with the given ones
     pub fn add_known_peers(&self, peers: &[AdnlNodeIdShort]) {
         match &self.overlay_key {
             Some(overlay_key) => self.known_peers.extend(
@@ -211,6 +278,12 @@ impl OverlayShard {
         self.update_neighbours(self.options.max_shard_neighbours);
     }
 
+    /// Verifies and adds new peer to the overlay. Returns `Some` short peer id
+    /// if new peer was successfully added and `None` if peer already existed.
+    ///
+    /// See [`OverlayShard::add_public_peers`] for multiple peers.
+    ///
+    /// NOTE: this method will return error for private overlay
     pub fn add_public_peer(
         &self,
         ip_address: PackedSocketAddr,
@@ -243,6 +316,11 @@ impl OverlayShard {
         }
     }
 
+    /// Verifies and adds new peers to the overlay. Returns a list of successfully added peers.
+    ///
+    /// See [`OverlayShard::add_public_peer`] for single peer.
+    ///
+    /// NOTE: this method will return error for private overlay
     pub fn add_public_peers<'a, I>(&self, nodes: I) -> Result<Vec<AdnlNodeIdShort>>
     where
         I: IntoIterator<Item = (PackedSocketAddr, proto::overlay::Node<'a>)>,
@@ -278,6 +356,7 @@ impl OverlayShard {
         Ok(result)
     }
 
+    /// Removes peer from random peers and adds it to ignored peers
     pub fn delete_public_peer(&self, peer_id: &AdnlNodeIdShort) -> bool {
         if !self.ignored_peers.insert(*peer_id) {
             return false;
@@ -288,20 +367,26 @@ impl OverlayShard {
         true
     }
 
+    /// Fill `dst` with `amount` peers from known peers
     pub fn write_cached_peers(&self, amount: usize, dst: &PeersCache) {
         dst.randomly_fill_from(&self.known_peers, amount, Some(&self.ignored_peers));
     }
 
+    /// Serialized [`proto::rpc::OverlayQuery`] with own overlay id
     #[inline(always)]
     pub fn query_prefix(&self) -> &[u8] {
         &self.query_prefix
     }
 
+    /// Serialized [`proto::overlay::Message`] with own overlay id
     #[inline(always)]
     pub fn message_prefix(&self) -> &[u8] {
         &self.message_prefix
     }
 
+    /// Sends direct ADNL message ([`proto::adnl::Message::Custom`]) to the given peer.
+    ///
+    /// NOTE: Local id ([`OverlayShard::overlay_key`]) will be used as sender
     pub fn send_message(&self, peer_id: &AdnlNodeIdShort, data: &[u8]) -> Result<()> {
         let local_id = self.overlay_key().id();
 
@@ -311,13 +396,53 @@ impl OverlayShard {
         self.adnl.send_custom_message(local_id, peer_id, &buffer)
     }
 
+    /// Sends ADNL query directly to the given peer. In case of timeout returns `Ok(None)`
+    ///
+    /// NOTE: Local id ([`OverlayShard::overlay_key`]) will be used as sender
+    pub async fn adnl_query<Q>(
+        &self,
+        peer_id: &AdnlNodeIdShort,
+        query: Q,
+        timeout: Option<u64>,
+    ) -> Result<Option<Vec<u8>>>
+    where
+        Q: TlWrite,
+    {
+        let local_id = self.overlay_key().id();
+        match self
+            .adnl
+            .query_with_prefix(local_id, peer_id, self.query_prefix(), query, timeout)
+            .await?
+        {
+            Some(tl_proto::OwnedRawBytes(answer)) => Ok(Some(answer)),
+            None => Ok(None),
+        }
+    }
+
+    /// Sends RLDP query directly to the given peer. In case of timeout returns `Ok((None, max_timeout))`
+    ///
+    /// NOTE: Local id ([`OverlayShard::overlay_key`]) will be used as sender
+    pub async fn rldp_query(
+        &self,
+        peer_id: &AdnlNodeIdShort,
+        data: Vec<u8>,
+        rldp: &Arc<RldpNode>,
+        roundtrip: Option<u64>,
+    ) -> Result<(Option<Vec<u8>>, u64)> {
+        let local_id = self.overlay_key().id();
+        rldp.query(local_id, peer_id, data, roundtrip).await
+    }
+
+    /// Distributes provided message to the neighbours subset.
+    ///
+    /// See `broadcast_target_count` in [`OverlayShardOptions`]
+    ///
+    /// NOTE: If `data` len is greater than
     pub fn broadcast(
         self: &Arc<Self>,
         data: Vec<u8>,
         source: Option<&Arc<StoredAdnlNodeKey>>,
     ) -> OutgoingBroadcastInfo {
-        const ORDINARY_BROADCAST_MAX_SIZE: usize = 768;
-
         let local_id = self.overlay_key().id();
 
         let key = match source {
@@ -325,44 +450,91 @@ impl OverlayShard {
             None => &self.node_key,
         };
 
-        if data.len() <= ORDINARY_BROADCAST_MAX_SIZE {
+        if data.len() <= self.options.max_ordinary_broadcast_len {
             self.send_broadcast(local_id, data, key)
         } else {
             self.send_fec_broadcast(local_id, data, key)
         }
     }
 
+    /// Waits until the next received broadcast.
+    ///
+    /// NOTE: It is important to keep polling this method because otherwise
+    /// received broadcasts queue will consume all the memory.
     pub async fn wait_for_broadcast(&self) -> IncomingBroadcastInfo {
         self.received_broadcasts.pop().await
     }
 
+    /// Take received peers map
     pub fn take_new_peers(&self) -> ReceivedPeersMap {
         let mut peers = self.received_peers.lock();
         std::mem::take(&mut *peers)
     }
 
-    pub fn push_peers<'a, I>(&self, peers: I)
-    where
-        I: IntoIterator<Item = proto::overlay::Node<'a>>,
-    {
-        use std::collections::hash_map::Entry;
+    /// Returns raw signed overlay node
+    pub fn sign_local_node(&self) -> proto::overlay::NodeOwned {
+        let key = self.overlay_key();
+        let version = now();
 
-        let mut known_peers = self.received_peers.lock();
-        for node in peers {
-            match known_peers.entry(HashWrapper(node.id.as_equivalent_owned())) {
-                Entry::Occupied(mut entry) => {
-                    if entry.get().version < node.version {
-                        entry.insert(node.as_equivalent_owned());
-                    }
-                }
-                Entry::Vacant(entry) => {
-                    entry.insert(node.as_equivalent_owned());
-                }
-            }
+        let node_to_sign = proto::overlay::NodeToSign {
+            id: key.id().as_slice(),
+            overlay: self.id().as_slice(),
+            version,
+        };
+        let signature = key.sign(&node_to_sign);
+
+        proto::overlay::NodeOwned {
+            id: key.full_id().as_tl().as_equivalent_owned(),
+            overlay: *self.id().as_slice(),
+            version,
+            signature: signature.to_vec(),
         }
     }
 
-    pub async fn receive_broadcast(
+    /// Get random peers from the specified peer. Returns `Ok(None)` in case of timeout
+    pub async fn get_random_peers(
+        &self,
+        peer_id: &AdnlNodeIdShort,
+        existing_peers: &FxDashSet<AdnlNodeIdShort>,
+        timeout: Option<u64>,
+    ) -> Result<Option<Vec<AdnlNodeIdShort>>> {
+        let query = proto::rpc::OverlayGetRandomPeersOwned {
+            peers: self.prepare_random_peers(),
+        };
+        let answer = match self.adnl_query(peer_id, query, timeout).await? {
+            Some(answer) => answer,
+            None => {
+                tracing::trace!("No random peers from {peer_id}");
+                return Ok(None);
+            }
+        };
+
+        let answer = tl_proto::deserialize(&answer)?;
+        tracing::trace!("Got random peers from {peer_id}");
+        let proto::overlay::Nodes { nodes } = self.filter_nodes(answer);
+
+        let nodes = nodes
+            .into_iter()
+            .filter_map(|node| match AdnlNodeIdFull::try_from(node.id) {
+                Ok(full_id) => {
+                    let peer_id = full_id.compute_short_id();
+                    if !existing_peers.contains(&peer_id) {
+                        Some(peer_id)
+                    } else {
+                        None
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to process peer: {e}");
+                    None
+                }
+            })
+            .collect();
+        Ok(Some(nodes))
+    }
+
+    /// Process ordinary broadcast
+    pub(super) async fn receive_broadcast(
         self: &Arc<Self>,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
@@ -428,7 +600,8 @@ impl OverlayShard {
         Ok(())
     }
 
-    pub async fn receive_fec_broadcast(
+    /// Process FEC broadcast
+    pub(super) async fn receive_fec_broadcast(
         self: &Arc<Self>,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
@@ -451,13 +624,11 @@ impl OverlayShard {
         };
 
         let transfer = match self.owned_broadcasts.entry(broadcast_id) {
+            // First packet of the broadcast
             Entry::Vacant(entry) => {
-                let incoming_transfer =
-                    self.create_incoming_fec_transfer(broadcast.fec, broadcast_id, source)?;
-                entry
-                    .insert(Arc::new(OwnedBroadcast::Incoming(incoming_transfer)))
-                    .clone()
+                self.spawn_fec_transfer_receiver(broadcast.fec, broadcast_id, source, entry)?
             }
+            // Broadcast was already started
             Entry::Occupied(entry) => entry.get().clone(),
         };
         let transfer = match transfer.as_ref() {
@@ -471,10 +642,12 @@ impl OverlayShard {
             return Ok(());
         }
 
+        // Ignore duplicate packets
         if !transfer.history.deliver_packet(broadcast.seqno as u64) {
             return Ok(());
         }
 
+        // Send broadcast to the processing queue
         if !transfer.completed.load(Ordering::Acquire) {
             transfer.broadcast_tx.send(BroadcastFec {
                 node_id,
@@ -489,6 +662,7 @@ impl OverlayShard {
             })?;
         }
 
+        // Redistribute broadcast
         let neighbours = self.neighbours.get_random_peers(
             self.options.secondary_fec_broadcast_target_count,
             Some(peer_id),
@@ -498,7 +672,40 @@ impl OverlayShard {
         Ok(())
     }
 
-    pub fn send_broadcast(
+    /// Process random peers request
+    pub(super) fn process_get_random_peers(
+        &self,
+        query: proto::rpc::OverlayGetRandomPeers<'_>,
+    ) -> proto::overlay::NodesOwned {
+        use std::collections::hash_map::Entry;
+
+        // Update received peers
+        let peers = self.filter_nodes(query.peers).nodes;
+
+        // Insert received peers
+        let mut received_peers = self.received_peers.lock();
+        for node in peers {
+            match received_peers.entry(HashWrapper(node.id.as_equivalent_owned())) {
+                Entry::Occupied(mut entry) => {
+                    if entry.get().version < node.version {
+                        entry.insert(node.as_equivalent_owned());
+                    }
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(node.as_equivalent_owned());
+                }
+            }
+        }
+
+        // NOTE: reduce lock scope
+        drop(received_peers);
+
+        // Return random peers from our side
+        self.prepare_random_peers()
+    }
+
+    /// Send ordinary broadcast
+    fn send_broadcast(
         self: &Arc<Self>,
         local_id: &AdnlNodeIdShort,
         mut data: Vec<u8>,
@@ -528,8 +735,8 @@ impl OverlayShard {
             signature: &signature,
         });
 
-        let mut buffer = self.message_prefix.clone();
-        buffer.reserve(broadcast.max_size_hint());
+        let mut buffer = Vec::with_capacity(self.message_prefix.len() + broadcast.max_size_hint());
+        buffer.extend_from_slice(&self.message_prefix);
         broadcast.write_to(&mut buffer);
         drop(data);
 
@@ -545,7 +752,8 @@ impl OverlayShard {
         }
     }
 
-    pub fn send_fec_broadcast(
+    /// Send FEC broadcast
+    fn send_fec_broadcast(
         self: &Arc<Self>,
         local_id: &AdnlNodeIdShort,
         mut data: Vec<u8>,
@@ -564,8 +772,6 @@ impl OverlayShard {
         }
 
         let data_size = data.len() as u32;
-        let (data_tx, mut data_rx) = mpsc::unbounded_channel();
-
         let mut outgoing_transfer = OutgoingFecTransfer {
             broadcast_id,
             encoder: RaptorQEncoder::with_data(&data),
@@ -575,169 +781,55 @@ impl OverlayShard {
         // NOTE: Data is already in encoder and not needed anymore
         drop(data);
 
-        let max_seqno = (data_size / outgoing_transfer.encoder.params().symbol_size + 1) * 3 / 2;
-
-        // Spawn data producer
-        tokio::spawn({
-            let key = key.clone();
-            let overlay_shard = self.clone();
-            let max_broadcast_wave = self.options.max_broadcast_wave;
-
-            async move {
-                while outgoing_transfer.seqno <= max_seqno {
-                    for _ in 0..max_broadcast_wave {
-                        let result = overlay_shard
-                            .prepare_fec_broadcast(&mut outgoing_transfer, &key)
-                            .and_then(|data| {
-                                data_tx.send(data)?;
-                                Ok(())
-                            });
-
-                        if let Err(e) = result {
-                            tracing::warn!("Failed to send overlay broadcast: {e}");
-                            return;
-                        }
-
-                        if outgoing_transfer.seqno > max_seqno {
-                            break;
-                        }
-                    }
-
-                    tokio::time::sleep(Duration::from_millis(TRANSFER_LOOP_INTERVAL)).await;
-                }
-            }
-        });
-
         let neighbours = self
             .neighbours
             .get_random_peers(self.options.max_shard_neighbours, None);
+
         let info = OutgoingBroadcastInfo {
-            packets: max_seqno,
+            packets: (data_size / outgoing_transfer.encoder.params().symbol_size + 1) * 3 / 2,
             recipient_count: neighbours.len(),
         };
 
         // Spawn sender
-        tokio::spawn({
-            let overlay_shard = self.clone();
-            let local_id = *local_id;
+        let wave_len = self.options.broadcast_wave_len;
+        let waves_interval = Duration::from_millis(self.options.broadcast_wave_interval_ms);
+        let overlay_shard = self.clone();
+        let local_id = *local_id;
+        let key = key.clone();
+        tokio::spawn(async move {
+            // Send broadcast in waves
+            'outer: while outgoing_transfer.seqno <= info.packets {
+                for _ in 0..wave_len {
+                    let data =
+                        match overlay_shard.prepare_fec_broadcast(&mut outgoing_transfer, &key) {
+                            Ok(data) => data,
+                            // Rare case, it is easier to just ignore it
+                            Err(e) => {
+                                tracing::warn!("Failed to send overlay broadcast: {e}");
+                                break 'outer;
+                            }
+                        };
 
-            async move {
-                while let Some(data) = data_rx.recv().await {
                     overlay_shard.distribute_broadcast(&local_id, &neighbours, &data);
+                    if outgoing_transfer.seqno > info.packets {
+                        break 'outer;
+                    }
                 }
 
-                data_rx.close();
-                while data_rx.recv().await.is_some() {}
-
-                overlay_shard.spawn_broadcast_gc_task(broadcast_id);
+                // Sleep between waves
+                tokio::time::sleep(waves_interval).await;
             }
         });
+
+        // Schedule broadcast cleanup
+        self.spawn_broadcast_gc_task(broadcast_id);
 
         // Done
         info
     }
 
-    pub async fn query<Q>(
-        &self,
-        peer_id: &AdnlNodeIdShort,
-        query: Q,
-        timeout: Option<u64>,
-    ) -> Result<Option<Vec<u8>>>
-    where
-        Q: TlWrite,
-    {
-        let local_id = self.overlay_key().id();
-        match self
-            .adnl
-            .query_with_prefix(local_id, peer_id, self.query_prefix(), query, timeout)
-            .await?
-        {
-            Some(tl_proto::OwnedRawBytes(answer)) => Ok(Some(answer)),
-            None => Ok(None),
-        }
-    }
-
-    pub async fn query_via_rldp(
-        &self,
-        peer_id: &AdnlNodeIdShort,
-        data: Vec<u8>,
-        rldp: &Arc<RldpNode>,
-        roundtrip: Option<u64>,
-    ) -> Result<(Option<Vec<u8>>, u64)> {
-        let local_id = self.overlay_key().id();
-        rldp.query(local_id, peer_id, data, roundtrip).await
-    }
-
-    pub async fn get_random_peers(
-        &self,
-        peer_id: &AdnlNodeIdShort,
-        existing_peers: &FxDashSet<AdnlNodeIdShort>,
-        timeout: Option<u64>,
-    ) -> Result<Option<Vec<AdnlNodeIdShort>>> {
-        let query = proto::rpc::OverlayGetRandomPeersOwned {
-            peers: self.prepare_random_peers(),
-        };
-        let answer = match self.query(peer_id, query, timeout).await? {
-            Some(answer) => answer,
-            None => {
-                tracing::trace!("No random peers from {peer_id}");
-                return Ok(None);
-            }
-        };
-
-        let answer = tl_proto::deserialize(&answer)?;
-        tracing::trace!("Got random peers from {peer_id}");
-        let proto::overlay::Nodes { nodes } = self.process_nodes(answer);
-
-        let nodes = nodes
-            .into_iter()
-            .filter_map(|node| match AdnlNodeIdFull::try_from(node.id) {
-                Ok(full_id) => {
-                    let peer_id = full_id.compute_short_id();
-                    if !existing_peers.contains(&peer_id) {
-                        Some(peer_id)
-                    } else {
-                        None
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to process peer: {e}");
-                    None
-                }
-            })
-            .collect();
-        Ok(Some(nodes))
-    }
-
-    pub fn process_get_random_peers(
-        &self,
-        query: proto::rpc::OverlayGetRandomPeers<'_>,
-    ) -> proto::overlay::NodesOwned {
-        let peers = self.process_nodes(query.peers).nodes;
-        self.push_peers(peers);
-        self.prepare_random_peers()
-    }
-
-    pub fn sign_local_node(&self) -> proto::overlay::NodeOwned {
-        let key = self.overlay_key();
-        let version = now();
-
-        let node_to_sign = proto::overlay::NodeToSign {
-            id: key.id().as_slice(),
-            overlay: self.id().as_slice(),
-            version,
-        };
-        let signature = key.sign(&node_to_sign);
-
-        proto::overlay::NodeOwned {
-            id: key.full_id().as_tl().as_equivalent_owned(),
-            overlay: *self.id().as_slice(),
-            version,
-            signature: signature.to_vec(),
-        }
-    }
-
-    fn process_nodes<'a>(&self, mut nodes: proto::overlay::Nodes<'a>) -> proto::overlay::Nodes<'a> {
+    /// Verifies and retains only valid remote peers
+    fn filter_nodes<'a>(&self, mut nodes: proto::overlay::Nodes<'a>) -> proto::overlay::Nodes<'a> {
         tracing::trace!("-------- Got random peers");
 
         nodes.nodes.retain(|node| {
@@ -761,12 +853,15 @@ impl OverlayShard {
         nodes
     }
 
+    /// Creates nodes list
     fn prepare_random_peers(&self) -> proto::overlay::NodesOwned {
-        let mut nodes = SmallVec::with_capacity(MAX_RANDOM_PEERS + 1);
+        const MAX_PEERS_IN_RESPONSE: usize = 4;
+
+        let mut nodes = SmallVec::with_capacity(MAX_PEERS_IN_RESPONSE + 1);
         nodes.push(self.sign_local_node());
 
-        let peers = PeersCache::with_capacity(MAX_RANDOM_PEERS);
-        peers.randomly_fill_from(&self.random_peers, MAX_RANDOM_PEERS, None);
+        let peers = PeersCache::with_capacity(MAX_PEERS_IN_RESPONSE);
+        peers.randomly_fill_from(&self.random_peers, MAX_PEERS_IN_RESPONSE, None);
         for peer_id in &peers {
             if let Some(node) = self.nodes.get(peer_id) {
                 nodes.push(node.clone());
@@ -776,11 +871,13 @@ impl OverlayShard {
         proto::overlay::NodesOwned { nodes }
     }
 
+    /// Fills random peers with a random subset from known peers
     fn update_random_peers(&self, amount: usize) {
         self.random_peers
             .randomly_fill_from(&self.known_peers, amount, Some(&self.ignored_peers));
     }
 
+    /// Fills neighbours with a random subset from random peers
     fn update_neighbours(&self, amount: usize) {
         if self.is_private() {
             self.neighbours
@@ -794,6 +891,7 @@ impl OverlayShard {
         }
     }
 
+    /// Adds public peer info
     fn insert_public_peer(&self, peer_id: &AdnlNodeIdShort, node: proto::overlay::Node<'_>) {
         use dashmap::mapref::entry::Entry;
 
@@ -820,10 +918,7 @@ impl OverlayShard {
         }
     }
 
-    fn is_broadcast_outdated(&self, date: u32) -> bool {
-        date + (self.options.broadcast_timeout_sec as u32) < now()
-    }
-
+    /// Adds new broadcast id
     fn create_broadcast(&self, broadcast_id: BroadcastId) -> bool {
         use dashmap::mapref::entry::Entry;
 
@@ -836,93 +931,105 @@ impl OverlayShard {
         }
     }
 
-    fn create_incoming_fec_transfer(
+    /// Creates incoming FEC broadcast
+    fn spawn_fec_transfer_receiver(
         self: &Arc<Self>,
         fec_type: proto::rldp::RaptorQFecType,
         broadcast_id: BroadcastId,
         peer_id: AdnlNodeIdShort,
-    ) -> Result<IncomingFecTransfer> {
+        entry: VacantBroadcastEntry<'_>,
+    ) -> Result<Arc<OwnedBroadcast>> {
         let (broadcast_tx, mut broadcast_rx) = mpsc::unbounded_channel();
-        let mut decoder = RaptorQDecoder::with_params(fec_type);
 
-        tokio::spawn({
-            let overlay_shard = self.clone();
+        let entry = entry
+            .insert(Arc::new(OwnedBroadcast::Incoming(IncomingFecTransfer {
+                completed: AtomicBool::new(false),
+                history: PacketsHistory::for_recv(),
+                broadcast_tx,
+                source: peer_id,
+                updated_at: Default::default(),
+            })))
+            .clone();
 
-            async move {
-                let mut packets = 0;
-                while let Some(broadcast) = broadcast_rx.recv().await {
-                    packets += 1;
-                    match process_fec_broadcast(&mut decoder, broadcast) {
-                        Ok(Some(data)) => {
-                            overlay_shard
-                                .received_broadcasts
-                                .push(IncomingBroadcastInfo {
-                                    packets,
-                                    data,
-                                    from: peer_id,
-                                });
-                        }
-                        Ok(None) => continue,
-                        Err(e) => {
-                            tracing::warn!("Error when receiving overlay broadcast: {e}");
-                        }
+        // Spawn packets receiver
+        let overlay_shard = self.clone();
+        tokio::spawn(async move {
+            let mut decoder = RaptorQDecoder::with_params(fec_type);
+
+            // For each fec broadcast packet
+            let mut packets = 0;
+            while let Some(broadcast) = broadcast_rx.recv().await {
+                packets += 1;
+
+                // Add new data to the encoder
+                match process_fec_broadcast(&mut decoder, broadcast) {
+                    // Broadcast complete and successfully decoded
+                    Ok(Some(data)) => {
+                        let data = IncomingBroadcastInfo {
+                            packets,
+                            data,
+                            from: peer_id,
+                        };
+                        overlay_shard.received_broadcasts.push(data);
+                        break;
                     }
-                    break;
+                    // Broadcast is not complete yet
+                    Ok(None) => continue,
+                    // Error during decoding
+                    Err(e) => {
+                        tracing::warn!("Error when receiving overlay broadcast: {e}");
+                        break;
+                    }
                 }
+            }
 
+            // Mark broadcast as completed
+            if let Some(broadcast) = overlay_shard.owned_broadcasts.get(&broadcast_id) {
+                match broadcast.value().as_ref() {
+                    OwnedBroadcast::Incoming(transfer) => {
+                        transfer.completed.store(true, Ordering::Release);
+                    }
+                    _ => {
+                        tracing::error!("Incoming fec broadcast mismatch");
+                    }
+                }
+            }
+        });
+
+        // Spawn broadcast cleanup task
+        let overlay_shard = self.clone();
+        let broadcast_timeout_sec = self.options.broadcast_timeout_sec;
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(broadcast_timeout_sec * 100)).await;
+
+                // Find incoming broadcast
                 if let Some(broadcast) = overlay_shard.owned_broadcasts.get(&broadcast_id) {
                     match broadcast.value().as_ref() {
-                        OwnedBroadcast::Incoming(transfer) => {
-                            transfer.completed.store(true, Ordering::Release);
+                        // Keep waiting if broadcast is not expired or not complete
+                        OwnedBroadcast::Incoming(transfer)
+                            if !transfer.completed.load(Ordering::Acquire)
+                                && !transfer.updated_at.is_expired(broadcast_timeout_sec) =>
+                        {
+                            continue
                         }
+                        OwnedBroadcast::Incoming(_) => {}
                         _ => {
                             tracing::error!("Incoming fec broadcast mismatch");
                         }
                     }
                 }
 
-                broadcast_rx.close();
-                while broadcast_rx.recv().await.is_some() {}
+                break;
             }
+
+            overlay_shard.spawn_broadcast_gc_task(broadcast_id);
         });
 
-        tokio::spawn({
-            let overlay_shard = self.clone();
-            let broadcast_timeout_sec = self.options.broadcast_timeout_sec;
-
-            async move {
-                loop {
-                    tokio::time::sleep(Duration::from_millis(broadcast_timeout_sec * 100)).await;
-
-                    if let Some(broadcast) = overlay_shard.owned_broadcasts.get(&broadcast_id) {
-                        match broadcast.value().as_ref() {
-                            OwnedBroadcast::Incoming(transfer) => {
-                                if !transfer.updated_at.is_expired(broadcast_timeout_sec) {
-                                    continue;
-                                }
-                            }
-                            _ => {
-                                tracing::error!("Incoming fec broadcast mismatch");
-                            }
-                        }
-                    }
-
-                    break;
-                }
-
-                overlay_shard.spawn_broadcast_gc_task(broadcast_id);
-            }
-        });
-
-        Ok(IncomingFecTransfer {
-            completed: Default::default(),
-            history: PacketsHistory::for_recv(),
-            broadcast_tx,
-            source: peer_id,
-            updated_at: Default::default(),
-        })
+        Ok(entry)
     }
 
+    /// Encodes next chunk of FEC broadcast
     fn prepare_fec_broadcast(
         &self,
         transfer: &mut OutgoingFecTransfer,
@@ -931,7 +1038,7 @@ impl OverlayShard {
         let chunk = transfer.encoder.encode(&mut transfer.seqno)?;
         let date = now();
 
-        let signature = make_fec_part_to_sign(
+        let broadcast_to_sign = make_fec_part_to_sign(
             &transfer.broadcast_id,
             transfer.encoder.params().data_size,
             date,
@@ -941,7 +1048,7 @@ impl OverlayShard {
             transfer.seqno,
             None,
         );
-        let signature = key.sign(signature);
+        let signature = key.sign(&broadcast_to_sign);
 
         let broadcast =
             proto::overlay::Broadcast::BroadcastFec(proto::overlay::OverlayBroadcastFec {
@@ -958,13 +1065,15 @@ impl OverlayShard {
             });
 
         transfer.seqno += 1;
-        let mut buffer = self.message_prefix.clone();
-        buffer.reserve(broadcast.max_size_hint());
+
+        let mut buffer = Vec::with_capacity(self.message_prefix.len() + broadcast.max_size_hint());
+        buffer.extend_from_slice(&self.message_prefix);
         broadcast.write_to(&mut buffer);
 
         Ok(buffer)
     }
 
+    /// Sends ADNL messages to neighbours
     fn distribute_broadcast(
         &self,
         local_id: &AdnlNodeIdShort,
@@ -976,6 +1085,10 @@ impl OverlayShard {
                 tracing::warn!("Failed to distribute broadcast: {e}");
             }
         }
+    }
+
+    fn is_broadcast_outdated(&self, date: u32) -> bool {
+        date + (self.options.broadcast_timeout_sec as u32) < now()
     }
 
     fn spawn_broadcast_gc_task(self: &Arc<Self>, broadcast_id: BroadcastId) {
@@ -1131,7 +1244,7 @@ pub struct IncomingBroadcastInfo {
     pub from: AdnlNodeIdShort,
 }
 
-#[derive(Default)]
+#[derive(Default, Copy, Clone)]
 pub struct OutgoingBroadcastInfo {
     pub packets: u32,
     pub recipient_count: usize,
@@ -1169,6 +1282,13 @@ struct BroadcastFec {
     signature: [u8; 64],
 }
 
+type VacantBroadcastEntry<'a> = dashmap::mapref::entry::VacantEntry<
+    'a,
+    BroadcastId,
+    Arc<OwnedBroadcast>,
+    BuildHasherDefault<rustc_hash::FxHasher>,
+>;
+
 pub type ReceivedPeersMap =
     FxHashMap<HashWrapper<everscale_crypto::tl::PublicKeyOwned>, proto::overlay::NodeOwned>;
 
@@ -1188,8 +1308,4 @@ enum OverlayShardError {
     PublicPeerToPrivateOverlay,
 }
 
-const MAX_RANDOM_PEERS: usize = 4;
-
 const BROADCAST_FLAG_ANY_SENDER: u32 = 1; // Any sender
-
-const TRANSFER_LOOP_INTERVAL: u64 = 10; // Milliseconds
