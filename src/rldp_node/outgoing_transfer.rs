@@ -36,6 +36,7 @@ impl OutgoingTransfer {
         &self.transfer_id
     }
 
+    /// Encodes next part of the message. Returns packet count which is required to be sent.
     pub fn start_next_part(&mut self) -> Result<Option<u32>> {
         if self.is_finished() {
             return Ok(None);
@@ -55,9 +56,9 @@ impl OutgoingTransfer {
             &self.data[processed..processed + chunk_size],
         ));
 
-        let symbols_count = encoder.params().symbols_count;
-        Ok(if symbols_count > 0 {
-            Some(symbols_count)
+        let packet_count = encoder.params().packet_count;
+        Ok(if packet_count > 0 {
+            Some(packet_count)
         } else {
             None
         })

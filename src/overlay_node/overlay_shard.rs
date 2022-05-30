@@ -108,7 +108,7 @@ impl Default for OverlayShardOptions {
     }
 }
 
-/// Reliable P2P messages distribution layer
+/// P2P messages distribution layer
 pub struct OverlayShard {
     /// Underlying ADNL node
     adnl: Arc<AdnlNode>,
@@ -116,9 +116,6 @@ pub struct OverlayShard {
     overlay_id: OverlayIdShort,
     /// Local ADNL key
     node_key: Arc<StoredAdnlNodeKey>,
-    // TODO: must ensure that it was added to ADNL keystore
-    /// Optional private overlay key
-    overlay_key: Option<Arc<StoredAdnlNodeKey>>,
     // Configuration
     options: OverlayShardOptions,
 
@@ -157,7 +154,6 @@ impl OverlayShard {
         adnl: Arc<AdnlNode>,
         node_key: Arc<StoredAdnlNodeKey>,
         overlay_id: OverlayIdShort,
-        overlay_key: Option<Arc<StoredAdnlNodeKey>>,
         options: OverlayShardOptions,
     ) -> Arc<Self> {
         let query_prefix = tl_proto::serialize(proto::rpc::OverlayQuery {
@@ -171,7 +167,6 @@ impl OverlayShard {
             adnl,
             overlay_id,
             node_key,
-            overlay_key,
             options,
             owned_broadcasts: FxDashMap::default(),
             finished_broadcasts: SegQueue::new(),
@@ -205,11 +200,7 @@ impl OverlayShard {
 
                 peers_timeout += options.broadcast_gc_interval_ms;
                 if peers_timeout > options.overlay_peers_timeout_ms {
-                    if overlay.is_private() {
-                        overlay.update_neighbours(1);
-                    } else {
-                        overlay.update_random_peers(1);
-                    }
+                    overlay.update_random_peers(1);
                     peers_timeout = 0;
                 }
 
@@ -250,49 +241,20 @@ impl OverlayShard {
         &self.overlay_id
     }
 
-    #[inline(always)]
-    pub fn is_private(&self) -> bool {
-        self.overlay_key.is_some()
-    }
-
-    /// Returns local ADNL key for public overlay or explicit key for the private one
+    /// Returns local ADNL key for public overlay
     pub fn overlay_key(&self) -> &Arc<StoredAdnlNodeKey> {
-        match &self.overlay_key {
-            Some(overlay_key) => overlay_key,
-            None => &self.node_key,
-        }
-    }
-
-    /// Extends known peers with the given ones
-    pub fn add_known_peers(&self, peers: &[AdnlNodeIdShort]) {
-        match &self.overlay_key {
-            Some(overlay_key) => self.known_peers.extend(
-                peers
-                    .iter()
-                    .cloned()
-                    .filter(|peer_id| peer_id != overlay_key.id()),
-            ),
-            None => self.known_peers.extend(peers.iter().cloned()),
-        }
-
-        self.update_neighbours(self.options.max_shard_neighbours);
+        &self.node_key
     }
 
     /// Verifies and adds new peer to the overlay. Returns `Some` short peer id
     /// if new peer was successfully added and `None` if peer already existed.
     ///
     /// See [`OverlayShard::add_public_peers`] for multiple peers.
-    ///
-    /// NOTE: this method will return error for private overlay
     pub fn add_public_peer(
         &self,
         ip_address: PackedSocketAddr,
         node: proto::overlay::Node<'_>,
     ) -> Result<Option<AdnlNodeIdShort>> {
-        if self.is_private() {
-            return Err(OverlayShardError::PublicPeerToPrivateOverlay.into());
-        }
-
         if let Err(e) = verify_node(&self.overlay_id, &node) {
             tracing::warn!("Error during overlay peer verification: {e:?}");
             return Ok(None);
@@ -319,16 +281,10 @@ impl OverlayShard {
     /// Verifies and adds new peers to the overlay. Returns a list of successfully added peers.
     ///
     /// See [`OverlayShard::add_public_peer`] for single peer.
-    ///
-    /// NOTE: this method will return error for private overlay
     pub fn add_public_peers<'a, I>(&self, nodes: I) -> Result<Vec<AdnlNodeIdShort>>
     where
         I: IntoIterator<Item = (PackedSocketAddr, proto::overlay::Node<'a>)>,
     {
-        if self.is_private() {
-            return Err(OverlayShardError::PublicPeerToPrivateOverlay.into());
-        }
-
         let mut result = Vec::new();
         for (ip_address, node) in nodes {
             if let Err(e) = verify_node(&self.overlay_id, &node) {
@@ -786,7 +742,7 @@ impl OverlayShard {
             .get_random_peers(self.options.max_shard_neighbours, None);
 
         let info = OutgoingBroadcastInfo {
-            packets: (data_size / outgoing_transfer.encoder.params().symbol_size + 1) * 3 / 2,
+            packets: (data_size / outgoing_transfer.encoder.params().packet_len + 1) * 3 / 2,
             recipient_count: neighbours.len(),
         };
 
@@ -871,24 +827,12 @@ impl OverlayShard {
         proto::overlay::NodesOwned { nodes }
     }
 
-    /// Fills random peers with a random subset from known peers
+    /// Fills random peers and neighbours with a random subset from known peers
     fn update_random_peers(&self, amount: usize) {
         self.random_peers
             .randomly_fill_from(&self.known_peers, amount, Some(&self.ignored_peers));
-    }
-
-    /// Fills neighbours with a random subset from random peers
-    fn update_neighbours(&self, amount: usize) {
-        if self.is_private() {
-            self.neighbours
-                .randomly_fill_from(&self.known_peers, amount, None);
-        } else {
-            self.neighbours.randomly_fill_from(
-                &self.random_peers,
-                amount,
-                Some(&self.ignored_peers),
-            );
-        }
+        self.neighbours
+            .randomly_fill_from(&self.random_peers, amount, Some(&self.ignored_peers));
     }
 
     /// Adds public peer info
@@ -1040,7 +984,7 @@ impl OverlayShard {
 
         let broadcast_to_sign = make_fec_part_to_sign(
             &transfer.broadcast_id,
-            transfer.encoder.params().data_size,
+            transfer.encoder.params().total_len,
             date,
             BROADCAST_FLAG_ANY_SENDER,
             transfer.encoder.params(),
@@ -1055,7 +999,7 @@ impl OverlayShard {
                 src: key.full_id().as_tl(),
                 certificate: proto::overlay::Certificate::EmptyCertificate,
                 data_hash: &transfer.broadcast_id,
-                data_size: transfer.encoder.params().data_size,
+                data_size: transfer.encoder.params().total_len,
                 flags: BROADCAST_FLAG_ANY_SENDER,
                 data: &chunk,
                 seqno: transfer.seqno,
@@ -1304,8 +1248,6 @@ enum OverlayShardError {
     DataSizeMismatch,
     #[error("Data hash mismatch")]
     DataHashMismatch,
-    #[error("Cannot add public peer to private overlay")]
-    PublicPeerToPrivateOverlay,
 }
 
 const BROADCAST_FLAG_ANY_SENDER: u32 = 1; // Any sender

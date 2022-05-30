@@ -2,8 +2,9 @@ use std::sync::{Arc, Weak};
 
 use tokio::sync::Barrier;
 
-use super::query::*;
 use super::FxDashMap;
+
+pub type QueryId = [u8; 32];
 
 #[derive(Default)]
 pub struct QueriesCache {

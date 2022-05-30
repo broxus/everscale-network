@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use aes::cipher::{StreamCipher, StreamCipherSeek};
 use everscale_crypto::ed25519;
 
-use super::handshake::*;
+use super::encryption::*;
 use crate::utils::*;
 
 /// ADNL channel state
@@ -162,7 +162,9 @@ impl AdnlChannel {
         };
 
         if buffer.len() > EXT_DATA_START {
-            if let Some(version) = decode_version((&buffer[..EXT_DATA_START]).try_into().unwrap()) {
+            if let Some(version) =
+                decode_version::<EXT_DATA_START>((&buffer[..EXT_DATA_START]).try_into().unwrap())
+            {
                 // Build cipher
                 let mut cipher = build_packet_cipher(
                     shared_secret,
@@ -330,21 +332,6 @@ pub type AdnlChannelId = [u8; 32];
 #[inline(always)]
 fn compute_channel_id(key: &[u8; 32]) -> AdnlChannelId {
     tl_proto::hash(everscale_crypto::tl::PublicKey::Aes { key })
-}
-
-fn decode_version(prefix: &[u8; 68]) -> Option<u16> {
-    let mut xor: [u8; 4] = prefix[32..36].try_into().unwrap();
-    for (i, byte) in prefix[..32].iter().enumerate() {
-        xor[i % 4] ^= *byte;
-    }
-    for (i, byte) in prefix[36..].iter().enumerate() {
-        xor[i % 4] ^= *byte;
-    }
-    if xor[0] == xor[2] && xor[1] == xor[3] {
-        Some(u16::from_be_bytes(xor[..2].try_into().unwrap()))
-    } else {
-        None
-    }
 }
 
 #[derive(thiserror::Error, Debug)]

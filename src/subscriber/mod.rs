@@ -1,6 +1,8 @@
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use anyhow::Result;
+use tl_proto::TlRead;
 
 use crate::utils::*;
 
@@ -58,4 +60,32 @@ impl QueryConsumingResult<'_> {
         let _ = tl_proto::TlAssert::<T>::BOXED_WRITE;
         Ok(Self::Consumed(Some(tl_proto::serialize(answer))))
     }
+}
+
+pub async fn process_query(
+    local_id: &AdnlNodeIdShort,
+    peer_id: &AdnlNodeIdShort,
+    subscribers: &[Arc<dyn Subscriber>],
+    mut query: Cow<'_, [u8]>,
+) -> Result<QueryProcessingResult<Vec<u8>>> {
+    let constructor = u32::read_from(&query, &mut 0)?;
+
+    for subscriber in subscribers {
+        query = match subscriber
+            .try_consume_query(local_id, peer_id, constructor, query)
+            .await?
+        {
+            QueryConsumingResult::Consumed(answer) => {
+                return Ok(QueryProcessingResult::Processed(answer))
+            }
+            QueryConsumingResult::Rejected(query) => query,
+        };
+    }
+
+    Ok(QueryProcessingResult::Rejected)
+}
+
+pub enum QueryProcessingResult<T> {
+    Processed(Option<T>),
+    Rejected,
 }

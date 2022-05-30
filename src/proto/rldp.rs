@@ -56,7 +56,7 @@ pub enum MessagePart<'tl> {
 #[derive(Debug, Copy, Clone, Eq, PartialEq, TlRead, TlWrite)]
 #[tl(boxed, id = 0x8b93a7e0, size_hint = 12)]
 pub struct RaptorQFecType {
-    pub data_size: u32,
-    pub symbol_size: u32,
-    pub symbols_count: u32,
+    pub total_len: u32,
+    pub packet_len: u32,
+    pub packet_count: u32,
 }

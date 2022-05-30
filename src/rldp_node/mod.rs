@@ -42,6 +42,16 @@ pub struct RldpNodeOptions {
     /// Default: `10000` ms
     pub query_max_timeout_ms: u64,
 
+    /// Number of FEC messages to send in group. There will be a short delay between them.
+    ///
+    /// Default: `20`
+    pub query_wave_len: u32,
+
+    /// Interval between FEC broadcast waves.
+    ///
+    /// Default: `10` ms
+    pub query_wave_interval_ms: u64,
+
     /// Whether requests will be compressed.
     ///
     /// Default: `false`
@@ -55,6 +65,8 @@ impl Default for RldpNodeOptions {
             max_peer_queries: 16,
             query_min_timeout_ms: 500,
             query_max_timeout_ms: 10000,
+            query_wave_len: 20,
+            query_wave_interval_ms: 10,
             force_compression: false,
         }
     }
@@ -79,16 +91,7 @@ impl RldpNode {
     ) -> Arc<Self> {
         Arc::new(Self {
             semaphores: Default::default(),
-            transfers: TransfersCache::new(
-                adnl,
-                subscribers,
-                TransfersCacheOptions {
-                    query_min_timeout_ms: options.query_min_timeout_ms,
-                    query_max_timeout_ms: options.query_max_timeout_ms,
-                    max_answer_size: options.max_answer_size,
-                    force_compression: options.force_compression,
-                },
-            ),
+            transfers: TransfersCache::new(adnl, subscribers, options),
             options,
         })
     }
@@ -204,14 +207,6 @@ impl Subscriber for RldpNode {
 pub struct RldpNodeMetrics {
     pub peer_count: usize,
     pub transfers_cache_len: usize,
-}
-
-pub struct MessagePart {
-    fec_type: proto::rldp::RaptorQFecType,
-    part: u32,
-    total_size: u64,
-    seqno: u32,
-    data: Vec<u8>,
 }
 
 #[derive(thiserror::Error, Debug)]

@@ -97,33 +97,6 @@ impl std::fmt::Display for OverlayIdShort {
     }
 }
 
-#[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub struct PrivateOverlayIdShort([u8; 32]);
-
-impl PrivateOverlayIdShort {
-    pub fn as_slice(&self) -> &[u8; 32] {
-        &self.0
-    }
-}
-
-impl PartialEq<[u8]> for PrivateOverlayIdShort {
-    fn eq(&self, other: &[u8]) -> bool {
-        self.0.eq(other)
-    }
-}
-
-impl PartialEq<[u8; 32]> for PrivateOverlayIdShort {
-    fn eq(&self, other: &[u8; 32]) -> bool {
-        self.0.eq(other)
-    }
-}
-
-impl From<PrivateOverlayIdShort> for [u8; 32] {
-    fn from(id: PrivateOverlayIdShort) -> Self {
-        id.0
-    }
-}
-
 pub type FileHash = [u8; 32];
 
 #[derive(thiserror::Error, Debug)]

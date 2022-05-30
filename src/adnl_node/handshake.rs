@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use aes::cipher::{StreamCipher, StreamCipherSeek};
 use everscale_crypto::ed25519;
-use sha2::Digest;
 
+use super::encryption::*;
 use crate::utils::*;
 
 /// Modifies `buffer` in-place to contain the handshake packet
@@ -112,7 +112,9 @@ pub fn parse_handshake_packet(
     );
 
     if buffer.len() > EXT_DATA_START {
-        if let Some(version) = decode_version((&buffer[..EXT_DATA_START]).try_into().unwrap()) {
+        if let Some(version) =
+            decode_version::<EXT_DATA_START>((&buffer[..EXT_DATA_START]).try_into().unwrap())
+        {
             // Build cipher
             let mut cipher = build_packet_cipher(
                 &shared_secret,
@@ -150,34 +152,6 @@ pub fn parse_handshake_packet(
     buffer.remove_prefix(DATA_START);
 
     Ok(Some((*local_id, None)))
-}
-
-pub fn compute_packet_data_hash(version: Option<u16>, data: &[u8]) -> [u8; 32] {
-    match version {
-        Some(version) => {
-            let mut hash = sha2::Sha256::new();
-            hash.update(&version.to_be_bytes());
-            hash.update(data);
-            hash.finalize()
-        }
-        None => sha2::Sha256::digest(data),
-    }
-    .into()
-}
-
-fn decode_version(prefix: &[u8; 100]) -> Option<u16> {
-    let mut xor: [u8; 4] = prefix[64..68].try_into().unwrap();
-    for (i, byte) in prefix[..64].iter().enumerate() {
-        xor[i % 4] ^= *byte;
-    }
-    for (i, byte) in prefix[68..].iter().enumerate() {
-        xor[i % 4] ^= *byte;
-    }
-    if xor[0] == xor[2] && xor[1] == xor[3] {
-        Some(u16::from_be_bytes(xor[..2].try_into().unwrap()))
-    } else {
-        None
-    }
 }
 
 #[derive(thiserror::Error, Debug)]

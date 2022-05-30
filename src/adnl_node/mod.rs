@@ -22,6 +22,7 @@ use crate::subscriber::*;
 use crate::utils::*;
 
 mod channel;
+mod encryption;
 mod handshake;
 mod peer;
 mod ping_subscriber;

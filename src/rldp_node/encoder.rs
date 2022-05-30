@@ -21,9 +21,9 @@ impl RaptorQEncoder {
         Self {
             engine,
             params: RaptorQFecType {
-                data_size: data.len() as u32,
-                symbol_size: MAX_TRANSMISSION_UNIT,
-                symbols_count: source_packets.len() as u32,
+                total_len: data.len() as u32,
+                packet_len: MAX_TRANSMISSION_UNIT,
+                packet_count: source_packets.len() as u32,
             },
             source_packets,
             encoder_index: 0,

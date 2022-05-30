@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -561,6 +562,15 @@ async fn process_message_custom(
         }
     }
     Ok(false)
+}
+
+async fn process_adnl_query(
+    local_id: &AdnlNodeIdShort,
+    peer_id: &AdnlNodeIdShort,
+    subscribers: &[Arc<dyn Subscriber>],
+    query: &[u8],
+) -> Result<QueryProcessingResult<Vec<u8>>> {
+    process_query(local_id, peer_id, subscribers, Cow::Borrowed(query)).await
 }
 
 const ADNL_INITIAL_VERSION: u16 = 0;

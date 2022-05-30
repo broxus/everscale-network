@@ -2,7 +2,6 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use anyhow::Result;
-use everscale_crypto::ed25519;
 use tl_proto::{BoxedConstructor, TlRead};
 
 pub use self::overlay_shard::{
@@ -17,11 +16,17 @@ use crate::utils::*;
 mod broadcast_receiver;
 mod overlay_shard;
 
+/// P2P messages distribution layer group
 pub struct OverlayNode {
+    /// Underlying ADNL node
     adnl: Arc<AdnlNode>,
+    /// Local ADNL key
     node_key: Arc<StoredAdnlNodeKey>,
+    /// Overlay shards
     shards: FxDashMap<OverlayIdShort, Arc<OverlayShard>>,
+    /// Overlay query subscribers
     subscribers: FxDashMap<OverlayIdShort, Arc<dyn OverlaySubscriber>>,
+    /// Overlay group "seed"
     zero_state_file_hash: [u8; 32],
 }
 
@@ -45,10 +50,12 @@ impl OverlayNode {
         self.shards.iter().map(|item| (*item.id(), item.metrics()))
     }
 
+    /// Underlying ADNL node
     pub fn adnl(&self) -> &Arc<AdnlNode> {
         &self.adnl
     }
 
+    /// Add overlay queries subscriber
     pub fn add_subscriber(
         &self,
         overlay_id: OverlayIdShort,
@@ -65,107 +72,45 @@ impl OverlayNode {
         }
     }
 
-    pub fn add_private_peers(
-        &self,
-        local_id: &AdnlNodeIdShort,
-        peers: &[(PackedSocketAddr, ed25519::PublicKey)],
-    ) -> Result<Vec<AdnlNodeIdShort>> {
-        let mut new_peers = Vec::new();
-
-        for (peer_ip_address, public_key) in peers {
-            let (peer_full_id, peer_id) = public_key.compute_node_ids();
-
-            let is_new_peer = self.adnl.add_peer(
-                PeerContext::PrivateOverlay,
-                local_id,
-                &peer_id,
-                *peer_ip_address,
-                peer_full_id,
-            )?;
-
-            if is_new_peer {
-                new_peers.push(peer_id);
-            }
-        }
-
-        Ok(new_peers)
-    }
-
+    /// Creates new overlay shard
     pub fn add_public_overlay(
         &self,
         overlay_id: &OverlayIdShort,
-        options: OverlayShardOptions,
-    ) -> (Arc<OverlayShard>, bool) {
-        self.add_overlay_shard(overlay_id, None, options)
-    }
-
-    pub fn add_private_overlay(
-        &self,
-        overlay_id: &OverlayIdShort,
-        overlay_key: &Arc<StoredAdnlNodeKey>,
-        peers: &[AdnlNodeIdShort],
-        options: OverlayShardOptions,
-    ) -> bool {
-        let (shard, new) = self.add_overlay_shard(overlay_id, Some(overlay_key.clone()), options);
-        if new {
-            shard.add_known_peers(peers);
-        }
-        new
-    }
-
-    pub fn delete_private_overlay(&self, overlay_id: &OverlayIdShort) -> Result<bool> {
-        use dashmap::mapref::entry::Entry;
-
-        match self.shards.entry(*overlay_id) {
-            Entry::Occupied(entry) => {
-                if !entry.get().is_private() {
-                    return Err(OverlayNodeError::DeletingPublicOverlay.into());
-                }
-                entry.remove();
-                Ok(true)
-            }
-            Entry::Vacant(_) => Ok(false),
-        }
-    }
-
-    pub fn compute_overlay_id(&self, workchain: i32) -> OverlayIdFull {
-        compute_overlay_id(workchain, self.zero_state_file_hash)
-    }
-
-    pub fn compute_overlay_short_id(&self, workchain: i32) -> OverlayIdShort {
-        self.compute_overlay_id(workchain).compute_short_id()
-    }
-
-    pub fn get_overlay_shard(&self, overlay_id: &OverlayIdShort) -> Result<Arc<OverlayShard>> {
-        match self.shards.get(overlay_id) {
-            Some(shard) => Ok(shard.clone()),
-            None => Err(OverlayNodeError::UnknownOverlay.into()),
-        }
-    }
-
-    fn add_overlay_shard(
-        &self,
-        overlay_id: &OverlayIdShort,
-        overlay_key: Option<Arc<StoredAdnlNodeKey>>,
         options: OverlayShardOptions,
     ) -> (Arc<OverlayShard>, bool) {
         use dashmap::mapref::entry::Entry;
 
         match self.shards.entry(*overlay_id) {
             Entry::Vacant(entry) => {
-                let overlay_shard = entry
-                    .insert(OverlayShard::new(
-                        self.adnl.clone(),
-                        self.node_key.clone(),
-                        *overlay_id,
-                        overlay_key,
-                        options,
-                    ))
-                    .clone();
+                let overlay_shard = OverlayShard::new(
+                    self.adnl.clone(),
+                    self.node_key.clone(),
+                    *overlay_id,
+                    options,
+                );
+                entry.insert(overlay_shard.clone());
                 (overlay_shard, true)
             }
             Entry::Occupied(entry) => (entry.get().clone(), false),
         }
+    }
+
+    /// Returns overlay by specified id
+    pub fn get_overlay(&self, overlay_id: &OverlayIdShort) -> Result<Arc<OverlayShard>> {
+        match self.shards.get(overlay_id) {
+            Some(shard) => Ok(shard.clone()),
+            None => Err(OverlayNodeError::UnknownOverlay.into()),
+        }
+    }
+
+    /// Computes full overlay id using zero state file hash
+    pub fn compute_overlay_id(&self, workchain: i32) -> OverlayIdFull {
+        compute_overlay_id(workchain, self.zero_state_file_hash)
+    }
+
+    /// Computes short overlay id using zero state file hash
+    pub fn compute_overlay_short_id(&self, workchain: i32) -> OverlayIdShort {
+        self.compute_overlay_id(workchain).compute_short_id()
     }
 }
 
@@ -188,7 +133,7 @@ impl Subscriber for OverlayNode {
 
         // TODO: check that offset == data.len()
 
-        let shard = self.get_overlay_shard(&overlay_id)?;
+        let shard = self.get_overlay(&overlay_id)?;
         match broadcast {
             proto::overlay::Broadcast::Broadcast(broadcast) => {
                 shard
@@ -223,7 +168,7 @@ impl Subscriber for OverlayNode {
         let constructor = u32::read_from(&query, &mut std::convert::identity(offset))?;
         if constructor == proto::rpc::OverlayGetRandomPeers::TL_ID {
             let query = proto::rpc::OverlayGetRandomPeers::read_from(&query, &mut offset)?;
-            let shard = self.get_overlay_shard(&overlay_id)?;
+            let shard = self.get_overlay(&overlay_id)?;
             return QueryConsumingResult::consume(
                 shard.process_get_random_peers(query).into_boxed_writer(),
             );
@@ -252,8 +197,6 @@ enum OverlayNodeError {
     UnsupportedOverlayBroadcastMessage,
     #[error("Unknown overlay")]
     UnknownOverlay,
-    #[error("Cannot delete public overlay")]
-    DeletingPublicOverlay,
     #[error("No consumer for message in overlay")]
     NoConsumerFound,
     #[error("Unsupported query")]

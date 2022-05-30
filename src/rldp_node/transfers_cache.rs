@@ -1,31 +1,25 @@
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use parking_lot::Mutex;
-use tl_proto::TlWrite;
+use tl_proto::{TlRead, TlWrite};
 use tokio::sync::mpsc;
 
 use super::incoming_transfer::*;
 use super::outgoing_transfer::*;
-use super::MessagePart;
+use super::RldpNodeOptions;
 use crate::adnl_node::AdnlNode;
 use crate::proto;
 use crate::subscriber::*;
 use crate::utils::*;
 
-pub struct TransfersCacheOptions {
-    pub query_min_timeout_ms: u64,
-    pub query_max_timeout_ms: u64,
-    pub max_answer_size: u32,
-    pub force_compression: bool,
-}
-
 pub struct TransfersCache {
     adnl: Arc<AdnlNode>,
     transfers: Arc<FxDashMap<TransferId, RldpTransfer>>,
     subscribers: Arc<Vec<Arc<dyn Subscriber>>>,
-    timings: QueryTimings,
+    query_options: QueryOptions,
     max_answer_size: u32,
     force_compression: bool,
 }
@@ -34,13 +28,15 @@ impl TransfersCache {
     pub fn new(
         adnl: Arc<AdnlNode>,
         subscribers: Vec<Arc<dyn Subscriber>>,
-        options: TransfersCacheOptions,
+        options: RldpNodeOptions,
     ) -> Self {
         Self {
             adnl,
             transfers: Arc::new(Default::default()),
             subscribers: Arc::new(subscribers),
-            timings: QueryTimings {
+            query_options: QueryOptions {
+                query_wave_len: options.query_wave_len,
+                query_wave_interval_ms: options.query_wave_interval_ms,
                 query_min_timeout_ms: options.query_min_timeout_ms,
                 query_max_timeout_ms: options.query_max_timeout_ms,
             },
@@ -106,7 +102,7 @@ impl TransfersCache {
         });
 
         // Send data and wait until something is received
-        let result = outgoing_context.send(self.timings, roundtrip).await;
+        let result = outgoing_context.send(self.query_options, roundtrip).await;
         if result.is_ok() {
             self.transfers
                 .insert(outgoing_transfer_id, RldpTransfer::Done);
@@ -116,7 +112,7 @@ impl TransfersCache {
             Ok((true, mut roundtrip)) => {
                 let mut start = Instant::now();
                 let mut updates = incoming_transfer_state.updates();
-                let mut timeout = self.timings.compute_timeout(Some(roundtrip));
+                let mut timeout = self.query_options.compute_timeout(Some(roundtrip));
 
                 loop {
                     // Wait until `updates` will be the same for one interval
@@ -125,7 +121,7 @@ impl TransfersCache {
                     let new_updates = incoming_transfer_state.updates();
                     if new_updates > updates {
                         // Reset start timestamp on update
-                        timeout = self.timings.update_roundtrip(&mut roundtrip, &start);
+                        timeout = self.query_options.update_roundtrip(&mut roundtrip, &start);
                         updates = new_updates;
                         start = Instant::now();
                     } else if is_timed_out(&start, timeout, updates) {
@@ -135,7 +131,7 @@ impl TransfersCache {
 
                     // Check barrier data
                     if let Some(reply) = barrier.lock().take() {
-                        self.timings.update_roundtrip(&mut roundtrip, &start);
+                        self.query_options.update_roundtrip(&mut roundtrip, &start);
                         break Ok((Some(reply.into_data()), roundtrip));
                     }
                 }
@@ -155,7 +151,7 @@ impl TransfersCache {
         // Clear transfers in background
         tokio::spawn({
             let transfers = self.transfers.clone();
-            let interval = self.timings.completion_interval();
+            let interval = self.query_options.completion_interval();
             async move {
                 tokio::time::sleep(interval).await;
                 transfers.remove(&outgoing_transfer_id);
@@ -165,11 +161,6 @@ impl TransfersCache {
 
         // Done
         result
-    }
-
-    #[allow(unused)]
-    pub fn is_empty(&self) -> bool {
-        self.transfers.is_empty()
     }
 
     pub fn len(&self) -> usize {
@@ -309,39 +300,40 @@ impl TransfersCache {
         };
 
         // Spawn processing task
-        tokio::spawn({
-            let subscribers = self.subscribers.clone();
-            let transfers = self.transfers.clone();
-            let timings = self.timings;
-            let force_compression = self.force_compression;
-            async move {
-                // Wait until incoming query is received
-                incoming_context.receive(None).await;
-                transfers.insert(transfer_id, RldpTransfer::Done);
+        let subscribers = self.subscribers.clone();
+        let transfers = self.transfers.clone();
+        let query_options = self.query_options;
+        let force_compression = self.force_compression;
+        tokio::spawn(async move {
+            // Wait until incoming query is received
+            incoming_context.receive(None).await;
+            transfers.insert(transfer_id, RldpTransfer::Done);
 
-                // Process query
-                let outgoing_transfer_id = incoming_context
-                    .answer(transfers.clone(), subscribers, timings, force_compression)
-                    .await
-                    .unwrap_or_default();
+            // Process query
+            let outgoing_transfer_id = incoming_context
+                .answer(
+                    transfers.clone(),
+                    subscribers,
+                    query_options,
+                    force_compression,
+                )
+                .await
+                .unwrap_or_default();
 
-                // Clear transfers in background
-                tokio::time::sleep(timings.completion_interval()).await;
-                if let Some(outgoing_transfer_id) = outgoing_transfer_id {
-                    transfers.remove(&outgoing_transfer_id);
-                }
-                transfers.remove(&transfer_id);
+            // Clear transfers in background
+            tokio::time::sleep(query_options.completion_interval()).await;
+            if let Some(outgoing_transfer_id) = outgoing_transfer_id {
+                transfers.remove(&outgoing_transfer_id);
             }
+            transfers.remove(&transfer_id);
         });
 
         // Clear incoming transfer on timeout
-        tokio::spawn({
-            let transfers = self.transfers.clone();
-            let interval = self.timings.completion_interval();
-            async move {
-                tokio::time::sleep(interval).await;
-                transfers.insert(transfer_id, RldpTransfer::Done);
-            }
+        let transfers = self.transfers.clone();
+        let interval = self.query_options.completion_interval();
+        tokio::spawn(async move {
+            tokio::time::sleep(interval).await;
+            transfers.insert(transfer_id, RldpTransfer::Done);
         });
 
         // Done
@@ -415,7 +407,7 @@ impl IncomingContext {
         mut self,
         transfers: Arc<FxDashMap<TransferId, RldpTransfer>>,
         subscribers: Arc<Vec<Arc<dyn Subscriber>>>,
-        timings: QueryTimings,
+        query_options: QueryOptions,
         force_compression: bool,
     ) -> Result<Option<TransferId>> {
         // Deserialize incoming query
@@ -458,7 +450,7 @@ impl IncomingContext {
         };
 
         // Send answer
-        outgoing_context.send(timings, None).await?;
+        outgoing_context.send(query_options, None).await?;
 
         // Done
         Ok(Some(outgoing_transfer_id))
@@ -474,24 +466,29 @@ struct OutgoingContext {
 
 impl OutgoingContext {
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn send(mut self, timings: QueryTimings, roundtrip: Option<u64>) -> Result<(bool, u64)> {
-        const MAX_TRANSFER_WAVE: u32 = 10;
-
+    async fn send(
+        mut self,
+        query_options: QueryOptions,
+        roundtrip: Option<u64>,
+    ) -> Result<(bool, u64)> {
         // Prepare timeout
-        let mut timeout = timings.compute_timeout(roundtrip);
+        let mut timeout = query_options.compute_timeout(roundtrip);
         let mut roundtrip = roundtrip.unwrap_or_default();
 
+        let waves_interval = Duration::from_millis(query_options.query_wave_interval_ms);
+
         // For each outgoing message part
-        while let Some(transfer_wave) = self.transfer.start_next_part()? {
-            let transfer_wave = std::cmp::min(transfer_wave, MAX_TRANSFER_WAVE);
+        while let Some(packet_count) = self.transfer.start_next_part()? {
+            let wave_len = std::cmp::min(packet_count, query_options.query_wave_len);
 
             let part = self.transfer.state().part();
-            let mut start = Instant::now();
-            let mut incoming_seqno = 0;
 
+            let mut start = Instant::now();
+
+            let mut incoming_seqno = 0;
             'part: loop {
-                // Trying to send message chunks
-                for _ in 0..transfer_wave {
+                // Send parts in waves
+                for _ in 0..wave_len {
                     self.adnl.send_custom_message(
                         &self.local_id,
                         &self.peer_id,
@@ -503,25 +500,24 @@ impl OutgoingContext {
                     }
                 }
 
-                tokio::time::sleep(Duration::from_millis(TRANSFER_LOOP_INTERVAL)).await;
-
+                tokio::time::sleep(waves_interval).await;
                 if self.transfer.is_finished_or_next_part(part)? {
-                    break;
+                    break 'part;
                 }
 
                 // Update timeout on incoming packets
                 let new_incoming_seqno = self.transfer.state().seqno_in();
                 if new_incoming_seqno > incoming_seqno {
-                    timeout = timings.update_roundtrip(&mut roundtrip, &start);
+                    timeout = query_options.update_roundtrip(&mut roundtrip, &start);
                     incoming_seqno = new_incoming_seqno;
                     start = Instant::now();
                 } else if is_timed_out(&start, timeout, incoming_seqno) {
-                    return Ok((false, timings.big_roundtrip(roundtrip)));
+                    return Ok((false, query_options.big_roundtrip(roundtrip)));
                 }
             }
 
             // Update timeout
-            timeout = timings.update_roundtrip(&mut roundtrip, &start);
+            timeout = query_options.update_roundtrip(&mut roundtrip, &start);
         }
 
         // Done
@@ -530,12 +526,14 @@ impl OutgoingContext {
 }
 
 #[derive(Copy, Clone)]
-struct QueryTimings {
+struct QueryOptions {
+    query_wave_len: u32,
+    query_wave_interval_ms: u64,
     query_min_timeout_ms: u64,
     query_max_timeout_ms: u64,
 }
 
-impl QueryTimings {
+impl QueryOptions {
     /// Updates provided roundtrip and returns timeout
     fn update_roundtrip(&self, roundtrip: &mut u64, time: &Instant) -> u64 {
         *roundtrip = if *roundtrip == 0 {
@@ -565,6 +563,79 @@ impl QueryTimings {
     }
 }
 
+async fn process_rldp_query(
+    local_id: &AdnlNodeIdShort,
+    peer_id: &AdnlNodeIdShort,
+    subscribers: &[Arc<dyn Subscriber>],
+    mut query: OwnedRldpMessageQuery,
+    force_compression: bool,
+) -> Result<QueryProcessingResult<Vec<u8>>> {
+    let answer_compression = match compression::decompress(&query.data) {
+        Some(decompressed) => {
+            query.data = decompressed;
+            true
+        }
+        None => force_compression,
+    };
+
+    match process_query(local_id, peer_id, subscribers, Cow::Owned(query.data)).await? {
+        QueryProcessingResult::Processed(answer) => Ok(match answer {
+            Some(mut answer) => {
+                if answer_compression {
+                    if let Err(e) = compression::compress(&mut answer) {
+                        tracing::warn!("Failed to compress RLDP answer: {e:?}");
+                    }
+                }
+                if answer.len() > query.max_answer_size as usize {
+                    return Err(TransfersCacheError::AnswerSizeExceeded.into());
+                }
+
+                QueryProcessingResult::Processed(Some(tl_proto::serialize(
+                    proto::rldp::Message::Answer {
+                        query_id: &query.query_id,
+                        data: &answer,
+                    },
+                )))
+            }
+            None => QueryProcessingResult::Processed(None),
+        }),
+        _ => Ok(QueryProcessingResult::Rejected),
+    }
+}
+
+struct OwnedRldpMessageQuery {
+    query_id: [u8; 32],
+    max_answer_size: u64,
+    data: Vec<u8>,
+}
+
+impl OwnedRldpMessageQuery {
+    fn from_data(mut data: Vec<u8>) -> Option<Self> {
+        #[derive(TlRead, TlWrite)]
+        #[tl(boxed, id = 0x8a794d69)]
+        struct Query {
+            #[tl(size_hint = 32)]
+            query_id: [u8; 32],
+            max_answer_size: u64,
+            timeout: u32,
+        }
+
+        let mut offset = 0;
+        let params = Query::read_from(&data, &mut offset).ok()?;
+        unsafe {
+            let remaining = data.len() - offset;
+            std::ptr::copy(data.as_ptr().add(offset), data.as_mut_ptr(), remaining);
+            data.set_len(remaining);
+        };
+
+        Some(Self {
+            query_id: params.query_id,
+            max_answer_size: params.max_answer_size,
+            data,
+        })
+    }
+}
+
 fn is_timed_out(time: &Instant, timeout: u64, updates: u32) -> bool {
     time.elapsed().as_millis() as u64 > timeout + timeout * (updates as u64) / 100
 }
@@ -586,4 +657,6 @@ enum TransfersCacheError {
     UnexpectedMessage,
     #[error("No subscribers for query")]
     NoSubscribers,
+    #[error("Answer size exceeded")]
+    AnswerSizeExceeded,
 }

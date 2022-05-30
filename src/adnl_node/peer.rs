@@ -148,7 +148,6 @@ pub enum PeerContext {
     AdnlPacket,
     Dht,
     PublicOverlay,
-    PrivateOverlay,
 }
 
 pub trait AdnlPeerFilter: Send + Sync {

@@ -11,8 +11,8 @@ impl RaptorQDecoder {
         Self {
             engine: everscale_raptorq::Decoder::new(
                 everscale_raptorq::ObjectTransmissionInformation::with_defaults(
-                    params.data_size as u64,
-                    params.symbol_size as u16,
+                    params.total_len as u64,
+                    params.packet_len as u16,
                 ),
             ),
             params,

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use super::decoder::*;
-use super::{MessagePart, TransferId};
+use super::TransferId;
 use crate::proto;
 
 pub struct IncomingTransfer {
@@ -156,6 +156,14 @@ impl IncomingTransferState {
     pub fn increase_updates(&self) {
         self.updates.fetch_add(1, Ordering::Release);
     }
+}
+
+pub struct MessagePart {
+    pub fec_type: proto::rldp::RaptorQFecType,
+    pub part: u32,
+    pub total_size: u64,
+    pub seqno: u32,
+    pub data: Vec<u8>,
 }
 
 #[derive(thiserror::Error, Debug)]
