@@ -25,7 +25,9 @@ pub struct TransfersCache {
     adnl: Arc<AdnlNode>,
     transfers: Arc<FxDashMap<TransferId, RldpTransfer>>,
     subscribers: Arc<Vec<Arc<dyn Subscriber>>>,
-    options: TransfersCacheOptions,
+    timings: QueryTimings,
+    max_answer_size: u32,
+    force_compression: bool,
 }
 
 impl TransfersCache {
@@ -38,7 +40,12 @@ impl TransfersCache {
             adnl,
             transfers: Arc::new(Default::default()),
             subscribers: Arc::new(subscribers),
-            options,
+            timings: QueryTimings {
+                query_min_timeout_ms: options.query_min_timeout_ms,
+                query_max_timeout_ms: options.query_max_timeout_ms,
+            },
+            max_answer_size: options.max_answer_size,
+            force_compression: options.force_compression,
         }
     }
 
@@ -61,8 +68,7 @@ impl TransfersCache {
 
         // Initiate incoming transfer with derived id
         let incoming_transfer_id = negate_id(outgoing_transfer_id);
-        let incoming_transfer =
-            IncomingTransfer::new(incoming_transfer_id, self.options.max_answer_size);
+        let incoming_transfer = IncomingTransfer::new(incoming_transfer_id, self.max_answer_size);
         let incoming_transfer_state = incoming_transfer.state().clone();
         let (parts_tx, parts_rx) = mpsc::unbounded_channel();
         self.transfers
@@ -92,21 +98,25 @@ impl TransfersCache {
         tokio::spawn({
             let barrier = barrier.clone();
             async move {
-                receive_loop(&mut incoming_context, Some(outgoing_transfer_state)).await;
+                incoming_context
+                    .receive(Some(outgoing_transfer_state))
+                    .await;
                 *barrier.lock() = Some(incoming_context.transfer);
             }
         });
 
         // Send data and wait until something is received
-        let result = match send_loop(outgoing_context, roundtrip).await.map(|result| {
+        let result = outgoing_context.send(self.timings, roundtrip).await;
+        if result.is_ok() {
             self.transfers
                 .insert(outgoing_transfer_id, RldpTransfer::Done);
-            result
-        }) {
+        }
+
+        let result = match result {
             Ok((true, mut roundtrip)) => {
                 let mut start = Instant::now();
                 let mut updates = incoming_transfer_state.updates();
-                let mut timeout = compute_timeout(Some(roundtrip));
+                let mut timeout = self.timings.compute_timeout(Some(roundtrip));
 
                 loop {
                     // Wait until `updates` will be the same for one interval
@@ -115,7 +125,7 @@ impl TransfersCache {
                     let new_updates = incoming_transfer_state.updates();
                     if new_updates > updates {
                         // Reset start timestamp on update
-                        timeout = update_roundtrip(&mut roundtrip, &start);
+                        timeout = self.timings.update_roundtrip(&mut roundtrip, &start);
                         updates = new_updates;
                         start = Instant::now();
                     } else if is_timed_out(&start, timeout, updates) {
@@ -125,28 +135,29 @@ impl TransfersCache {
 
                     // Check barrier data
                     if let Some(reply) = barrier.lock().take() {
-                        update_roundtrip(&mut roundtrip, &start);
+                        self.timings.update_roundtrip(&mut roundtrip, &start);
                         break Ok((Some(reply.into_data()), roundtrip));
                     }
                 }
             }
             Ok((false, roundtrip)) => Ok((None, roundtrip)),
-            Err(e) => Err(e),
+            Err(e) => {
+                // Reset transfer entries
+                self.transfers
+                    .insert(outgoing_transfer_id, RldpTransfer::Done);
+                Err(e)
+            }
         };
 
-        // Reset transfer entries
-        if result.is_err() {
-            self.transfers
-                .insert(outgoing_transfer_id, RldpTransfer::Done);
-        }
         self.transfers
             .insert(incoming_transfer_id, RldpTransfer::Done);
 
         // Clear transfers in background
         tokio::spawn({
             let transfers = self.transfers.clone();
+            let interval = self.timings.completion_interval();
             async move {
-                tokio::time::sleep(Duration::from_millis(MAX_TIMEOUT * 2)).await;
+                tokio::time::sleep(interval).await;
                 transfers.remove(&outgoing_transfer_id);
                 transfers.remove(&incoming_transfer_id);
             }
@@ -293,7 +304,7 @@ impl TransfersCache {
             local_id: *local_id,
             peer_id: *peer_id,
             parts_rx,
-            transfer: IncomingTransfer::new(transfer_id, self.options.max_answer_size),
+            transfer: IncomingTransfer::new(transfer_id, self.max_answer_size),
             transfer_id,
         };
 
@@ -301,24 +312,21 @@ impl TransfersCache {
         tokio::spawn({
             let subscribers = self.subscribers.clone();
             let transfers = self.transfers.clone();
-            let force_compression = self.options.force_compression;
+            let timings = self.timings;
+            let force_compression = self.force_compression;
             async move {
                 // Wait until incoming query is received
-                receive_loop(&mut incoming_context, None).await;
+                incoming_context.receive(None).await;
                 transfers.insert(transfer_id, RldpTransfer::Done);
 
                 // Process query
-                let outgoing_transfer_id = answer_loop(
-                    incoming_context,
-                    transfers.clone(),
-                    subscribers,
-                    force_compression,
-                )
-                .await
-                .unwrap_or_default();
+                let outgoing_transfer_id = incoming_context
+                    .answer(transfers.clone(), subscribers, timings, force_compression)
+                    .await
+                    .unwrap_or_default();
 
                 // Clear transfers in background
-                tokio::time::sleep(Duration::from_millis(MAX_TIMEOUT * 2)).await;
+                tokio::time::sleep(timings.completion_interval()).await;
                 if let Some(outgoing_transfer_id) = outgoing_transfer_id {
                     transfers.remove(&outgoing_transfer_id);
                 }
@@ -329,8 +337,9 @@ impl TransfersCache {
         // Clear incoming transfer on timeout
         tokio::spawn({
             let transfers = self.transfers.clone();
+            let interval = self.timings.completion_interval();
             async move {
-                tokio::time::sleep(Duration::from_millis(MAX_TIMEOUT)).await;
+                tokio::time::sleep(interval).await;
                 transfers.insert(transfer_id, RldpTransfer::Done);
             }
         });
@@ -340,199 +349,10 @@ impl TransfersCache {
     }
 }
 
-#[tracing::instrument(level = "debug", skip_all)]
-async fn receive_loop(
-    incoming_context: &mut IncomingContext,
-    mut outgoing_transfer_state: Option<Arc<OutgoingTransferState>>,
-) {
-    // For each incoming message part
-    while let Some(message) = incoming_context.parts_rx.recv().await {
-        // Trying to process its data
-        match incoming_context.transfer.process_chunk(message) {
-            // If some data was successfully processed
-            Ok(Some(reply)) => {
-                // Send `complete` or `confirm` message as reply
-                if let Err(e) = incoming_context.adnl.send_custom_message(
-                    &incoming_context.local_id,
-                    &incoming_context.peer_id,
-                    reply,
-                ) {
-                    tracing::warn!("RLDP query error: {e}");
-                }
-            }
-            Err(e) => tracing::warn!("RLDP error: {e}"),
-            _ => {}
-        }
-
-        // Increase `updates` counter
-        incoming_context.transfer.state().increase_updates();
-
-        // Notify state, that some reply was received
-        if let Some(outgoing_transfer_state) = outgoing_transfer_state.take() {
-            outgoing_transfer_state.set_reply();
-        }
-
-        // Exit loop if all bytes were received
-        match incoming_context.transfer.total_size() {
-            Some(total_size) if total_size == incoming_context.transfer.data().len() => {
-                break;
-            }
-            None => {
-                tracing::warn!("total size mismatch");
-            }
-            _ => {}
-        }
-    }
-
-    // Close and clear parts channel
-    incoming_context.parts_rx.close();
-    while incoming_context.parts_rx.recv().await.is_some() {}
-}
-
-#[tracing::instrument(level = "debug", skip_all)]
-async fn send_loop(
-    mut outgoing_context: OutgoingContext,
-    roundtrip: Option<u64>,
-) -> Result<(bool, u64)> {
-    const MAX_TRANSFER_WAVE: u32 = 10;
-
-    // Prepare timeout
-    let mut timeout = compute_timeout(roundtrip);
-    let mut roundtrip = roundtrip.unwrap_or_default();
-
-    // For each outgoing message part
-    while let Some(transfer_wave) = outgoing_context.transfer.start_next_part()? {
-        let transfer_wave = std::cmp::min(transfer_wave, MAX_TRANSFER_WAVE);
-
-        let part = outgoing_context.transfer.state().part();
-        let mut start = Instant::now();
-        let mut incoming_seqno = 0;
-
-        'part: loop {
-            // Trying to send message chunks
-            for _ in 0..transfer_wave {
-                outgoing_context.adnl.send_custom_message(
-                    &outgoing_context.local_id,
-                    &outgoing_context.peer_id,
-                    outgoing_context.transfer.prepare_chunk()?,
-                )?;
-
-                if outgoing_context.transfer.is_finished_or_next_part(part)? {
-                    break 'part;
-                }
-            }
-
-            tokio::time::sleep(Duration::from_millis(TRANSFER_LOOP_INTERVAL)).await;
-
-            if outgoing_context.transfer.is_finished_or_next_part(part)? {
-                break;
-            }
-
-            // Update timeout on incoming packets
-            let new_incoming_seqno = outgoing_context.transfer.state().seqno_in();
-            if new_incoming_seqno > incoming_seqno {
-                timeout = update_roundtrip(&mut roundtrip, &start);
-                incoming_seqno = new_incoming_seqno;
-                start = Instant::now();
-            } else if is_timed_out(&start, timeout, incoming_seqno) {
-                return Ok((false, std::cmp::min(roundtrip * 2, MAX_TIMEOUT)));
-            }
-        }
-
-        // Update timeout
-        timeout = update_roundtrip(&mut roundtrip, &start);
-    }
-
-    // Done
-    Ok((true, roundtrip))
-}
-
-#[tracing::instrument(level = "debug", skip_all)]
-async fn answer_loop(
-    mut incoming_context: IncomingContext,
-    transfers: Arc<FxDashMap<TransferId, RldpTransfer>>,
-    subscribers: Arc<Vec<Arc<dyn Subscriber>>>,
-    force_compression: bool,
-) -> Result<Option<TransferId>> {
-    // Deserialize incoming query
-    let query = match OwnedRldpMessageQuery::from_data(incoming_context.transfer.take_data()) {
-        Some(query) => query,
-        None => return Err(TransfersCacheError::UnexpectedMessage.into()),
-    };
-
-    // Process query
-    let answer = match process_rldp_query(
-        &incoming_context.local_id,
-        &incoming_context.peer_id,
-        &subscribers,
-        query,
-        force_compression,
-    )
-    .await?
-    {
-        QueryProcessingResult::Processed(Some(answer)) => answer,
-        QueryProcessingResult::Processed(None) => return Ok(None),
-        QueryProcessingResult::Rejected => return Err(TransfersCacheError::NoSubscribers.into()),
-    };
-
-    // Create outgoing transfer
-    let outgoing_transfer_id = negate_id(incoming_context.transfer_id);
-    let outgoing_transfer = OutgoingTransfer::new(answer, Some(outgoing_transfer_id));
-    transfers.insert(
-        outgoing_transfer_id,
-        RldpTransfer::Outgoing(outgoing_transfer.state().clone()),
-    );
-
-    // Prepare context
-    let outgoing_context = OutgoingContext {
-        adnl: incoming_context.adnl.clone(),
-        local_id: incoming_context.local_id,
-        peer_id: incoming_context.peer_id,
-        transfer: outgoing_transfer,
-    };
-
-    // Send answer
-    send_loop(outgoing_context, None).await?;
-
-    // Done
-    Ok(Some(outgoing_transfer_id))
-}
-
-fn update_roundtrip(roundtrip: &mut u64, time: &Instant) -> u64 {
-    *roundtrip = if *roundtrip == 0 {
-        time.elapsed().as_millis() as u64
-    } else {
-        (*roundtrip + time.elapsed().as_millis() as u64) / 2
-    };
-    compute_timeout(Some(*roundtrip))
-}
-
-fn compute_timeout(roundtrip: Option<u64>) -> u64 {
-    std::cmp::max(roundtrip.unwrap_or(MAX_TIMEOUT), MIN_TIMEOUT)
-}
-
-fn is_timed_out(time: &Instant, timeout: u64, updates: u32) -> bool {
-    time.elapsed().as_millis() as u64 > timeout + timeout * (updates as u64) / 100
-}
-
-fn negate_id(mut id: [u8; 32]) -> [u8; 32] {
-    for symbol in &mut id {
-        *symbol ^= 0xff;
-    }
-    id
-}
-
 enum RldpTransfer {
     Incoming(MessagePartsTx),
     Outgoing(Arc<OutgoingTransferState>),
     Done,
-}
-
-struct OutgoingContext {
-    adnl: Arc<AdnlNode>,
-    local_id: AdnlNodeIdShort,
-    peer_id: AdnlNodeIdShort,
-    transfer: OutgoingTransfer,
 }
 
 struct IncomingContext {
@@ -544,13 +364,220 @@ struct IncomingContext {
     transfer_id: TransferId,
 }
 
+impl IncomingContext {
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn receive(&mut self, mut outgoing_transfer_state: Option<Arc<OutgoingTransferState>>) {
+        // For each incoming message part
+        while let Some(message) = self.parts_rx.recv().await {
+            // Trying to process its data
+            match self.transfer.process_chunk(message) {
+                // If some data was successfully processed
+                Ok(Some(reply)) => {
+                    // Send `complete` or `confirm` message as reply
+                    if let Err(e) =
+                        self.adnl
+                            .send_custom_message(&self.local_id, &self.peer_id, reply)
+                    {
+                        tracing::warn!("RLDP query error: {e}");
+                    }
+                }
+                Err(e) => tracing::warn!("RLDP error: {e}"),
+                _ => {}
+            }
+
+            // Increase `updates` counter
+            self.transfer.state().increase_updates();
+
+            // Notify state, that some reply was received
+            if let Some(outgoing_transfer_state) = outgoing_transfer_state.take() {
+                outgoing_transfer_state.set_reply();
+            }
+
+            // Exit loop if all bytes were received
+            match self.transfer.total_size() {
+                Some(total_size) if total_size == self.transfer.data().len() => {
+                    break;
+                }
+                None => {
+                    tracing::warn!("total size mismatch");
+                }
+                _ => {}
+            }
+        }
+
+        // Close and clear parts channel
+        self.parts_rx.close();
+        while self.parts_rx.recv().await.is_some() {}
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn answer(
+        mut self,
+        transfers: Arc<FxDashMap<TransferId, RldpTransfer>>,
+        subscribers: Arc<Vec<Arc<dyn Subscriber>>>,
+        timings: QueryTimings,
+        force_compression: bool,
+    ) -> Result<Option<TransferId>> {
+        // Deserialize incoming query
+        let query = match OwnedRldpMessageQuery::from_data(self.transfer.take_data()) {
+            Some(query) => query,
+            None => return Err(TransfersCacheError::UnexpectedMessage.into()),
+        };
+
+        // Process query
+        let answer = match process_rldp_query(
+            &self.local_id,
+            &self.peer_id,
+            &subscribers,
+            query,
+            force_compression,
+        )
+        .await?
+        {
+            QueryProcessingResult::Processed(Some(answer)) => answer,
+            QueryProcessingResult::Processed(None) => return Ok(None),
+            QueryProcessingResult::Rejected => {
+                return Err(TransfersCacheError::NoSubscribers.into())
+            }
+        };
+
+        // Create outgoing transfer
+        let outgoing_transfer_id = negate_id(self.transfer_id);
+        let outgoing_transfer = OutgoingTransfer::new(answer, Some(outgoing_transfer_id));
+        transfers.insert(
+            outgoing_transfer_id,
+            RldpTransfer::Outgoing(outgoing_transfer.state().clone()),
+        );
+
+        // Prepare context
+        let outgoing_context = OutgoingContext {
+            adnl: self.adnl.clone(),
+            local_id: self.local_id,
+            peer_id: self.peer_id,
+            transfer: outgoing_transfer,
+        };
+
+        // Send answer
+        outgoing_context.send(timings, None).await?;
+
+        // Done
+        Ok(Some(outgoing_transfer_id))
+    }
+}
+
+struct OutgoingContext {
+    adnl: Arc<AdnlNode>,
+    local_id: AdnlNodeIdShort,
+    peer_id: AdnlNodeIdShort,
+    transfer: OutgoingTransfer,
+}
+
+impl OutgoingContext {
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn send(mut self, timings: QueryTimings, roundtrip: Option<u64>) -> Result<(bool, u64)> {
+        const MAX_TRANSFER_WAVE: u32 = 10;
+
+        // Prepare timeout
+        let mut timeout = timings.compute_timeout(roundtrip);
+        let mut roundtrip = roundtrip.unwrap_or_default();
+
+        // For each outgoing message part
+        while let Some(transfer_wave) = self.transfer.start_next_part()? {
+            let transfer_wave = std::cmp::min(transfer_wave, MAX_TRANSFER_WAVE);
+
+            let part = self.transfer.state().part();
+            let mut start = Instant::now();
+            let mut incoming_seqno = 0;
+
+            'part: loop {
+                // Trying to send message chunks
+                for _ in 0..transfer_wave {
+                    self.adnl.send_custom_message(
+                        &self.local_id,
+                        &self.peer_id,
+                        self.transfer.prepare_chunk()?,
+                    )?;
+
+                    if self.transfer.is_finished_or_next_part(part)? {
+                        break 'part;
+                    }
+                }
+
+                tokio::time::sleep(Duration::from_millis(TRANSFER_LOOP_INTERVAL)).await;
+
+                if self.transfer.is_finished_or_next_part(part)? {
+                    break;
+                }
+
+                // Update timeout on incoming packets
+                let new_incoming_seqno = self.transfer.state().seqno_in();
+                if new_incoming_seqno > incoming_seqno {
+                    timeout = timings.update_roundtrip(&mut roundtrip, &start);
+                    incoming_seqno = new_incoming_seqno;
+                    start = Instant::now();
+                } else if is_timed_out(&start, timeout, incoming_seqno) {
+                    return Ok((false, timings.big_roundtrip(roundtrip)));
+                }
+            }
+
+            // Update timeout
+            timeout = timings.update_roundtrip(&mut roundtrip, &start);
+        }
+
+        // Done
+        Ok((true, roundtrip))
+    }
+}
+
+#[derive(Copy, Clone)]
+struct QueryTimings {
+    query_min_timeout_ms: u64,
+    query_max_timeout_ms: u64,
+}
+
+impl QueryTimings {
+    /// Updates provided roundtrip and returns timeout
+    fn update_roundtrip(&self, roundtrip: &mut u64, time: &Instant) -> u64 {
+        *roundtrip = if *roundtrip == 0 {
+            time.elapsed().as_millis() as u64
+        } else {
+            (*roundtrip + time.elapsed().as_millis() as u64) / 2
+        };
+        self.compute_timeout(Some(*roundtrip))
+    }
+
+    /// Clamps roundtrip to get valid timeout
+    fn compute_timeout(&self, roundtrip: Option<u64>) -> u64 {
+        match roundtrip {
+            Some(roundtrip) if roundtrip > self.query_max_timeout_ms => self.query_max_timeout_ms,
+            Some(roundtrip) => std::cmp::max(roundtrip, self.query_min_timeout_ms),
+            None => self.query_max_timeout_ms,
+        }
+    }
+
+    /// Computes roundtrip for invalid query
+    fn big_roundtrip(&self, roundtrip: u64) -> u64 {
+        std::cmp::min(roundtrip * 2, self.query_max_timeout_ms)
+    }
+
+    fn completion_interval(&self) -> Duration {
+        Duration::from_millis(self.query_max_timeout_ms * 2)
+    }
+}
+
+fn is_timed_out(time: &Instant, timeout: u64, updates: u32) -> bool {
+    time.elapsed().as_millis() as u64 > timeout + timeout * (updates as u64) / 100
+}
+
+fn negate_id(id: [u8; 32]) -> [u8; 32] {
+    id.map(|item| item ^ 0xff)
+}
+
 type MessagePartsTx = mpsc::UnboundedSender<MessagePart>;
 type MessagePartsRx = mpsc::UnboundedReceiver<MessagePart>;
 
 pub type TransferId = [u8; 32];
 
-const MIN_TIMEOUT: u64 = 500;
-const MAX_TIMEOUT: u64 = 10000; // Milliseconds
 const TRANSFER_LOOP_INTERVAL: u64 = 10; // Milliseconds
 
 #[derive(thiserror::Error, Debug)]
