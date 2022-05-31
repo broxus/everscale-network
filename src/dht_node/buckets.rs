@@ -1,24 +1,32 @@
+use std::borrow::Borrow;
+
 use crate::proto;
 use crate::utils::*;
 
+/// DHT nodes, distributed by max equal bits
 pub struct Buckets {
+    local_id: [u8; 32],
     buckets: Box<[FxDashMap<AdnlNodeIdShort, proto::dht::NodeOwned>; 256]>,
 }
 
 impl Buckets {
+    pub fn new(local_id: &AdnlNodeIdShort) -> Self {
+        Self {
+            local_id: *local_id.as_slice(),
+            buckets: Box::new([(); 256].map(|_| Default::default())),
+        }
+    }
+
+    /// Returns iterator over all buckets, starting from the most distant
     pub fn iter(&self) -> std::slice::Iter<FxDashMap<AdnlNodeIdShort, proto::dht::NodeOwned>> {
         self.buckets.iter()
     }
 
-    pub fn insert(
-        &self,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
-        peer: proto::dht::NodeOwned,
-    ) {
+    /// Inserts DHT node into the bucket based on its distance
+    pub fn insert(&self, peer_id: &AdnlNodeIdShort, peer: proto::dht::NodeOwned) {
         use dashmap::mapref::entry::Entry;
 
-        let affinity = get_affinity(local_id.as_slice(), peer_id.as_slice());
+        let affinity = get_affinity(&self.local_id, peer_id.borrow());
         match self.buckets[affinity as usize].entry(*peer_id) {
             Entry::Occupied(mut entry) => {
                 if entry.get().version < peer.version {
@@ -31,29 +39,30 @@ impl Buckets {
         }
     }
 
-    pub fn find(
-        &self,
-        local_id: &AdnlNodeIdShort,
-        key: &[u8; 32],
-        k: u32,
-    ) -> proto::dht::NodesOwned {
-        let key1 = local_id.as_slice();
-        let key2 = key;
+    /// Finds `k` closest DHT nodes for the given `peer_id`
+    pub fn find<T>(&self, peer_id: T, k: u32) -> proto::dht::NodesOwned
+    where
+        T: Borrow<[u8; 32]>,
+    {
+        let key1 = &self.local_id;
+        let key2 = peer_id.borrow();
 
         let mut distance = 0u8;
         let mut nodes = Vec::new();
 
-        // Iterate over keys bytes
+        // Iterate over buckets
         'outer: for i in 0..32 {
             let mut subdistance = distance;
 
             // Compare bytes
             let mut xor = key1[i] ^ key2[i];
 
-            // While they are not equal
+            // If they are not equal (otherwise we will just add 8 bits
+            // to the distance and continue to the next byte)
             while xor != 0 {
                 if xor & 0xf0 == 0 {
-                    // If high 4 bits of the comparison result are equal then shift xor
+                    // If high 4 bits of the comparison result are equal then shift comparison
+                    // result to the left, so that low 4 bits will become the high 4 bits
                     subdistance = subdistance.saturating_add(4);
                     xor <<= 4;
                 } else {
@@ -65,7 +74,7 @@ impl Buckets {
                     let bucket = &self.buckets[subdistance as usize];
                     for item in bucket.iter() {
                         nodes.push(item.value().clone());
-                        if nodes.len() == k as usize {
+                        if nodes.len() >= k as usize {
                             break 'outer;
                         }
                     }
@@ -99,14 +108,7 @@ impl<'a> IntoIterator for &'a Buckets {
     }
 }
 
-impl Default for Buckets {
-    fn default() -> Self {
-        Self {
-            buckets: Box::new([(); 256].map(|_| Default::default())),
-        }
-    }
-}
-
+/// Returns the length of the longest common prefix of two keys
 pub fn get_affinity(key1: &[u8; 32], key2: &[u8; 32]) -> u8 {
     let mut result = 0;
     for i in 0..32 {

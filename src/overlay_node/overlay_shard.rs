@@ -18,6 +18,7 @@ use crate::proto;
 use crate::rldp_node::*;
 use crate::utils::*;
 
+/// Overlay shard configuration
 #[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct OverlayShardOptions {
@@ -264,7 +265,7 @@ impl OverlayShard {
         let peer_id = peer_id_full.compute_short_id();
 
         let is_new_peer = self.adnl.add_peer(
-            PeerContext::PublicOverlay,
+            NewPeerContext::PublicOverlay,
             self.node_key.id(),
             &peer_id,
             ip_address,
@@ -296,7 +297,7 @@ impl OverlayShard {
             let peer_id = peer_id_full.compute_short_id();
 
             let is_new_peer = self.adnl.add_peer(
-                PeerContext::PublicOverlay,
+                NewPeerContext::PublicOverlay,
                 self.node_key.id(),
                 &peer_id,
                 ip_address,
@@ -1050,6 +1051,7 @@ impl OverlayShard {
     }
 }
 
+/// Instant overlay shard metrics
 #[derive(Debug, Copy, Clone)]
 pub struct OverlayShardMetrics {
     pub owned_broadcasts_len: usize,
@@ -1182,12 +1184,14 @@ fn make_fec_part_to_sign(
     }
 }
 
+/// Received overlay broadcast
 pub struct IncomingBroadcastInfo {
     pub packets: u32,
     pub data: Vec<u8>,
     pub from: AdnlNodeIdShort,
 }
 
+/// Sent overlay broadcast info
 #[derive(Default, Copy, Clone)]
 pub struct OutgoingBroadcastInfo {
     pub packets: u32,

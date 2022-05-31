@@ -9,7 +9,7 @@ use tl_proto::{TlRead, TlWrite};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-pub use self::peer::{AdnlPeerFilter, PeerContext};
+pub use self::peer::{AdnlPeerFilter, NewPeerContext};
 
 use self::channel::{AdnlChannel, AdnlChannelId};
 use self::peer::{AdnlPeer, AdnlPeers};
@@ -30,6 +30,7 @@ mod receiver;
 mod sender;
 mod transfer;
 
+/// ADNL node configuration
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AdnlNodeOptions {
@@ -272,7 +273,7 @@ impl AdnlNode {
     /// See [AdnlNode::remove_peer]
     pub fn add_peer(
         &self,
-        ctx: PeerContext,
+        ctx: NewPeerContext,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
         peer_ip_address: PackedSocketAddr,
@@ -500,6 +501,7 @@ impl Drop for AdnlNode {
     }
 }
 
+/// Instant ADNL node metrics
 #[derive(Debug, Copy, Clone)]
 pub struct AdnlNodeMetrics {
     /// Total remote peer count for all local keys

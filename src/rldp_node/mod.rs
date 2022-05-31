@@ -18,6 +18,7 @@ mod incoming_transfer;
 mod outgoing_transfer;
 mod transfers_cache;
 
+/// RLDP node configuration
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RldpNodeOptions {
@@ -203,6 +204,7 @@ impl Subscriber for RldpNode {
     }
 }
 
+/// Instant RLDP node metrics
 #[derive(Debug, Copy, Clone)]
 pub struct RldpNodeMetrics {
     pub peer_count: usize,

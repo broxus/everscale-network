@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::convert::TryFrom;
 
 use anyhow::Result;
@@ -85,8 +86,14 @@ impl From<[u8; 32]> for OverlayIdShort {
     }
 }
 
-impl AsRef<[u8; 32]> for OverlayIdShort {
-    fn as_ref(&self) -> &[u8; 32] {
+impl Borrow<[u8; 32]> for OverlayIdShort {
+    fn borrow(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl<'a> Borrow<[u8; 32]> for &'a OverlayIdShort {
+    fn borrow(&self) -> &[u8; 32] {
         &self.0
     }
 }

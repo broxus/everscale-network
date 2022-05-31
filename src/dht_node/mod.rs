@@ -4,11 +4,13 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use bytes::Bytes;
+use futures_util::stream::FuturesUnordered;
+use futures_util::StreamExt;
 use rand::Rng;
 use smallvec::smallvec;
 use tl_proto::{BoxedConstructor, BoxedReader, TlRead, TlWrite};
 
-use crate::adnl_node::{AdnlNode, PeerContext};
+use crate::adnl_node::{AdnlNode, NewPeerContext};
 use crate::overlay_node::MAX_OVERLAY_PEERS;
 use crate::proto;
 use crate::subscriber::*;
@@ -19,19 +21,6 @@ use self::storage::*;
 
 mod buckets;
 mod storage;
-
-pub struct DhtNode {
-    adnl: Arc<AdnlNode>,
-    node_key: Arc<StoredAdnlNodeKey>,
-    options: DhtNodeOptions,
-    known_peers: PeersCache,
-
-    buckets: Buckets,
-    bad_peers: FxDashMap<AdnlNodeIdShort, usize>,
-    storage: Storage,
-
-    query_prefix: Vec<u8>,
-}
 
 #[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -57,16 +46,40 @@ impl Default for DhtNodeOptions {
     }
 }
 
+/// Kademlia-like DHT node
+pub struct DhtNode {
+    /// Underlying ADNL node
+    adnl: Arc<AdnlNode>,
+    /// Local ADNL key
+    node_key: Arc<StoredAdnlNodeKey>,
+    /// Configuration
+    options: DhtNodeOptions,
+
+    known_peers: PeersCache,
+    bad_peers: FxDashMap<AdnlNodeIdShort, usize>,
+
+    /// DHT nodes organized by buckets
+    buckets: Buckets,
+    /// Local DHT values storage
+    storage: Storage,
+
+    /// Serialized [`proto::rpc::DhtQuery`] with own DHT node info
+    query_prefix: Vec<u8>,
+}
+
 impl DhtNode {
+    /// Create new DHT node on top of ADNL node
     pub fn new(adnl: Arc<AdnlNode>, key_tag: usize, options: DhtNodeOptions) -> Result<Arc<Self>> {
         let node_key = adnl.key_by_tag(key_tag)?.clone();
+
+        let buckets = Buckets::new(node_key.id());
 
         let mut dht_node = Self {
             adnl,
             node_key,
             options,
             known_peers: PeersCache::with_capacity(MAX_OVERLAY_PEERS),
-            buckets: Buckets::default(),
+            buckets,
             bad_peers: Default::default(),
             storage: Storage::default(),
             query_prefix: Vec::new(),
@@ -79,11 +92,13 @@ impl DhtNode {
         Ok(Arc::new(dht_node))
     }
 
+    /// Configuration
     #[inline(always)]
     pub fn options(&self) -> &DhtNodeOptions {
         &self.options
     }
 
+    /// Instant metrics
     pub fn metrics(&self) -> DhtNodeMetrics {
         DhtNodeMetrics {
             peers_cache_len: self.known_peers.len(),
@@ -93,13 +108,16 @@ impl DhtNode {
         }
     }
 
+    /// Underlying ADNL node
     pub fn adnl(&self) -> &Arc<AdnlNode> {
         &self.adnl
     }
 
+    /// Adds new peer to DHT or explicitly marks existing as good. Returns new peer short id
     pub fn add_peer(&self, mut peer: proto::dht::NodeOwned) -> Result<Option<AdnlNodeIdShort>> {
         let peer_full_id = AdnlNodeIdFull::try_from(peer.id.as_equivalent_ref())?;
 
+        // Verify signature
         let signature = std::mem::take(&mut peer.signature);
         if peer_full_id.verify(&peer, &signature).is_err() {
             tracing::warn!("Invalid DHT peer signature");
@@ -107,12 +125,14 @@ impl DhtNode {
         }
         peer.signature = signature;
 
+        // Parse remaining peer data
         let peer_id = peer_full_id.compute_short_id();
         let peer_ip_address =
             parse_address_list(&peer.addr_list, self.adnl.options().clock_tolerance_sec)?;
 
+        // Add new ADNL peer
         let is_new_peer = self.adnl.add_peer(
-            PeerContext::Dht,
+            NewPeerContext::Dht,
             self.node_key.id(),
             &peer_id,
             peer_ip_address,
@@ -122,8 +142,9 @@ impl DhtNode {
             return Ok(None);
         }
 
+        // Add new peer to the bucket
         if self.known_peers.put(peer_id) {
-            self.buckets.insert(self.node_key.id(), &peer_id, peer);
+            self.buckets.insert(&peer_id, peer);
         } else {
             self.set_good_peer(&peer_id);
         }
@@ -131,20 +152,20 @@ impl DhtNode {
         Ok(Some(peer_id))
     }
 
-    pub async fn find_dht_nodes(&self, peer_id: &AdnlNodeIdShort) -> Result<bool> {
+    /// Searches for at most `k` DHT nodes with the same affinity as `local_id-peer_id`
+    pub async fn find_dht_nodes(
+        &self,
+        peer_id: &AdnlNodeIdShort,
+        k: u32,
+    ) -> Result<Vec<proto::dht::NodeOwned>> {
         let query = proto::rpc::DhtFindNode {
             key: self.node_key.id().as_slice(),
-            k: 10,
+            k,
         };
-        let nodes = match self.query_with_prefix(peer_id, query).await? {
+        Ok(match self.query_with_prefix(peer_id, query).await? {
             Some(proto::dht::NodesOwned { nodes }) => nodes,
-            None => return Ok(false),
-        };
-
-        for node in nodes {
-            self.add_peer(node)?;
-        }
-        Ok(true)
+            None => Vec::new(),
+        })
     }
 
     pub async fn find_overlay_nodes(
@@ -241,8 +262,7 @@ impl DhtNode {
             signature: &[],
         };
 
-        self.storage
-            .insert_overlay_nodes(tl_proto::hash_as_boxed(value.key.key), value)?;
+        self.storage.insert_overlay_nodes(value)?;
 
         type StoredValue = BoxedReader<proto::overlay::NodesOwned>;
         self.store_value::<StoredValue, _>(value, true, move |values| {
@@ -299,8 +319,7 @@ impl DhtNode {
         let value_signature = key.sign(value.boxed_writer());
         value.signature = &value_signature;
 
-        self.storage
-            .insert_signed_value(tl_proto::hash_as_boxed(value.key.key), value)?;
+        self.storage.insert_signed_value(value)?;
 
         type StoredValue = BoxedReader<proto::adnl::AddressList>;
         self.store_value::<StoredValue, _>(value, false, |mut values| {
@@ -340,33 +359,6 @@ impl DhtNode {
         self.known_peers.iter()
     }
 
-    pub fn get_known_peer(
-        &self,
-        external_iter: &mut Option<ExternalPeersCacheIter>,
-    ) -> Option<AdnlNodeIdShort> {
-        loop {
-            let peer = match external_iter {
-                Some(iter) => {
-                    iter.bump();
-                    iter
-                }
-                None => external_iter.get_or_insert_with(Default::default),
-            }
-            .get(&self.known_peers);
-
-            if let Some(peer) = &peer {
-                if matches!(
-                    self.bad_peers.get(peer),
-                    Some(count) if *count > self.options.max_fail_count
-                ) {
-                    continue;
-                }
-            }
-
-            break peer;
-        }
-    }
-
     pub async fn ping(&self, peer_id: &AdnlNodeIdShort) -> Result<bool> {
         let random_id = rand::thread_rng().gen();
         match self
@@ -379,7 +371,7 @@ impl DhtNode {
     }
 
     fn process_find_node(&self, query: proto::rpc::DhtFindNode<'_>) -> proto::dht::NodesOwned {
-        self.buckets.find(self.node_key.id(), query.key, query.k)
+        self.buckets.find(query.key, query.k)
     }
 
     fn process_find_value(
@@ -418,14 +410,12 @@ impl DhtNode {
             return Err(DhtNodeError::InsertedValueExpired.into());
         }
 
-        let key_id = tl_proto::hash_as_boxed(query.value.key.key);
-
         match query.value.key.update_rule {
             proto::dht::UpdateRule::Signature => {
-                self.storage.insert_signed_value(key_id, query.value)?;
+                self.storage.insert_signed_value(query.value)?;
             }
             proto::dht::UpdateRule::OverlayNodes => {
-                self.storage.insert_overlay_nodes(key_id, query.value)?;
+                self.storage.insert_overlay_nodes(query.value)?;
             }
             _ => return Err(DhtNodeError::UnsupportedStoreQuery.into()),
         }
@@ -472,6 +462,94 @@ impl DhtNode {
         result
     }
 
+    pub async fn find_value<T>(
+        self: &Arc<Self>,
+        key: proto::dht::Key<'_>,
+        all: bool,
+        external_iter: &mut Option<ExternalDhtIter>,
+    ) -> Result<Vec<(proto::dht::KeyDescriptionOwned, T)>>
+    where
+        for<'a> T: TlRead<'a> + Send + Sync + 'static,
+    {
+        let _ = tl_proto::TlAssert::<T>::BOXED_READ;
+
+        let key_id = tl_proto::hash_as_boxed(key);
+        let iter = external_iter.get_or_insert_with(|| ExternalDhtIter::with_key_id(self, key_id));
+        if iter.key_id != key_id {
+            return Err(DhtNodeError::KeyMismatch.into());
+        }
+
+        let query = Bytes::from(tl_proto::serialize(proto::rpc::DhtFindValue {
+            key: &key_id,
+            k: 6,
+        }));
+
+        let max_tasks = self.options.max_dht_tasks;
+
+        let mut result = Vec::new();
+        let mut known_peers_version = self.known_peers.version();
+
+        let mut futures = FuturesUnordered::new();
+        'outer: loop {
+            // Spawn at most `max_tasks` queries
+            while let Some(peer_id) = iter.next() {
+                let dht = self.clone();
+                let query = query.clone();
+
+                futures.push(async move {
+                    match dht.query_value::<T>(&peer_id, query).await {
+                        Ok(found) => found,
+                        Err(e) => {
+                            tracing::warn!("Failed to query value: {e}");
+                            None
+                        }
+                    }
+                });
+
+                if futures.len() > max_tasks {
+                    break;
+                }
+            }
+
+            loop {
+                // Wait for the next response
+                match futures.next().await {
+                    Some(Some(response)) => result.push(response),
+                    Some(None) => {}
+                    None => break 'outer,
+                }
+
+                // If we should receive all values, or we haven't received any yet,
+                // then we should check whether known peers were updated
+                if all || result.is_empty() {
+                    match self.known_peers.version() {
+                        version if version != known_peers_version => {
+                            iter.update(self);
+                            known_peers_version = version;
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Stop waiting for responses if we have any and we don't need the rest
+                if !all && !result.is_empty() || all && result.len() >= max_tasks {
+                    break 'outer;
+                }
+
+                // Try to refill futures queue
+                if result.len() < max_tasks {
+                    continue 'outer;
+                }
+            }
+        }
+
+        if iter.peer_ids.is_empty() {
+            external_iter.take();
+        }
+
+        Ok(result)
+    }
+
     async fn query_value<T>(
         &self,
         peer_id: &AdnlNodeIdShort,
@@ -499,89 +577,7 @@ impl DhtNode {
         }
     }
 
-    async fn find_value<T>(
-        self: &Arc<Self>,
-        key: proto::dht::Key<'_>,
-        all: bool,
-        external_iter: &mut Option<ExternalDhtIter>,
-    ) -> Result<Vec<(proto::dht::KeyDescriptionOwned, T)>>
-    where
-        for<'a> T: TlRead<'a> + Send + Sync + 'static,
-    {
-        let _ = tl_proto::TlAssert::<T>::BOXED_READ;
-
-        let key_id = tl_proto::hash_as_boxed(key);
-        let iter = external_iter.get_or_insert_with(|| ExternalDhtIter::with_key_id(self, key_id));
-        if iter.key_id != key_id {
-            return Err(DhtNodeError::KeyMismatch.into());
-        }
-
-        let query = Bytes::from(tl_proto::serialize(proto::rpc::DhtFindValue {
-            key: &key_id,
-            k: 6,
-        }));
-
-        let max_tasks = self.options.max_dht_tasks;
-
-        let mut response_collector = LimitedResponseCollector::new(max_tasks);
-
-        let mut result = Vec::new();
-        let mut known_peers_cache_version = self.known_peers.version();
-        loop {
-            while let Some((_, peer_id)) = iter.order.pop() {
-                let dht = self.clone();
-                let query = query.clone();
-                let response_tx = match response_collector.make_request() {
-                    Some(tx) => tx,
-                    None => break,
-                };
-
-                tokio::spawn(async move {
-                    match dht.query_value::<T>(&peer_id, query).await {
-                        Ok(found) => response_tx.send(found),
-                        Err(e) => {
-                            tracing::warn!("find_value error: {e}");
-                            response_tx.send(None);
-                        }
-                    }
-                });
-            }
-
-            let mut finished = false;
-            loop {
-                match response_collector.wait(!all).await {
-                    Some(Some(response)) => result.push(response),
-                    Some(_) => {}
-                    None => finished = true,
-                }
-
-                if all || result.is_empty() {
-                    let new_cache_version = self.known_peers.version();
-                    if known_peers_cache_version != new_cache_version {
-                        iter.update(self);
-                        known_peers_cache_version = new_cache_version;
-                    }
-                }
-
-                if finished || !all || result.len() < max_tasks {
-                    break;
-                }
-            }
-
-            if finished || all && result.len() >= max_tasks || !all && !result.is_empty() {
-                break;
-            }
-        }
-
-        if iter.order.is_empty() {
-            external_iter.take();
-        }
-
-        Ok(result)
-    }
-
-    #[track_caller]
-    async fn store_value<T, FV>(
+    pub async fn store_value<T, FV>(
         self: &Arc<Self>,
         value: proto::dht::Value<'_>,
         check_all: bool,
@@ -598,10 +594,10 @@ impl DhtNode {
 
         let mut response_collector = ResponseCollector::new();
 
-        let mut iter = ExternalPeersCacheIter::new();
-        while iter.get(&self.known_peers).is_some() {
-            while let Some(peer_id) = iter.get(&self.known_peers) {
-                iter.bump();
+        let mut index = 0;
+        while index < self.known_peers.len() {
+            while let Some(peer_id) = self.known_peers.get(index) {
+                index += 1;
 
                 let dht = self.clone();
                 let query = query.clone();
@@ -628,7 +624,7 @@ impl DhtNode {
                 return Ok(true);
             }
 
-            iter.bump();
+            index += 1;
         }
 
         Ok(false)
@@ -738,61 +734,89 @@ pub struct DhtNodeMetrics {
 }
 
 pub struct ExternalDhtIter {
-    max_tasks: usize,
-    iter: Option<ExternalPeersCacheIter>,
-    key_id: StorageKey,
-    order: Vec<(u8, AdnlNodeIdShort)>,
+    key_id: StorageKeyId,
+    peer_ids: Vec<(u8, AdnlNodeIdShort)>,
+    batch_len: usize,
+    index: usize,
 }
 
 impl ExternalDhtIter {
-    fn with_key_id(dht: &DhtNode, key_id: StorageKey) -> Self {
+    fn with_key_id(dht: &DhtNode, key_id: StorageKeyId) -> Self {
+        let batch_len = dht.options.max_dht_tasks;
         let mut result = Self {
-            max_tasks: dht.options.max_dht_tasks,
-            iter: None,
+            index: 0,
+            peer_ids: Vec::with_capacity(batch_len),
             key_id,
-            order: Vec::new(),
+            batch_len,
         };
         result.update(dht);
         result
     }
 
+    fn next(&mut self) -> Option<AdnlNodeIdShort> {
+        self.peer_ids.pop().map(|(_, peer_id)| peer_id)
+    }
+
     fn update(&mut self, dht: &DhtNode) {
-        let mut next = match &self.iter {
-            Some(iter) => iter.get(&dht.known_peers),
-            None => dht.get_known_peer(&mut self.iter),
-        };
+        // Get next peer (skipping bad peers) and update the index
+        while let Some(peer_id) = self.next_known_peer(dht) {
+            let affinity = get_affinity(&self.key_id, peer_id.as_slice());
 
-        while let Some(peer) = next {
-            let affinity = get_affinity(peer.as_slice(), &self.key_id);
-
-            let add = match self.order.last() {
+            let add = match self.peer_ids.last() {
+                // Keep adding peer ids until max tasks is reached
+                // or there are values with higher affinity
                 Some((top_affinity, _)) => {
-                    *top_affinity <= affinity || self.order.len() < self.max_tasks
+                    *top_affinity <= affinity || self.peer_ids.len() < self.batch_len
                 }
                 None => true,
             };
 
             if add {
-                self.order.push((affinity, peer))
+                self.peer_ids.push((affinity, peer_id))
+            } else {
+                // Decrease the index to start the next iteration from the peer which wasn't added
+                self.index -= 1;
             }
-
-            next = dht.get_known_peer(&mut self.iter);
         }
 
-        self.order.sort_unstable_by_key(|(affinity, _)| *affinity);
+        // Sort peer ids by ascending affinity
+        self.peer_ids
+            .sort_unstable_by_key(|(affinity, _)| *affinity);
 
-        if let Some((top_affinity, _)) = self.order.last() {
-            let mut drop_to = 0;
+        // Remove peers which we don't need. Iterate from the the biggest affinity
+        let mut iter = self.peer_ids.iter().rev();
+        if let Some((top_affinity, _)) = iter.next() {
+            let mut remaining_count = 0;
 
-            while self.order.len() - drop_to > self.max_tasks {
-                if self.order[drop_to].0 < *top_affinity {
-                    drop_to += 1;
+            // Leave only peers with the same affinity, or at least `max_tasks` of them
+            for (affinity, _) in iter {
+                if *affinity >= *top_affinity || remaining_count < self.batch_len {
+                    remaining_count += 1;
                 } else {
                     break;
                 }
             }
 
-            self.order.drain(0..drop_to);
+            // Remove prefix
+            self.peer_ids.drain(..self.peer_ids.len() - remaining_count);
+        }
+    }
+
+    fn next_known_peer(&mut self, dht: &DhtNode) -> Option<AdnlNodeIdShort> {
+        loop {
+            let peer_id = dht.known_peers.get(self.index);
+            self.index += 1;
+
+            if let Some(peer) = &peer_id {
+                if matches!(
+                    dht.bad_peers.get(peer),
+                    Some(count) if *count > dht.options.max_fail_count
+                ) {
+                    continue;
+                }
+            }
+
+            break peer_id;
         }
     }
 }

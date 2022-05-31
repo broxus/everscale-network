@@ -143,13 +143,15 @@ impl AdnlPeerState {
     }
 }
 
+/// The context in which the new peer is added
 #[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
-pub enum PeerContext {
+pub enum NewPeerContext {
     AdnlPacket,
     Dht,
     PublicOverlay,
 }
 
+/// New peers filter
 pub trait AdnlPeerFilter: Send + Sync {
-    fn check(&self, ctx: PeerContext, ip: PackedSocketAddr, peer_id: &AdnlNodeIdShort) -> bool;
+    fn check(&self, ctx: NewPeerContext, ip: PackedSocketAddr, peer_id: &AdnlNodeIdShort) -> bool;
 }

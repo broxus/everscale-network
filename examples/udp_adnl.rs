@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::Result;
 use everscale_crypto::ed25519;
 use tiny_adnl::utils::*;
-use tiny_adnl::{AdnlNode, AdnlNodeOptions, PeerContext, QueryConsumingResult};
+use tiny_adnl::{AdnlNode, AdnlNodeOptions, NewPeerContext, QueryConsumingResult};
 use tl_proto::{TlRead, TlWrite};
 
 #[tokio::main]
@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
     let right_node_id = right_node_full_id.compute_short_id();
 
     left_node.add_peer(
-        PeerContext::AdnlPacket,
+        NewPeerContext::AdnlPacket,
         &left_node_id,
         &left_node_id,
         right_node.ip_address(),

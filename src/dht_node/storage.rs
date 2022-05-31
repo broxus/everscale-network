@@ -9,28 +9,27 @@ use super::DHT_KEY_NODES;
 use crate::proto;
 use crate::utils::*;
 
+/// Local DHT data storage
 #[derive(Default)]
 pub struct Storage {
-    storage: FxDashMap<StorageKey, proto::dht::ValueOwned>,
+    storage: FxDashMap<StorageKeyId, proto::dht::ValueOwned>,
 }
 
 impl Storage {
-    #[allow(unused)]
-    pub fn is_empty(&self) -> bool {
-        self.storage.is_empty()
-    }
-
+    /// Returns number of stored values
     pub fn len(&self) -> usize {
         self.storage.len()
     }
 
+    /// Returns total size of stored values in bytes
     pub fn total_size(&self) -> usize {
         self.storage.iter().map(|item| item.value.len()).sum()
     }
 
+    /// Returns value reference by key
     pub fn get_ref(
         &self,
-        key: &StorageKey,
+        key: &StorageKeyId,
     ) -> Option<impl Deref<Target = proto::dht::ValueOwned> + '_> {
         match self.storage.get(key) {
             Some(item) if item.ttl as u32 > now() => Some(item),
@@ -38,11 +37,8 @@ impl Storage {
         }
     }
 
-    pub fn insert_signed_value(
-        &self,
-        key: StorageKey,
-        mut value: proto::dht::Value<'_>,
-    ) -> Result<bool> {
+    /// Inserts signed value into the storage
+    pub fn insert_signed_value(&self, mut value: proto::dht::Value<'_>) -> Result<bool> {
         use dashmap::mapref::entry::Entry;
 
         let full_id = AdnlNodeIdFull::try_from(value.key.id)?;
@@ -55,6 +51,7 @@ impl Storage {
         full_id.verify(&value, value_signature)?;
         value.signature = value_signature;
 
+        let key = tl_proto::hash_as_boxed(value.key.key);
         Ok(match self.storage.entry(key) {
             Entry::Occupied(mut entry) if entry.get().ttl < value.ttl => {
                 entry.insert(value.as_equivalent_owned());
@@ -68,7 +65,10 @@ impl Storage {
         })
     }
 
-    pub fn insert_overlay_nodes(&self, key: StorageKey, value: proto::dht::Value) -> Result<bool> {
+    /// Special case of inserting overlay nodes value.
+    ///
+    /// It requires empty signatures and special update rule
+    pub fn insert_overlay_nodes(&self, value: proto::dht::Value) -> Result<bool> {
         use dashmap::mapref::entry::Entry;
 
         if !value.signature.is_empty() || !value.key.signature.is_empty() {
@@ -99,12 +99,13 @@ impl Storage {
             return Err(StorageError::EmptyOverlayNodes.into());
         }
 
+        let key = tl_proto::hash_as_boxed(value.key.key);
         match self.storage.entry(key) {
             Entry::Occupied(mut entry) => {
                 let value = {
                     let old_nodes = match entry.get().ttl as u32 {
                         old_ttl if old_ttl < now() => None,
-                        old_ttl if old_ttl > value.ttl as u32 => return Ok(false),
+                        old_ttl if old_ttl > value.ttl => return Ok(false),
                         _ => Some(deserialize_overlay_nodes(&entry.get().value)?),
                     };
                     make_overlay_nodes_value(value, new_nodes, old_nodes)
@@ -120,6 +121,7 @@ impl Storage {
     }
 }
 
+// Merges old and new overlay nodes and returns updated value
 fn make_overlay_nodes_value<'a, 'b, const N: usize>(
     value: proto::dht::Value<'a>,
     new_nodes: SmallVec<[proto::overlay::Node<'a>; N]>,
@@ -175,7 +177,7 @@ fn deserialize_overlay_nodes(
     Ok(nodes)
 }
 
-pub type StorageKey = [u8; 32];
+pub type StorageKeyId = [u8; 32];
 
 #[derive(thiserror::Error, Debug)]
 enum StorageError {

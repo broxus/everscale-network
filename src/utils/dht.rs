@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::convert::TryFrom;
 
 use anyhow::Result;
@@ -9,10 +10,10 @@ use crate::proto;
 
 pub fn make_dht_key<'a, T>(id: &'a T, name: &'a str) -> proto::dht::Key<'a>
 where
-    T: AsRef<[u8; 32]>,
+    T: Borrow<[u8; 32]>,
 {
     proto::dht::Key {
-        id: id.as_ref(),
+        id: id.borrow(),
         name: name.as_bytes(),
         idx: 0,
     }

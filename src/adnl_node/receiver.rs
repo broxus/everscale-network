@@ -374,7 +374,7 @@ impl AdnlNode {
             if let Some(list) = &packet.address {
                 let ip_address = parse_address_list(list, self.options.clock_tolerance_sec)?;
                 self.add_peer(
-                    PeerContext::AdnlPacket,
+                    NewPeerContext::AdnlPacket,
                     local_id,
                     &peer_id,
                     ip_address,

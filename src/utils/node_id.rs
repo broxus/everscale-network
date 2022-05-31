@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::convert::TryFrom;
 
 use everscale_crypto::{ed25519, tl};
@@ -130,8 +131,14 @@ impl From<AdnlNodeIdShort> for [u8; 32] {
     }
 }
 
-impl AsRef<[u8; 32]> for AdnlNodeIdShort {
-    fn as_ref(&self) -> &[u8; 32] {
+impl Borrow<[u8; 32]> for AdnlNodeIdShort {
+    fn borrow(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl<'a> Borrow<[u8; 32]> for &'a AdnlNodeIdShort {
+    fn borrow(&self) -> &[u8; 32] {
         &self.0
     }
 }

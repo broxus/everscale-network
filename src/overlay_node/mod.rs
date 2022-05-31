@@ -189,6 +189,7 @@ impl Subscriber for OverlayNode {
     }
 }
 
+/// Max allowed known peer count
 pub const MAX_OVERLAY_PEERS: usize = 65536;
 
 #[derive(thiserror::Error, Debug)]

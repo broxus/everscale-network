@@ -47,8 +47,11 @@ pub trait OverlaySubscriber: Send + Sync {
     ) -> Result<QueryConsumingResult>;
 }
 
+/// Subscriber response for consumed query
 pub enum QueryConsumingResult<'a> {
+    /// Query is accepted and processed
     Consumed(Option<Vec<u8>>),
+    /// Query rejected and will be processed by the next subscriber
     Rejected(Cow<'a, [u8]>),
 }
 
