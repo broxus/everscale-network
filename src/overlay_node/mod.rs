@@ -162,7 +162,7 @@ impl Subscriber for OverlayNode {
             return Ok(QueryConsumingResult::Rejected(query));
         }
 
-        let mut offset = 4; // skip `rpc::OverlqyQuery` constructor
+        let mut offset = 4; // skip `rpc::OverlayQuery` constructor
         let overlay_id = OverlayIdShort::from(<[u8; 32]>::read_from(&query, &mut offset)?);
 
         let constructor = u32::read_from(&query, &mut std::convert::identity(offset))?;
@@ -170,7 +170,7 @@ impl Subscriber for OverlayNode {
             let query = proto::rpc::OverlayGetRandomPeers::read_from(&query, &mut offset)?;
             let shard = self.get_overlay(&overlay_id)?;
             return QueryConsumingResult::consume(
-                shard.process_get_random_peers(query).into_boxed_writer(),
+                shard.process_get_random_peers(query).into_boxed(),
             );
         }
 

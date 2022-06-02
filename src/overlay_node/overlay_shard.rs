@@ -1,4 +1,4 @@
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryFrom;
 use std::hash::BuildHasherDefault;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
@@ -366,12 +366,13 @@ impl OverlayShard {
         Q: TlWrite,
     {
         let local_id = self.overlay_key().id();
+        type Value = tl_proto::OwnedRawBytes<tl_proto::Boxed>;
         match self
             .adnl
-            .query_with_prefix(local_id, peer_id, self.query_prefix(), query, timeout)
+            .query_with_prefix::<Q, Value>(local_id, peer_id, self.query_prefix(), query, timeout)
             .await?
         {
-            Some(tl_proto::OwnedRawBytes(answer)) => Ok(Some(answer)),
+            Some(answer) => Ok(Some(answer.into_inner())),
             None => Ok(None),
         }
     }
@@ -444,7 +445,7 @@ impl OverlayShard {
             id: key.full_id().as_tl().as_equivalent_owned(),
             overlay: *self.id().as_slice(),
             version,
-            signature: signature.to_vec(),
+            signature: signature.to_vec().into(),
         }
     }
 

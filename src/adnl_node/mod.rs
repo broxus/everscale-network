@@ -360,7 +360,7 @@ impl AdnlNode {
     ) -> Result<Option<A>>
     where
         Q: TlWrite,
-        for<'a> A: TlRead<'a> + 'static,
+        for<'a> A: TlRead<'a, Repr = tl_proto::Boxed> + 'static,
     {
         match self
             .query_raw(local_id, peer_id, make_query(None, query), timeout)
@@ -384,7 +384,7 @@ impl AdnlNode {
     ) -> Result<Option<A>>
     where
         Q: TlWrite,
-        for<'a> A: TlRead<'a> + 'static,
+        for<'a> A: TlRead<'a, Repr = tl_proto::Boxed> + 'static,
     {
         match self
             .query_raw(local_id, peer_id, make_query(Some(prefix), query), timeout)
@@ -426,7 +426,7 @@ impl AdnlNode {
             .get(peer_id)
             .map(|entry| entry.value().clone());
 
-        tokio::spawn({
+        let handle = tokio::spawn({
             let queries = self.queries.clone();
             let timeout = timeout.unwrap_or(self.options.query_default_timeout_ms);
 
@@ -442,11 +442,11 @@ impl AdnlNode {
         });
 
         let answer = pending_query.wait().await?;
-        if answer.is_none() {
-            if let Some(channel) = channel {
-                if channel.update_drop_timeout(now(), self.options.channel_reset_timeout_sec) {
-                    self.reset_peer(local_id, peer_id)?;
-                }
+        if answer.is_some() {
+            handle.abort();
+        } else if let Some(channel) = channel {
+            if channel.update_drop_timeout(now(), self.options.channel_reset_timeout_sec) {
+                self.reset_peer(local_id, peer_id)?;
             }
         }
 

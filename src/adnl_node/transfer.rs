@@ -98,7 +98,7 @@ impl Transfer {
             }
             std::cmp::Ordering::Greater => Err(TransferError::ReceivedTooMuch),
             std::cmp::Ordering::Less => {
-                tracing::debug!(
+                tracing::trace!(
                     "Received ADNL transfer part ({received} of {})",
                     self.total_len
                 );

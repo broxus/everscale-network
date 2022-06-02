@@ -1,22 +1,23 @@
+use bytes::Bytes;
 use smallvec::SmallVec;
-use tl_proto::{BoxedConstructor, TlRead, TlWrite};
+use tl_proto::{BoxedConstructor, BoxedWrapper, TlRead, TlWrite};
 
 use super::{adnl, HashRef};
 
-#[derive(TlWrite, TlRead)]
+#[derive(TlRead)]
 #[tl(boxed)]
 pub enum ValueResult<'tl> {
     #[tl(id = 0xe40cf774)]
-    ValueFound(Value<'tl>),
+    ValueFound(BoxedWrapper<Value<'tl>>),
     #[tl(id = 0xa2620568)]
     ValueNotFound(NodesOwned),
 }
 
-#[derive(TlWrite, TlRead)]
+#[derive(TlWrite)]
 #[tl(boxed)]
 pub enum ValueResultOwned {
     #[tl(id = 0xe40cf774)]
-    ValueFound(ValueOwned),
+    ValueFound(BoxedWrapper<ValueOwned>),
     #[tl(id = 0xa2620568)]
     ValueNotFound(NodesOwned),
 }
@@ -57,7 +58,7 @@ impl Node<'_> {
             id: self.id.as_equivalent_owned(),
             addr_list: self.addr_list,
             version: self.version,
-            signature: self.signature.to_vec(),
+            signature: self.signature.to_vec().into(),
         }
     }
 }
@@ -67,7 +68,7 @@ pub struct NodeOwned {
     pub id: everscale_crypto::tl::PublicKeyOwned,
     pub addr_list: adnl::AddressList,
     pub version: u32,
-    pub signature: Vec<u8>,
+    pub signature: Bytes,
 }
 
 impl BoxedConstructor for NodeOwned {
@@ -80,7 +81,7 @@ impl NodeOwned {
             id: self.id.as_equivalent_ref(),
             addr_list: self.addr_list,
             version: self.version,
-            signature: self.signature.as_slice(),
+            signature: &self.signature,
         }
     }
 }
@@ -103,7 +104,7 @@ impl Value<'_> {
             key: self.key.as_equivalent_owned(),
             value: self.value.to_vec(),
             ttl: self.ttl,
-            signature: self.signature.to_vec(),
+            signature: self.signature.to_vec().into(),
         }
     }
 }
@@ -113,7 +114,7 @@ pub struct ValueOwned {
     pub key: KeyDescriptionOwned,
     pub value: Vec<u8>,
     pub ttl: u32,
-    pub signature: Vec<u8>,
+    pub signature: Bytes,
 }
 
 impl BoxedConstructor for ValueOwned {
@@ -149,17 +150,17 @@ impl KeyDescription<'_> {
             key: self.key.as_equivalent_owned(),
             id: self.id.as_equivalent_owned(),
             update_rule: self.update_rule,
-            signature: self.signature.to_vec(),
+            signature: self.signature.to_vec().into(),
         }
     }
 }
 
-#[derive(Clone, TlWrite, TlRead)]
+#[derive(Debug, Clone, TlWrite, TlRead)]
 pub struct KeyDescriptionOwned {
     pub key: KeyOwned,
     pub id: everscale_crypto::tl::PublicKeyOwned,
     pub update_rule: UpdateRule,
-    pub signature: Vec<u8>,
+    pub signature: Bytes,
 }
 
 impl BoxedConstructor for KeyDescriptionOwned {
@@ -172,7 +173,7 @@ impl KeyDescriptionOwned {
             key: self.key.as_equivalent_ref(),
             id: self.id.as_equivalent_ref(),
             update_rule: self.update_rule,
-            signature: self.signature.as_slice(),
+            signature: &self.signature,
         }
     }
 }
@@ -193,17 +194,17 @@ impl Key<'_> {
     pub fn as_equivalent_owned(&self) -> KeyOwned {
         KeyOwned {
             id: *self.id,
-            name: self.name.to_vec(),
+            name: self.name.to_vec().into(),
             idx: self.idx,
         }
     }
 }
 
-#[derive(Clone, TlWrite, TlRead)]
+#[derive(Debug, Clone, TlWrite, TlRead)]
 pub struct KeyOwned {
     #[tl(size_hint = 32)]
     pub id: [u8; 32],
-    pub name: Vec<u8>,
+    pub name: Bytes,
     pub idx: u32,
 }
 

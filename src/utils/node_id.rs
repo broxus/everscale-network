@@ -22,7 +22,7 @@ impl AdnlNodeIdFull {
         self.0.as_tl()
     }
 
-    pub fn verify<T: tl_proto::TlWrite>(
+    pub fn verify<T: tl_proto::TlWrite<Repr = tl_proto::Boxed>>(
         &self,
         message: T,
         other_signature: &[u8],
@@ -201,8 +201,7 @@ impl StoredAdnlNodeKey {
     }
 
     #[inline(always)]
-    pub fn sign<T: tl_proto::TlWrite>(&self, data: T) -> [u8; 64] {
-        let _ = tl_proto::TlAssert::<T>::BOXED_WRITE;
+    pub fn sign<T: tl_proto::TlWrite<Repr = tl_proto::Boxed>>(&self, data: T) -> [u8; 64] {
         self.private_key.sign(data, self.full_id.public_key())
     }
 }

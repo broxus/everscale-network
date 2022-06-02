@@ -56,10 +56,8 @@ impl OverlayClient {
     ) -> Result<A>
     where
         Q: TlWrite,
-        for<'a> A: TlRead<'a> + 'static,
+        for<'a> A: TlRead<'a, Repr = tl_proto::Boxed> + 'static,
     {
-        let _ = tl_proto::TlAssert::<A>::BOXED_READ;
-
         let (answer, neighbour, roundtrip) = self
             .send_rldp_query_to_neighbour(neighbour, query, attempt)
             .await?;
@@ -106,12 +104,12 @@ impl OverlayClient {
     ) -> Result<(A, Arc<Neighbour>)>
     where
         Q: TlWrite,
-        for<'a> A: TlRead<'a> + 'static,
+        for<'a> A: TlRead<'a, Repr = tl_proto::Boxed> + 'static,
     {
         const NO_NEIGHBOURS_DELAY: u64 = 1000; // Milliseconds
 
         let query = tl_proto::serialize(query);
-        let query = tl_proto::RawBytes(&query);
+        let query = tl_proto::RawBytes::<tl_proto::Boxed>::new(&query);
 
         let attempts = attempts.unwrap_or(DEFAULT_ADNL_ATTEMPTS);
 
@@ -158,7 +156,7 @@ impl OverlayClient {
     ) -> Result<Option<A>>
     where
         Q: TlWrite,
-        for<'a> A: TlRead<'a> + 'static,
+        for<'a> A: TlRead<'a, Repr = tl_proto::Boxed> + 'static,
     {
         let timeout = timeout.or_else(|| {
             Some(

@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use smallvec::SmallVec;
 use tl_proto::{BoxedConstructor, TlRead, TlWrite};
 
@@ -12,7 +13,7 @@ impl BoxedConstructor for Nodes<'_> {
     const TL_ID: u32 = 0xe487290e;
 }
 
-#[derive(TlWrite, TlRead)]
+#[derive(Clone, TlWrite, TlRead)]
 pub struct NodesOwned {
     pub nodes: SmallVec<[NodeOwned; 5]>,
 }
@@ -37,7 +38,7 @@ impl Node<'_> {
             id: self.id.as_equivalent_owned(),
             overlay: *self.overlay,
             version: self.version,
-            signature: self.signature.to_vec(),
+            signature: self.signature.to_vec().into(),
         }
     }
 }
@@ -47,7 +48,7 @@ pub struct NodeOwned {
     pub id: everscale_crypto::tl::PublicKeyOwned,
     pub overlay: [u8; 32],
     pub version: u32,
-    pub signature: Vec<u8>,
+    pub signature: Bytes,
 }
 
 impl NodeOwned {
@@ -56,7 +57,7 @@ impl NodeOwned {
             id: self.id.as_equivalent_ref(),
             overlay: &self.overlay,
             version: self.version,
-            signature: self.signature.as_slice(),
+            signature: &self.signature,
         }
     }
 }

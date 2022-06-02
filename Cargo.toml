@@ -20,7 +20,6 @@ base64 = "0.13"
 bytes = "1.1.0"
 crossbeam-queue = "0.3"
 ctr = "0.9.1"
-curve25519-dalek-ng = "4.1"
 dashmap = "5.3.2"
 either = "1.6.1"
 everscale-crypto = "0.1"
@@ -30,18 +29,17 @@ generic-array = "0.14.5"
 hex = "0.4"
 libc = "0.2"
 parking_lot = { version = "0.12.0", features = ["hardware-lock-elision"] }
+pin-project-lite = "0.2.9"
 rand = "0.8"
 rustc-hash = "1.1.0"
 serde = { version = "1.0", features = ["derive"] }
 sha2 = "0.9"
 smallvec = { version = "1.8.0", features = ["union", "const_generics"] }
 thiserror = "1.0"
+tl-proto = { version = "0.3", features = ["derive", "bytes"] }
 tokio = { version = "1", features = ["sync", "net", "rt", "time", "io-util", "macros"] }
-tokio-io-timeout = "1.2.0"
 tokio-util = "0.7.0"
-tl-proto = { version = "0.2", features = ["derive"] }
 tracing = "0.1"
-x25519-dalek-ng = "1.1.1"
 zstd = "0.11"
 
 [dev-dependencies]

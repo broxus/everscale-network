@@ -109,6 +109,13 @@ impl RldpNode {
         }
     }
 
+    /// Clears semaphores table
+    pub fn gc(&self) {
+        let max_permits = self.options.max_peer_queries;
+        self.semaphores
+            .retain(|_, semaphore| semaphore.available_permits() < max_permits);
+    }
+
     #[tracing::instrument(level = "debug", name = "rldp_query", skip(self, data))]
     pub async fn query(
         &self,

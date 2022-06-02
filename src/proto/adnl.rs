@@ -1,5 +1,5 @@
 use smallvec::SmallVec;
-use tl_proto::{BoxedConstructor, TlError, TlPacket, TlRead, TlResult, TlWrite};
+use tl_proto::{Bare, Boxed, BoxedConstructor, TlError, TlPacket, TlRead, TlResult, TlWrite};
 
 use super::HashRef;
 use crate::utils::PacketView;
@@ -20,7 +20,7 @@ pub struct OutgoingPacketContents<'tl> {
 }
 
 impl<'tl> TlWrite for OutgoingPacketContents<'tl> {
-    const TL_WRITE_BOXED: bool = true;
+    type Repr = Boxed;
 
     fn max_size_hint(&self) -> usize {
         8 // rand1 (1 byte length, 7 bytes data)
@@ -79,7 +79,7 @@ impl OutgoingMessages<'_> {
 }
 
 impl<'tl> TlWrite for OutgoingMessages<'tl> {
-    const TL_WRITE_BOXED: bool = false;
+    type Repr = Bare;
 
     #[inline(always)]
     fn max_size_hint(&self) -> usize {
@@ -121,7 +121,7 @@ pub struct IncomingPacketContents<'tl> {
 }
 
 impl<'tl> TlRead<'tl> for IncomingPacketContents<'tl> {
-    const TL_READ_BOXED: bool = true;
+    type Repr = Boxed;
 
     fn read_from(packet: &'tl [u8], offset: &mut usize) -> TlResult<Self> {
         #[inline(always)]
@@ -333,7 +333,7 @@ impl BoxedConstructor for AddressList {
 }
 
 impl TlWrite for AddressList {
-    const TL_WRITE_BOXED: bool = false;
+    type Repr = Bare;
 
     fn max_size_hint(&self) -> usize {
         // 4 bytes - address vector size
@@ -359,7 +359,7 @@ impl TlWrite for AddressList {
 }
 
 impl<'tl> TlRead<'tl> for AddressList {
-    const TL_READ_BOXED: bool = false;
+    type Repr = Bare;
 
     fn read_from(packet: &'tl [u8], offset: &mut usize) -> TlResult<Self> {
         let address_count = u32::read_from(packet, offset)?;

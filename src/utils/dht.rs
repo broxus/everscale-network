@@ -2,7 +2,6 @@ use std::borrow::Borrow;
 use std::convert::TryFrom;
 
 use anyhow::Result;
-use tl_proto::BoxedReader;
 
 use super::node_id::*;
 use super::packed_socket_addr::*;
@@ -24,7 +23,7 @@ pub fn parse_dht_value_address(
     value: &[u8],
     clock_tolerance_sec: u32,
 ) -> Result<(PackedSocketAddr, AdnlNodeIdFull)> {
-    let BoxedReader(address_list) = tl_proto::deserialize(value)?;
+    let address_list = tl_proto::deserialize_as_boxed(value)?;
 
     let ip_address = parse_address_list(&address_list, clock_tolerance_sec)?;
     let full_id = AdnlNodeIdFull::try_from(key.id)?;

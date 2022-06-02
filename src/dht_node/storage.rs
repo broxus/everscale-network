@@ -44,11 +44,11 @@ impl Storage {
         let full_id = AdnlNodeIdFull::try_from(value.key.id)?;
 
         let key_signature = std::mem::take(&mut value.key.signature);
-        full_id.verify(&value.key, key_signature)?;
+        full_id.verify(value.key.as_boxed(), key_signature)?;
         value.key.signature = key_signature;
 
         let value_signature = std::mem::take(&mut value.signature);
-        full_id.verify(&value, value_signature)?;
+        full_id.verify(value.as_boxed(), value_signature)?;
         value.signature = value_signature;
 
         let key = tl_proto::hash_as_boxed(value.key.key);
@@ -166,14 +166,14 @@ fn make_overlay_nodes_value<'a, 'b, const N: usize>(
         key: value.key.as_equivalent_owned(),
         value: stored_value,
         ttl: value.ttl,
-        signature: value.signature.to_vec(),
+        signature: value.signature.to_vec().into(),
     }
 }
 
 fn deserialize_overlay_nodes(
     data: &[u8],
 ) -> tl_proto::TlResult<SmallVec<[proto::overlay::Node; 5]>> {
-    let tl_proto::BoxedReader(proto::overlay::Nodes { nodes }) = tl_proto::deserialize(data)?;
+    let proto::overlay::Nodes { nodes } = tl_proto::deserialize_as_boxed(data)?;
     Ok(nodes)
 }
 

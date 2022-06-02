@@ -85,7 +85,7 @@ async fn query_data<Q, A>(
     query: Q,
 ) where
     Q: TlWrite,
-    for<'a> A: TlRead<'a> + 'static,
+    for<'a> A: TlRead<'a, Repr = tl_proto::Boxed> + 'static,
 {
     match left_node
         .query::<Q, A>(left_node_id, right_node_id, query, None)

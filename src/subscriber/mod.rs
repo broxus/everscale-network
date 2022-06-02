@@ -58,9 +58,8 @@ pub enum QueryConsumingResult<'a> {
 impl QueryConsumingResult<'_> {
     pub fn consume<T>(answer: T) -> Result<Self>
     where
-        T: tl_proto::TlWrite,
+        T: tl_proto::TlWrite<Repr = tl_proto::Boxed>,
     {
-        let _ = tl_proto::TlAssert::<T>::BOXED_WRITE;
         Ok(Self::Consumed(Some(tl_proto::serialize(answer))))
     }
 }
