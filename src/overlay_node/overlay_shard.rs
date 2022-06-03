@@ -774,6 +774,8 @@ impl OverlayShard {
     fn update_random_peers(&self, amount: usize) {
         self.random_peers
             .randomly_fill_from(&self.known_peers, amount, Some(&self.ignored_peers));
+        self.neighbours
+            .randomly_fill_from(&self.random_peers, amount, None);
     }
 
     fn update_neighbours(&self, amount: usize) {
