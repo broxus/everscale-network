@@ -83,7 +83,7 @@ impl AdnlNode {
         let (additional_size, additional_message) = match &channel {
             Some(channel) if channel.ready() => (0, None),
             Some(channel_data) => {
-                tracing::debug!("Confirm channel {local_id} -> {peer_id}");
+                tracing::trace!("Confirm channel {local_id} -> {peer_id}");
 
                 force_handshake = true;
                 (
@@ -96,7 +96,7 @@ impl AdnlNode {
                 )
             }
             None => {
-                tracing::debug!("Create channel {local_id} -> {peer_id}");
+                tracing::trace!("Create channel {local_id} -> {peer_id}");
 
                 (
                     MSG_CREATE_CHANNEL_SIZE,

@@ -78,7 +78,7 @@ impl AdnlNode {
                         .handle_received_data(PacketView::from(buffer.as_mut_slice()), &subscribers)
                         .await
                     {
-                        tracing::debug!("Failed to handle received data: {e}");
+                        tracing::trace!("Failed to handle received data: {e}");
                     }
                 });
             }
@@ -534,7 +534,7 @@ impl AdnlNode {
             }
         }
 
-        tracing::debug!("Channel {context}: {local_id} -> {peer_id}");
+        tracing::trace!("Channel {context}: {local_id} -> {peer_id}");
 
         Ok(())
     }

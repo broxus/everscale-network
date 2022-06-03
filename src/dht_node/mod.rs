@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use bytes::Bytes;
 use futures_util::stream::FuturesUnordered;
-use futures_util::{Stream, StreamExt};
+use futures_util::StreamExt;
 use rand::Rng;
 use smallvec::smallvec;
 use tl_proto::{BoxedConstructor, BoxedWrapper, TlRead, TlWrite};
@@ -31,6 +31,8 @@ mod values_stream;
 pub struct DhtNodeOptions {
     /// Default: 3600
     pub value_timeout_sec: u32,
+    /// Default: `1000` ms
+    pub query_timeout_ms: u64,
     /// Default: 5
     pub query_value_batch_len: usize,
     /// Default: 5
@@ -43,6 +45,7 @@ impl Default for DhtNodeOptions {
     fn default() -> Self {
         Self {
             value_timeout_sec: 3600,
+            query_timeout_ms: 1000,
             query_value_batch_len: 5,
             max_fail_count: 5,
             max_peers_response_len: 20,
@@ -158,23 +161,6 @@ impl DhtNode {
         Ok(Some(peer_id))
     }
 
-    /// Queries given peer for at most `k` DHT nodes with
-    /// the same affinity as `local_id <-> peer_id`
-    pub async fn query_dht_nodes(
-        &self,
-        peer_id: &AdnlNodeIdShort,
-        k: u32,
-    ) -> Result<Vec<proto::dht::NodeOwned>> {
-        let query = proto::rpc::DhtFindNode {
-            key: self.node_key.id().as_slice(),
-            k,
-        };
-        Ok(match self.query_with_prefix(peer_id, query).await? {
-            Some(BoxedWrapper(proto::dht::NodesOwned { nodes })) => nodes,
-            None => Vec::new(),
-        })
-    }
-
     /// Queries given peer for the value
     pub async fn query_value<T>(
         &self,
@@ -209,87 +195,99 @@ impl DhtNode {
         }
     }
 
-    pub fn values<T>(self: &Arc<Self>, key: proto::dht::Key<'_>) -> DhtValuesStream<T>
-    where
-        for<'a> T: TlRead<'a, Repr = tl_proto::Boxed> + Send + 'static,
-    {
-        DhtValuesStream::new(self.clone(), key)
+    /// Queries given peer for at most `k` DHT nodes with
+    /// the same affinity as `local_id <-> peer_id`
+    pub async fn query_dht_nodes(
+        &self,
+        peer_id: &AdnlNodeIdShort,
+        k: u32,
+    ) -> Result<Vec<proto::dht::NodeOwned>> {
+        let query = proto::rpc::DhtFindNode {
+            key: self.node_key.id().as_slice(),
+            k,
+        };
+        Ok(match self.query_with_prefix(peer_id, query).await? {
+            Some(BoxedWrapper(proto::dht::NodesOwned { nodes })) => nodes,
+            None => Vec::new(),
+        })
     }
 
-    /// Returns values stream over all overlay nodes stored in DHT
-    // pub fn overlay_nodes(
-    //     self: &Arc<Self>,
-    //     overlay_id: &OverlayIdShort,
-    // ) -> impl Stream<Item = (PackedSocketAddr, proto::overlay::NodeOwned)> {
-    //     //
-    // }
-
-    pub async fn find_overlay_nodes(
+    /// Queries overlay nodes and their ip addresses.
+    ///
+    /// NOTE: For the sake of speed it uses only a subset of nodes, so
+    /// results may vary between calls.
+    pub async fn query_overlay_nodes(
         self: &Arc<Self>,
         overlay_id: &OverlayIdShort,
-        external_iter: &mut Option<PeersIter>,
     ) -> Result<Vec<(PackedSocketAddr, proto::overlay::NodeOwned)>> {
-        let mut result = Vec::new();
-        let mut nodes = Vec::new();
-
         let key = make_dht_key(overlay_id, DHT_KEY_NODES);
 
+        let mut result = Vec::new();
+        let mut nodes = Vec::new();
+        let mut cache = FxHashSet::default();
         loop {
-            type Value = BoxedWrapper<proto::overlay::NodesOwned>;
-            let mut nodes_lists = self.find_value::<Value>(key, true, external_iter).await?;
-            if nodes_lists.is_empty() {
+            // Receive a several nodes records
+            let received = self
+                .values(key)
+                .use_new_peers(true)
+                .map(|(_, BoxedWrapper(proto::overlay::NodesOwned { nodes }))| nodes)
+                .collect::<Vec<_>>()
+                .await;
+            if received.is_empty() {
                 break;
             }
 
-            while let Some((_, BoxedWrapper(nodes_lists))) = nodes_lists.pop() {
-                nodes.extend(nodes_lists.nodes);
-            }
+            let mut futures = FuturesUnordered::new();
 
-            let mut response_collector = ResponseCollector::new();
-
-            let cache = PeersCache::with_capacity(MAX_OVERLAY_PEERS);
-            while let Some(node) = nodes.pop() {
-                let peer_full_id = AdnlNodeIdFull::try_from(node.id.as_equivalent_ref())?;
-                let peer_id = peer_full_id.compute_short_id();
-                if !cache.put(peer_id) {
-                    continue;
-                }
-
-                let response_tx = response_collector.make_request();
+            // Spawn IP resolution tasks.
+            // It combines received nodes with nodes from the previous iteration
+            for node in received
+                .into_iter()
+                .flatten()
+                .chain(std::mem::take(&mut nodes).into_iter())
+            {
+                let peer_id = match AdnlNodeIdFull::try_from(node.id.as_equivalent_ref())
+                    .map(|full_id| full_id.compute_short_id())
+                {
+                    // Only resolve address for new peers with valid id
+                    Ok(peer_id) if cache.insert(peer_id) => peer_id,
+                    _ => continue,
+                };
 
                 let dht = self.clone();
-                tokio::spawn(async move {
+                futures.push(async move {
                     match dht.find_address(&peer_id).await {
-                        Ok((ip, _)) => {
-                            tracing::debug!("---- Got overlay node {ip}");
-                            response_tx.send(Some((Some(ip), node)));
-                        }
-                        Err(_) => {
-                            tracing::debug!("---- Overlay node {peer_id} not found");
-                            response_tx.send(Some((None, node)));
-                        }
+                        Ok((ip, _)) => (Some(ip), node),
+                        Err(_) => (None, node),
                     }
                 });
             }
 
-            loop {
-                match response_collector.wait(false).await {
-                    Some(Some((None, node))) => nodes.push(node),
-                    Some(Some((Some(ip), node))) => result.push((ip, node)),
-                    _ => break,
+            // Wait all results
+            while let Some((ip, node)) = futures.next().await {
+                match ip {
+                    // Add nodes with ips to result
+                    Some(ip) => result.push((ip, node)),
+                    // Prepare nodes for the next iteration in case we haven't found any yet
+                    None if result.is_empty() => nodes.push(node),
+                    _ => {}
                 }
             }
 
             if !result.is_empty() {
                 break;
             }
-
-            if external_iter.is_none() {
-                break;
-            }
         }
 
         Ok(result)
+    }
+
+    /// Returns values stream
+    pub fn values<T>(self: &Arc<Self>, key: proto::dht::Key<'_>) -> DhtValuesStream<T>
+    where
+        for<'a> T: TlRead<'a, Repr = tl_proto::Boxed> + Send + 'static,
+    {
+        DhtValuesStream::new(self.clone(), key)
     }
 
     pub async fn store_overlay_node(
@@ -338,21 +336,20 @@ impl DhtNode {
         self: &Arc<Self>,
         peer_id: &AdnlNodeIdShort,
     ) -> Result<(PackedSocketAddr, AdnlNodeIdFull)> {
-        type Value = BoxedWrapper<proto::adnl::AddressList>;
-        let mut address_list = self
-            .find_value::<Value>(make_dht_key(peer_id, DHT_KEY_ADDRESS), false, &mut None)
-            .await?;
+        let key = make_dht_key(peer_id, DHT_KEY_ADDRESS);
 
-        match address_list.pop() {
-            Some((key, BoxedWrapper(value))) => {
-                let ip_address =
-                    parse_address_list(&value, self.adnl.options().clock_tolerance_sec)?;
-                let full_id = AdnlNodeIdFull::try_from(key.id.as_equivalent_ref())?;
-
-                Ok((ip_address, full_id))
+        let mut values = self.values(key);
+        while let Some((key, BoxedWrapper(value))) = values.next().await {
+            match (
+                parse_address_list(&value, self.adnl.options().clock_tolerance_sec),
+                AdnlNodeIdFull::try_from(key.id.as_equivalent_ref()),
+            ) {
+                (Ok(ip_address), Ok(full_id)) => return Ok((ip_address, full_id)),
+                _ => continue,
             }
-            None => Err(DhtNodeError::NoAddressFound.into()),
         }
+
+        Err(DhtNodeError::NoAddressFound.into())
     }
 
     pub async fn store_ip_address(self: &Arc<Self>, key: &StoredAdnlNodeKey) -> Result<bool> {
@@ -495,7 +492,12 @@ impl DhtNode {
     async fn query_raw(&self, peer_id: &AdnlNodeIdShort, query: Bytes) -> Result<Option<Vec<u8>>> {
         let result = self
             .adnl
-            .query_raw(self.node_key.id(), peer_id, query, None)
+            .query_raw(
+                self.node_key.id(),
+                peer_id,
+                query,
+                Some(self.options.query_timeout_ms),
+            )
             .await;
         self.update_peer_status(peer_id, result.is_ok());
         result
@@ -534,6 +536,7 @@ impl DhtNode {
         }
 
         let max_tasks = self.options.query_value_batch_len;
+        iter.fill(self, Some(max_tasks));
 
         let mut result = Vec::new();
         let mut known_peers_version = self.known_peers.version();
@@ -574,7 +577,7 @@ impl DhtNode {
                 if all || result.is_empty() {
                     match self.known_peers.version() {
                         version if version != known_peers_version => {
-                            iter.reset(self, Some(self.options.query_value_batch_len));
+                            iter.fill(self, Some(max_tasks));
                             known_peers_version = version;
                         }
                         _ => {}

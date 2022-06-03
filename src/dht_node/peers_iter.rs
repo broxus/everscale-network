@@ -30,7 +30,7 @@ impl PeersIter {
         self.peer_ids.is_empty()
     }
 
-    pub fn reset(&mut self, dht: &DhtNode, batch_len: Option<usize>) {
+    pub fn fill(&mut self, dht: &DhtNode, batch_len: Option<usize>) {
         // Get next peer (skipping bad peers) and update the index
         while let Some(peer_id) = self.next_known_peer(dht) {
             let affinity = get_affinity(&self.key_id, peer_id.as_slice());

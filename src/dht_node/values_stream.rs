@@ -17,6 +17,7 @@ pin_project! {
         key: proto::dht::KeyOwned,
         batch_len: Option<usize>,
         known_peers_version: u64,
+        use_new_peers: bool,
         peers_iter: PeersIter,
         #[pin]
         futures: FuturesUnordered<ValueFuture<T>>,
@@ -31,24 +32,33 @@ where
 {
     pub(super) fn new(dht: Arc<DhtNode>, key: proto::dht::Key<'_>) -> Self {
         let key_id = tl_proto::hash_as_boxed(key);
-        let mut peers_iter = PeersIter::with_key_id(key_id);
+        let peers_iter = PeersIter::with_key_id(key_id);
 
+        let batch_len = Some(dht.options.query_value_batch_len);
         let known_peers_version = dht.known_peers.version();
 
         Self {
             dht,
             key: key.as_equivalent_owned(),
-            batch_len: None,
+            batch_len,
             known_peers_version,
+            use_new_peers: false,
             peers_iter,
             futures: Default::default(),
-            future_count: Default::default(),
+            future_count: usize::MAX,
             _marker: Default::default(),
         }
     }
 
-    pub fn with_batch_len(mut self, batch_len: usize) -> Self {
-        self.batch_len = Some(batch_len);
+    /// Use all DHT nodes in peers iterator
+    pub fn use_full_batch(mut self) -> Self {
+        self.batch_len = None;
+        self
+    }
+
+    /// Whether stream should fill peers iterator when new nodes are found
+    pub fn use_new_peers(mut self, enable: bool) -> Self {
+        self.use_new_peers = enable;
         self
     }
 }
@@ -62,9 +72,15 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
 
+        // Fill iterator during the first poll
+        if *this.future_count == usize::MAX {
+            this.peers_iter.fill(this.dht, *this.batch_len);
+            *this.future_count = 0;
+        }
+
         loop {
-            if *this.future_count == 0 {
-                this.peers_iter.reset(this.dht, *this.batch_len);
+            // Keep starting new futures when we can
+            if *this.future_count < MAX_PARALLEL_FUTURES {
                 refill_futures(
                     this.dht,
                     this.peers_iter,
@@ -76,22 +92,17 @@ where
 
             match this.futures.poll_next_unpin(cx) {
                 Poll::Ready(Some(value)) => {
+                    // Refill peers iterator when version has changed and `use_new_peers` is set
                     match this.dht.known_peers.version() {
-                        version if version != *this.known_peers_version => {
-                            this.peers_iter.reset(this.dht, *this.batch_len);
+                        version if *this.use_new_peers && version != *this.known_peers_version => {
+                            this.peers_iter.fill(this.dht, *this.batch_len);
                             *this.known_peers_version = version;
                         }
                         _ => {}
                     }
 
+                    // Decrease the number of parallel futures on each new item from `futures`
                     *this.future_count -= 1;
-                    refill_futures(
-                        this.dht,
-                        this.peers_iter,
-                        this.key,
-                        &this.futures,
-                        this.future_count,
-                    );
 
                     if let Some(value) = value {
                         break Poll::Ready(Some(value));
@@ -138,4 +149,4 @@ fn refill_futures<T>(
 
 type ValueFuture<T> = BoxFuture<'static, Option<ReceivedValue<T>>>;
 
-const MAX_PARALLEL_FUTURES: usize = 10;
+const MAX_PARALLEL_FUTURES: usize = 5;

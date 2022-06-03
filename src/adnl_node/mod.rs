@@ -305,7 +305,7 @@ impl AdnlNode {
                     peer_full_id,
                 ));
 
-                tracing::debug!(
+                tracing::trace!(
                     "Added ADNL peer {peer_ip_address}. PEER ID {peer_id} -> LOCAL ID {local_id}"
                 );
             }
@@ -479,7 +479,7 @@ impl AdnlNode {
         let peers = self.get_peers(local_id)?;
         let mut peer = peers.get_mut(peer_id).ok_or(AdnlNodeError::UnknownPeer)?;
 
-        tracing::debug!("Resetting peer pair {local_id} -> {peer_id}");
+        tracing::trace!("Resetting peer pair {local_id} -> {peer_id}");
 
         self.channels_by_peers
             .remove(peer_id)
