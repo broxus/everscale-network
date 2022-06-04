@@ -4,19 +4,11 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 
-pub use self::decoder::RaptorQDecoder;
-pub use self::encoder::RaptorQEncoder;
-use self::transfers_cache::*;
-use crate::adnl_node::AdnlNode;
+use super::transfers_cache::*;
+use crate::adnl::AdnlNode;
 use crate::proto;
 use crate::subscriber::*;
 use crate::utils::*;
-
-mod decoder;
-mod encoder;
-mod incoming_transfer;
-mod outgoing_transfer;
-mod transfers_cache;
 
 /// RLDP node configuration
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
@@ -164,7 +156,7 @@ impl RldpNode {
         }
     }
 
-    fn make_query(&self, mut data: Vec<u8>) -> (QueryId, Vec<u8>) {
+    fn make_query(&self, mut data: Vec<u8>) -> ([u8; 32], Vec<u8>) {
         use rand::Rng;
 
         if self.options.force_compression {
@@ -175,7 +167,7 @@ impl RldpNode {
 
         // TODO: compress data inplace
 
-        let query_id: QueryId = rand::thread_rng().gen();
+        let query_id = rand::thread_rng().gen();
         let data = proto::rldp::Message::Query {
             query_id: &query_id,
             max_answer_size: self.options.max_answer_size as u64,

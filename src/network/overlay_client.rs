@@ -6,8 +6,8 @@ use tl_proto::{TlRead, TlWrite};
 
 use super::neighbour::Neighbour;
 use super::neighbours::Neighbours;
-use crate::overlay_node::{IncomingBroadcastInfo, OutgoingBroadcastInfo, OverlayShard};
-use crate::rldp_node::RldpNode;
+use crate::overlay::{IncomingBroadcastInfo, OutgoingBroadcastInfo, OverlayShard};
+use crate::rldp::RldpNode;
 use crate::utils::*;
 
 pub struct OverlayClient {

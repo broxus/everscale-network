@@ -6,7 +6,7 @@ use anyhow::Result;
 use crate::proto;
 use crate::utils::AdnlNodeIdFull;
 
-pub fn verify_node(overlay_id: &OverlayIdShort, node: &proto::overlay::Node) -> Result<()> {
+pub fn verify_overlay_node(overlay_id: &OverlayIdShort, node: &proto::overlay::Node) -> Result<()> {
     if node.overlay != &overlay_id.0 {
         return Err(OverlayError::OverlayIdMismatch.into());
     }

@@ -1,3 +1,5 @@
+//! # Blockchain-specific network interface
+
 pub use neighbour::Neighbour;
 pub use neighbours::{Neighbours, NeighboursMetrics, NeighboursOptions};
 pub use overlay_client::OverlayClient;

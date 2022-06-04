@@ -5,8 +5,10 @@ use std::time::Duration;
 
 use anyhow::Result;
 use everscale_crypto::ed25519;
-use tiny_adnl::utils::*;
-use tiny_adnl::{AdnlNode, AdnlNodeOptions, NewPeerContext, QueryConsumingResult};
+use everscale_network::utils::*;
+use everscale_network::{
+    AdnlNode, AdnlNodeOptions, Keystore, NewPeerContext, QueryConsumingResult,
+};
 use tl_proto::{TlRead, TlWrite};
 
 #[tokio::main]
@@ -100,7 +102,7 @@ async fn query_data<Q, A>(
 struct Service;
 
 #[async_trait::async_trait]
-impl tiny_adnl::Subscriber for Service {
+impl everscale_network::Subscriber for Service {
     async fn try_consume_query<'a>(
         &self,
         _: &AdnlNodeIdShort,

@@ -2,7 +2,6 @@ use smallvec::SmallVec;
 use tl_proto::{Bare, Boxed, BoxedConstructor, TlError, TlPacket, TlRead, TlResult, TlWrite};
 
 use super::HashRef;
-use crate::utils::PacketView;
 
 #[derive(Clone)]
 pub struct OutgoingPacketContents<'tl> {
@@ -225,9 +224,8 @@ impl PacketContentsSignature {
     ///
     /// * Must be called only once on same packet
     ///
-    pub unsafe fn extract<'a>(self, packet: &'a PacketView<'_>) -> Option<(&'a [u8], [u8; 64])> {
-        let origin = packet.as_slice().as_ptr() as *mut u8;
-        let packet: &mut [u8] = std::slice::from_raw_parts_mut(origin, packet.len());
+    pub unsafe fn extract<'a>(self, packet: &mut [u8]) -> Option<(&'a [u8], [u8; 64])> {
+        let origin = packet.as_mut_ptr();
 
         // `packet` before:
         // [............_*__.................|__________________|.........]

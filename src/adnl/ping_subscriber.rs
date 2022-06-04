@@ -2,8 +2,8 @@ use std::borrow::Cow;
 
 use anyhow::Result;
 
-use super::{QueryConsumingResult, Subscriber};
 use crate::proto;
+use crate::subscriber::{QueryConsumingResult, Subscriber};
 use crate::utils::*;
 
 pub struct AdnlPingSubscriber;

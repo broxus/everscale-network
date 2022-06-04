@@ -5,6 +5,7 @@ use aes::cipher::{StreamCipher, StreamCipherSeek};
 use everscale_crypto::ed25519;
 
 use super::encryption::*;
+use super::packet_view::*;
 use crate::utils::*;
 
 /// Modifies `buffer` in-place to contain the handshake packet

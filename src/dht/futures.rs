@@ -10,7 +10,7 @@ use futures_util::stream::FuturesUnordered;
 use futures_util::{FutureExt, StreamExt};
 use tl_proto::TlRead;
 
-use super::values_stream::DhtValuesStream;
+use super::streams::DhtValuesStream;
 use super::DhtNode;
 use crate::proto;
 

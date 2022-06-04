@@ -5,7 +5,7 @@ use anyhow::Result;
 use rand::Rng;
 
 use super::encoder::*;
-use super::TransferId;
+use super::transfers_cache::TransferId;
 use crate::proto;
 
 pub struct OutgoingTransfer {

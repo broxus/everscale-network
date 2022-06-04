@@ -13,9 +13,11 @@ use tl_proto::{HashWrapper, TlWrite};
 use tokio::sync::mpsc;
 
 use super::{broadcast_receiver::*, MAX_OVERLAY_PEERS};
-use crate::adnl_node::*;
+use crate::adnl::{AdnlNode, NewPeerContext};
 use crate::proto;
-use crate::rldp_node::*;
+use crate::rldp::decoder::RaptorQDecoder;
+use crate::rldp::encoder::RaptorQEncoder;
+use crate::rldp::RldpNode;
 use crate::utils::*;
 
 /// Overlay shard configuration
@@ -256,7 +258,7 @@ impl OverlayShard {
         ip_address: PackedSocketAddr,
         node: proto::overlay::Node<'_>,
     ) -> Result<Option<AdnlNodeIdShort>> {
-        if let Err(e) = verify_node(&self.overlay_id, &node) {
+        if let Err(e) = verify_overlay_node(&self.overlay_id, &node) {
             tracing::warn!("Error during overlay peer verification: {e:?}");
             return Ok(None);
         }
@@ -288,7 +290,7 @@ impl OverlayShard {
     {
         let mut result = Vec::new();
         for (ip_address, node) in nodes {
-            if let Err(e) = verify_node(&self.overlay_id, &node) {
+            if let Err(e) = verify_overlay_node(&self.overlay_id, &node) {
                 tracing::debug!("Error during overlay peer verification: {e:?}");
                 continue;
             }
@@ -800,7 +802,7 @@ impl OverlayShard {
             }
 
             tracing::trace!("{node:?}");
-            if let Err(e) = verify_node(&self.overlay_id, node) {
+            if let Err(e) = verify_overlay_node(&self.overlay_id, node) {
                 tracing::warn!("Error during overlay peer verification: {e:?}");
                 return false;
             }

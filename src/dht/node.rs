@@ -11,23 +11,16 @@ use rand::Rng;
 use smallvec::smallvec;
 use tl_proto::{BoxedConstructor, BoxedWrapper, TlRead, TlWrite};
 
-use crate::adnl_node::{AdnlNode, NewPeerContext};
-use crate::overlay_node::MAX_OVERLAY_PEERS;
+use super::buckets::Buckets;
+use super::futures::DhtStoreValue;
+use super::storage::Storage;
+use super::streams::DhtValuesStream;
+use super::{make_dht_key, DHT_KEY_ADDRESS, DHT_KEY_NODES};
+use crate::adnl::{AdnlNode, NewPeerContext};
+use crate::overlay::MAX_OVERLAY_PEERS;
 use crate::proto;
 use crate::subscriber::*;
 use crate::utils::*;
-
-use self::buckets::*;
-use self::peers_iter::*;
-use self::storage::*;
-pub use self::store_value::{DhtStoreValue, DhtStoreValueWithCheck};
-pub use self::values_stream::DhtValuesStream;
-
-mod buckets;
-mod peers_iter;
-mod storage;
-mod store_value;
-mod values_stream;
 
 /// DHT node configuration
 #[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
@@ -82,24 +75,24 @@ impl Default for DhtNodeOptions {
 /// Kademlia-like DHT node
 pub struct DhtNode {
     /// Underlying ADNL node
-    adnl: Arc<AdnlNode>,
+    pub(super) adnl: Arc<AdnlNode>,
     /// Local ADNL key
-    node_key: Arc<StoredAdnlNodeKey>,
+    pub(super) node_key: Arc<StoredAdnlNodeKey>,
     /// Configuration
-    options: DhtNodeOptions,
+    pub(super) options: DhtNodeOptions,
 
     /// Known DHT nodes
-    known_peers: PeersCache,
+    pub(super) known_peers: PeersCache,
     /// DHT nodes penalty scores table
-    penalties: Penalties,
+    pub(super) penalties: Penalties,
 
     /// DHT nodes organized by buckets
-    buckets: Buckets,
+    pub(super) buckets: Buckets,
     /// Local DHT values storage
-    storage: Storage,
+    pub(super) storage: Storage,
 
     /// Serialized [`proto::rpc::DhtQuery`] with own DHT node info
-    query_prefix: Vec<u8>,
+    pub(super) query_prefix: Vec<u8>,
 }
 
 impl DhtNode {
@@ -388,7 +381,7 @@ impl DhtNode {
         node: proto::overlay::Node<'_>,
     ) -> Result<bool> {
         let overlay_id = overlay_full_id.compute_short_id();
-        verify_node(&overlay_id, &node)?;
+        verify_overlay_node(&overlay_id, &node)?;
 
         let value = tl_proto::serialize_as_boxed(proto::overlay::Nodes {
             nodes: smallvec![node],
@@ -521,7 +514,11 @@ impl DhtNode {
         result
     }
 
-    async fn query_raw(&self, peer_id: &AdnlNodeIdShort, query: Bytes) -> Result<Option<Vec<u8>>> {
+    pub(super) async fn query_raw(
+        &self,
+        peer_id: &AdnlNodeIdShort,
+        query: Bytes,
+    ) -> Result<Option<Vec<u8>>> {
         let result = self
             .adnl
             .query_raw(
@@ -647,6 +644,7 @@ impl Subscriber for DhtNode {
     }
 }
 
+/// Instant DHT node metrics
 #[derive(Debug, Copy, Clone)]
 pub struct DhtNodeMetrics {
     pub peers_cache_len: usize,
@@ -655,11 +653,7 @@ pub struct DhtNodeMetrics {
     pub storage_total_size: usize,
 }
 
-const DHT_KEY_ADDRESS: &str = "address";
-const DHT_KEY_NODES: &str = "nodes";
-
 type Penalties = FxDashMap<AdnlNodeIdShort, usize>;
-pub type ReceivedValue<T> = (proto::dht::KeyDescriptionOwned, T);
 
 #[derive(thiserror::Error, Debug)]
 enum DhtNodeError {

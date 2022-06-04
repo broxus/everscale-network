@@ -7,7 +7,8 @@ use futures_util::stream::FuturesUnordered;
 use futures_util::{Stream, StreamExt};
 use tl_proto::TlRead;
 
-use super::{DhtNode, PeersIter, ReceivedValue};
+use super::node::DhtNode;
+use super::peers_iter::PeersIter;
 use crate::proto;
 
 /// Stream for the `DhtNode::values` method.
@@ -134,5 +135,6 @@ where
 }
 
 type ValueFuture<T> = BoxFuture<'static, Option<ReceivedValue<T>>>;
+type ReceivedValue<T> = (proto::dht::KeyDescriptionOwned, T);
 
 const MAX_PARALLEL_FUTURES: usize = 5;

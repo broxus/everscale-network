@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use super::decoder::*;
-use super::TransferId;
+use super::transfers_cache::TransferId;
 use crate::proto;
 
 pub struct IncomingTransfer {

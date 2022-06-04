@@ -1,4 +1,6 @@
-use super::{get_affinity, DhtNode, StorageKeyId};
+use super::buckets::get_affinity;
+use super::storage::StorageKeyId;
+use super::DhtNode;
 use crate::utils::*;
 
 pub struct PeersIter {

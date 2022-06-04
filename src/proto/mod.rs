@@ -1,3 +1,5 @@
+//! # TL protocol models
+
 #![allow(clippy::enum_variant_names)]
 
 pub mod adnl;

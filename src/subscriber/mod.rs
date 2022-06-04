@@ -6,6 +6,7 @@ use tl_proto::TlRead;
 
 use crate::utils::*;
 
+/// ADNL or RLDP queries subscriber
 #[async_trait::async_trait]
 pub trait Subscriber: Send + Sync {
     async fn try_consume_custom(
@@ -36,6 +37,7 @@ pub trait Subscriber: Send + Sync {
     }
 }
 
+/// Overlay queries subscriber
 #[async_trait::async_trait]
 pub trait OverlaySubscriber: Send + Sync {
     async fn try_consume_query<'a>(

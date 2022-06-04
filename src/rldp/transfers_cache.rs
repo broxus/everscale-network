@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 use super::incoming_transfer::*;
 use super::outgoing_transfer::*;
 use super::RldpNodeOptions;
-use crate::adnl_node::AdnlNode;
+use crate::adnl::AdnlNode;
 use crate::proto;
 use crate::subscriber::*;
 use crate::utils::*;

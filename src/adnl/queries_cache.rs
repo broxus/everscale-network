@@ -2,7 +2,7 @@ use std::sync::{Arc, Weak};
 
 use tokio::sync::Barrier;
 
-use super::FxDashMap;
+use crate::utils::FxDashMap;
 
 pub type QueryId = [u8; 32];
 

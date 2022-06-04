@@ -7,10 +7,10 @@ use tl_proto::TlWrite;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 
-use super::channel::*;
-use super::handshake::*;
-use super::peer::*;
-use super::AdnlNode;
+use crate::adnl::channel::*;
+use crate::adnl::handshake::*;
+use crate::adnl::peer::*;
+use crate::adnl::AdnlNode;
 
 use crate::proto;
 use crate::utils::*;

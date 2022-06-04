@@ -9,26 +9,21 @@ use tl_proto::{TlRead, TlWrite};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-pub use self::peer::{AdnlPeerFilter, NewPeerContext};
-
-use self::channel::{AdnlChannel, AdnlChannelId};
-use self::peer::{AdnlPeer, AdnlPeers};
-use self::ping_subscriber::AdnlPingSubscriber;
 use self::receiver::*;
 use self::sender::*;
-use self::transfer::*;
+use super::channel::{AdnlChannel, AdnlChannelId};
+use super::keystore::{Keystore, KeystoreError};
+use super::peer::{AdnlPeer, AdnlPeerFilter, AdnlPeers, NewPeerContext};
+use super::ping_subscriber::AdnlPingSubscriber;
+use super::queries_cache::{QueriesCache, QueryId};
+use super::socket::make_udp_socket;
+use super::transfer::*;
 use crate::proto;
 use crate::subscriber::*;
 use crate::utils::*;
 
-mod channel;
-mod encryption;
-mod handshake;
-mod peer;
-mod ping_subscriber;
 mod receiver;
 mod sender;
-mod transfer;
 
 /// ADNL node configuration
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
@@ -516,7 +511,7 @@ pub struct AdnlNodeMetrics {
     pub query_count: usize,
 }
 
-pub fn make_query<T>(prefix: Option<&[u8]>, query: T) -> Bytes
+fn make_query<T>(prefix: Option<&[u8]>, query: T) -> Bytes
 where
     T: TlWrite,
 {

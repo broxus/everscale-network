@@ -1,5 +1,5 @@
 [package]
-name = "tiny-adnl"
+name = "everscale-network"
 version = "0.2.0"
 authors = ["Ivan Kalinin <i.kalinin@dexpa.io>"]
 rust-version = "1.60.0"

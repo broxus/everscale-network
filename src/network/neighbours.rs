@@ -3,11 +3,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use tokio::sync::Semaphore;
 
 use super::neighbour::*;
 use super::neighbours_cache::*;
-use crate::dht_node::*;
-use crate::overlay_node::*;
+use crate::dht::*;
+use crate::overlay::*;
 use crate::proto;
 use crate::utils::*;
 
@@ -265,7 +266,7 @@ impl Neighbours {
         }
 
         let max_tasks = std::cmp::min(neighbour_count, self.options.max_ping_tasks);
-        let mut response_collector = LimitedResponseCollector::new(max_tasks);
+        let semaphore = Arc::new(Semaphore::new(max_tasks));
         loop {
             let neighbour = match self.cache.get_next_for_ping(&self.start) {
                 Some(neighbour) => neighbour,
@@ -287,19 +288,15 @@ impl Neighbours {
             };
             tokio::time::sleep(Duration::from_millis(additional_sleep)).await;
 
-            if let Some(response_tx) = response_collector.make_request() {
-                let neighbours = self.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = neighbours.update_capabilities(neighbour).await {
-                        tracing::debug!("Failed to ping peer: {e}");
-                    }
-                    response_tx.send(Some(()));
-                });
-            } else {
-                while response_collector.count_pending() > 0 {
-                    response_collector.wait(false).await;
+            let guard = semaphore.clone().acquire_owned().await?;
+            let neighbours = self.clone();
+            tokio::spawn(async move {
+                if let Err(e) = neighbours.update_capabilities(neighbour).await {
+                    tracing::debug!("Failed to ping peer: {e}");
                 }
-            }
+                // Explicitly release acquired semaphore
+                drop(guard);
+            });
         }
     }
 
@@ -430,6 +427,17 @@ impl Neighbours {
 #[derive(Debug, Copy, Clone)]
 pub struct NeighboursMetrics {
     pub peer_search_task_count: usize,
+}
+
+fn ordered_boundaries<T>(min: T, max: T) -> (T, T)
+where
+    T: Ord,
+{
+    if min > max {
+        (max, min)
+    } else {
+        (min, max)
+    }
 }
 
 #[derive(thiserror::Error, Debug)]

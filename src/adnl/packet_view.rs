@@ -16,18 +16,8 @@ impl<'a> PacketView<'a> {
     }
 
     #[inline(always)]
-    pub fn as_mut_slice(&mut self) -> &mut [u8] {
-        self.bytes
-    }
-
-    #[inline(always)]
     pub fn len(&self) -> usize {
         self.bytes.len()
-    }
-
-    #[inline(always)]
-    pub fn is_empty(&self) -> bool {
-        self.bytes.is_empty()
     }
 
     pub fn remove_prefix(&mut self, prefix_len: usize) {

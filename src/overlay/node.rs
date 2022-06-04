@@ -4,17 +4,11 @@ use std::sync::Arc;
 use anyhow::Result;
 use tl_proto::{BoxedConstructor, TlRead};
 
-pub use self::overlay_shard::{
-    IncomingBroadcastInfo, OutgoingBroadcastInfo, OverlayShard, OverlayShardMetrics,
-    OverlayShardOptions, ReceivedPeersMap,
-};
-use crate::adnl_node::*;
+use super::overlay_shard::{OverlayShard, OverlayShardMetrics, OverlayShardOptions};
+use crate::adnl::AdnlNode;
 use crate::proto;
 use crate::subscriber::*;
 use crate::utils::*;
-
-mod broadcast_receiver;
-mod overlay_shard;
 
 /// P2P messages distribution layer group
 pub struct OverlayNode {
@@ -188,9 +182,6 @@ impl Subscriber for OverlayNode {
         }
     }
 }
-
-/// Max allowed known peer count
-pub const MAX_OVERLAY_PEERS: usize = 65536;
 
 #[derive(thiserror::Error, Debug)]
 enum OverlayNodeError {

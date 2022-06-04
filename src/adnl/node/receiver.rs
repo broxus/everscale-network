@@ -7,12 +7,13 @@ use everscale_crypto::ed25519;
 use tl_proto::TlRead;
 use tokio::net::UdpSocket;
 
-use super::channel::*;
-use super::handshake::*;
-use super::peer::*;
-use super::transfer::*;
-use super::AdnlNode;
-
+use crate::adnl::channel::*;
+use crate::adnl::handshake::*;
+use crate::adnl::packet_view::*;
+use crate::adnl::peer::*;
+use crate::adnl::queries_cache::*;
+use crate::adnl::transfer::*;
+use crate::adnl::AdnlNode;
 use crate::proto;
 use crate::subscriber::*;
 use crate::utils::*;
@@ -334,8 +335,10 @@ impl AdnlNode {
             if let Some(signature) = signature.take() {
                 // SAFETY: called only once on same packet
                 let (message, signature) = unsafe {
+                    let origin = raw_packet.as_slice().as_ptr() as *mut u8;
+                    let packet = std::slice::from_raw_parts_mut(origin, raw_packet.len());
                     signature
-                        .extract(raw_packet)
+                        .extract(packet)
                         .ok_or(AdnlPacketError::SignatureNotFound)?
                 };
 
