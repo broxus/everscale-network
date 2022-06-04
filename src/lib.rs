@@ -114,7 +114,9 @@
 //!
 
 pub use adnl_node::{AdnlNode, AdnlNodeMetrics, AdnlNodeOptions, AdnlPeerFilter, NewPeerContext};
-pub use dht_node::{DhtNode, DhtNodeMetrics, DhtNodeOptions, DhtValuesStream};
+pub use dht_node::{
+    DhtNode, DhtNodeMetrics, DhtNodeOptions, DhtStoreValue, DhtStoreValueWithCheck, DhtValuesStream,
+};
 pub use network::{Neighbour, Neighbours, NeighboursMetrics, NeighboursOptions, OverlayClient};
 pub use overlay_node::{
     IncomingBroadcastInfo, OutgoingBroadcastInfo, OverlayNode, OverlayShard, OverlayShardMetrics,

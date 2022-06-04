@@ -10,24 +10,14 @@ pub struct PeersIter {
 impl PeersIter {
     pub fn with_key_id(key_id: StorageKeyId) -> Self {
         Self {
-            index: 0,
-            peer_ids: Default::default(),
             key_id,
+            peer_ids: Default::default(),
+            index: 0,
         }
-    }
-
-    #[inline(always)]
-    pub fn key_id(&self) -> &StorageKeyId {
-        &self.key_id
     }
 
     pub fn next(&mut self) -> Option<AdnlNodeIdShort> {
         self.peer_ids.pop().map(|(_, peer_id)| peer_id)
-    }
-
-    #[inline(always)]
-    pub fn is_empty(&self) -> bool {
-        self.peer_ids.is_empty()
     }
 
     pub fn fill(&mut self, dht: &DhtNode, batch_len: Option<usize>) {
@@ -81,8 +71,8 @@ impl PeersIter {
 
             if let Some(peer) = &peer_id {
                 if matches!(
-                    dht.bad_peers.get(peer),
-                    Some(count) if *count > dht.options.max_fail_count
+                    dht.penalties.get(peer),
+                    Some(penalty) if *penalty > dht.options.bad_peer_threshold
                 ) {
                     continue;
                 }

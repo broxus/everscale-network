@@ -37,8 +37,29 @@ impl Storage {
         }
     }
 
+    /// Inserts value into the local storage
+    ///
+    /// NOTE: Values with `UpdateRule::Anybody` can't be inserted
+    pub fn insert(&self, value: proto::dht::Value<'_>) -> Result<bool> {
+        if value.ttl <= now() {
+            return Err(StorageError::ValueExpired.into());
+        }
+
+        match value.key.update_rule {
+            proto::dht::UpdateRule::Signature => self.insert_signed_value(value),
+            proto::dht::UpdateRule::OverlayNodes => self.insert_overlay_nodes(value),
+            _ => Err(StorageError::UnsupportedUpdateRule.into()),
+        }
+    }
+
+    /// Removes all outdated value
+    pub fn gc(&self) {
+        let now = now();
+        self.storage.retain(|_, value| value.ttl > now);
+    }
+
     /// Inserts signed value into the storage
-    pub fn insert_signed_value(&self, mut value: proto::dht::Value<'_>) -> Result<bool> {
+    fn insert_signed_value(&self, mut value: proto::dht::Value<'_>) -> Result<bool> {
         use dashmap::mapref::entry::Entry;
 
         let full_id = AdnlNodeIdFull::try_from(value.key.id)?;
@@ -68,7 +89,7 @@ impl Storage {
     /// Special case of inserting overlay nodes value.
     ///
     /// It requires empty signatures and special update rule
-    pub fn insert_overlay_nodes(&self, value: proto::dht::Value) -> Result<bool> {
+    fn insert_overlay_nodes(&self, value: proto::dht::Value) -> Result<bool> {
         use dashmap::mapref::entry::Entry;
 
         if !value.signature.is_empty() || !value.key.signature.is_empty() {
@@ -181,6 +202,8 @@ pub type StorageKeyId = [u8; 32];
 
 #[derive(thiserror::Error, Debug)]
 enum StorageError {
+    #[error("Unsupported update rule")]
+    UnsupportedUpdateRule,
     #[error("Invalid signature value")]
     InvalidSignatureValue,
     #[error("Invalid key description for OverlayNodes")]
@@ -189,4 +212,6 @@ enum StorageError {
     InvalidDhtKey,
     #[error("Empty overlay nodes list")]
     EmptyOverlayNodes,
+    #[error("Value expired")]
+    ValueExpired,
 }
