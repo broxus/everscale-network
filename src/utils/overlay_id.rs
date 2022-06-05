@@ -100,7 +100,7 @@ impl<'a> Borrow<[u8; 32]> for &'a OverlayIdShort {
 
 impl std::fmt::Display for OverlayIdShort {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str(&base64::encode(&self.0))
+        f.write_str(&hex::encode(&self.0))
     }
 }
 

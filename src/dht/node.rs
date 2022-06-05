@@ -14,10 +14,9 @@ use tl_proto::{BoxedConstructor, BoxedWrapper, TlRead, TlWrite};
 use super::buckets::Buckets;
 use super::futures::DhtStoreValue;
 use super::storage::{Storage, StorageOptions};
-use super::{DHT_KEY_ADDRESS, DHT_KEY_NODES};
+use super::{DHT_KEY_ADDRESS, DHT_KEY_NODES, MAX_DHT_PEERS};
 use crate::adnl::{AdnlNode, NewPeerContext};
 use crate::dht::entry::DhtEntry;
-use crate::overlay::MAX_OVERLAY_PEERS;
 use crate::proto;
 use crate::subscriber::*;
 use crate::utils::*;
@@ -126,7 +125,7 @@ impl DhtNode {
             adnl,
             node_key,
             options,
-            known_peers: PeersCache::with_capacity(MAX_OVERLAY_PEERS),
+            known_peers: PeersCache::with_capacity(MAX_DHT_PEERS),
             penalties: Default::default(),
             buckets,
             storage,

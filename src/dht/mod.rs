@@ -15,3 +15,5 @@ pub mod streams;
 
 const DHT_KEY_ADDRESS: &str = "address";
 const DHT_KEY_NODES: &str = "nodes";
+
+pub const MAX_DHT_PEERS: usize = 65536;

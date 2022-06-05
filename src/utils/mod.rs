@@ -12,6 +12,7 @@ pub use self::packets_history::*;
 pub use self::peers_cache::*;
 pub use self::updated_at::*;
 
+#[cfg(feature = "rldp")]
 pub mod compression;
 mod node_id;
 mod overlay_id;
