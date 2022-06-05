@@ -1,22 +1,5 @@
 #![allow(clippy::too_many_arguments)]
 
-//! # Network stack
-//!
-//! ```text
-//! ┌────────────────────────────────┐
-//! │  Network                       │
-//! │          ┌─────────────────────┤
-//! │          │            Overlay  │
-//! ├──────────┼──────────┐          │
-//! │    DHT   │   RLDP   │          │
-//! ├──────────┴──────────┴──────────┤
-//! │              ADNL              │
-//! ├────────────────────────────────┤
-//! │              UDP               │
-//! └────────────────────────────────┘
-//! ```
-//!
-
 pub use self::adnl::{AdnlNode, AdnlNodeMetrics, AdnlNodeOptions, Keystore, NewPeerContext};
 pub use self::dht::{DhtNode, DhtNodeMetrics, DhtNodeOptions};
 pub use self::overlay::{OverlayNode, OverlayShard, OverlayShardMetrics, OverlayShardOptions};

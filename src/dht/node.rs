@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use std::borrow::{Borrow, Cow};
 use std::convert::TryFrom;
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,9 +14,9 @@ use tl_proto::{BoxedConstructor, BoxedWrapper, TlRead, TlWrite};
 use super::buckets::Buckets;
 use super::futures::DhtStoreValue;
 use super::storage::Storage;
-use super::streams::DhtValuesStream;
-use super::{make_dht_key, DHT_KEY_ADDRESS, DHT_KEY_NODES};
+use super::{DHT_KEY_ADDRESS, DHT_KEY_NODES};
 use crate::adnl::{AdnlNode, NewPeerContext};
+use crate::dht::entry::DhtEntry;
 use crate::overlay::MAX_OVERLAY_PEERS;
 use crate::proto;
 use crate::subscriber::*;
@@ -30,7 +30,7 @@ pub struct DhtNodeOptions {
     /// [`DhtNode::store_ip_address`]
     ///
     /// Default: `3600` seconds
-    pub value_timeout_sec: u32,
+    pub value_ttl_sec: u32,
 
     /// ADNL query timeout
     ///
@@ -62,7 +62,7 @@ pub struct DhtNodeOptions {
 impl Default for DhtNodeOptions {
     fn default() -> Self {
         Self {
-            value_timeout_sec: 3600,
+            value_ttl_sec: 3600,
             query_timeout_ms: 1000,
             default_value_batch_len: 5,
             bad_peer_threshold: 5,
@@ -215,46 +215,12 @@ impl DhtNode {
         }
     }
 
-    /// Returns values stream over multiple DHT nodes
-    pub fn values<T>(self: &Arc<Self>, key: proto::dht::Key<'_>) -> DhtValuesStream<T>
+    /// Returns an entry interface for manipulating DHT values
+    pub fn entry<'a, T>(self: &'a Arc<Self>, id: &'a T, name: &'a str) -> DhtEntry<'a>
     where
-        for<'a> T: TlRead<'a, Repr = tl_proto::Boxed> + Send + 'static,
+        T: Borrow<[u8; 32]>,
     {
-        DhtValuesStream::new(self.clone(), key)
-    }
-
-    /// Queries given peer for the value
-    pub async fn query_value<T>(
-        &self,
-        peer_id: &AdnlNodeIdShort,
-        key: proto::dht::Key<'_>,
-    ) -> Result<Option<(proto::dht::KeyDescriptionOwned, T)>>
-    where
-        for<'a> T: TlRead<'a, Repr = tl_proto::Boxed> + 'static,
-    {
-        let key_id = tl_proto::hash_as_boxed(key);
-
-        let query = tl_proto::serialize(proto::rpc::DhtFindValue { key: &key_id, k: 6 }).into();
-
-        let result = match self.query_raw(peer_id, query).await? {
-            Some(answer) => answer,
-            None => return Ok(None),
-        };
-
-        match tl_proto::deserialize::<proto::dht::ValueResult>(&result)? {
-            proto::dht::ValueResult::ValueFound(BoxedWrapper(value)) => {
-                let parsed = tl_proto::deserialize(value.value)?;
-                Ok(Some((value.key.as_equivalent_owned(), parsed)))
-            }
-            proto::dht::ValueResult::ValueNotFound(proto::dht::NodesOwned { nodes }) => {
-                for node in nodes {
-                    if let Err(e) = self.add_dht_peer(node) {
-                        tracing::warn!("Failed to add DHT peer: {e:?}");
-                    }
-                }
-                Ok(None)
-            }
-        }
+        DhtEntry::new(self, id, name)
     }
 
     /// Queries given peer for at most `k` DHT nodes with
@@ -282,15 +248,14 @@ impl DhtNode {
         self: &Arc<Self>,
         overlay_id: &OverlayIdShort,
     ) -> Result<Vec<(PackedSocketAddr, proto::overlay::NodeOwned)>> {
-        let key = make_dht_key(overlay_id, DHT_KEY_NODES);
-
         let mut result = Vec::new();
         let mut nodes = Vec::new();
         let mut cache = FxHashSet::default();
         loop {
             // Receive a several nodes records
             let received = self
-                .values(key)
+                .entry(overlay_id, DHT_KEY_NODES)
+                .values()
                 .use_new_peers(true)
                 .map(|(_, BoxedWrapper(proto::overlay::NodesOwned { nodes }))| nodes)
                 .collect::<Vec<_>>()
@@ -349,9 +314,7 @@ impl DhtNode {
         self: &Arc<Self>,
         peer_id: &AdnlNodeIdShort,
     ) -> Result<(PackedSocketAddr, AdnlNodeIdFull)> {
-        let key = make_dht_key(peer_id, DHT_KEY_ADDRESS);
-
-        let mut values = self.values(key);
+        let mut values = self.entry(peer_id, DHT_KEY_ADDRESS).values();
         while let Some((key, BoxedWrapper(value))) = values.next().await {
             match (
                 parse_address_list(&value, self.adnl.options().clock_tolerance_sec),
@@ -365,9 +328,9 @@ impl DhtNode {
         Err(DhtNodeError::NoAddressFound.into())
     }
 
-    /// Returns a future which stores value into multiple DHT nodes
+    /// Returns a future which stores value into multiple DHT nodes.
     ///
-    /// NOTE: Doesn't store values locally
+    /// See [`DhtNode::entry`] for more convenient API
     pub fn store_value(self: &Arc<Self>, value: proto::dht::Value<'_>) -> Result<DhtStoreValue> {
         DhtStoreValue::new(self.clone(), value)
     }
@@ -389,7 +352,11 @@ impl DhtNode {
 
         let value = proto::dht::Value {
             key: proto::dht::KeyDescription {
-                key: make_dht_key(&overlay_id, DHT_KEY_NODES),
+                key: proto::dht::Key {
+                    id: overlay_id.as_slice(),
+                    name: DHT_KEY_NODES.as_bytes(),
+                    idx: 0,
+                },
                 id: everscale_crypto::tl::PublicKey::Overlay {
                     name: overlay_full_id.as_slice(),
                 },
@@ -397,7 +364,7 @@ impl DhtNode {
                 signature: Default::default(),
             },
             value: &value,
-            ttl: now() + self.options.value_timeout_sec,
+            ttl: now() + self.options.value_ttl_sec,
             signature: Default::default(),
         };
 
@@ -422,33 +389,19 @@ impl DhtNode {
         key: &StoredAdnlNodeKey,
         ip: PackedSocketAddr,
     ) -> Result<bool> {
-        let value = tl_proto::serialize_as_boxed(proto::adnl::AddressList {
-            address: Some(ip.as_tl()),
-            version: now(),
-            reinit_date: self.adnl.start_time(),
-            expire_at: 0,
-        });
-
-        let mut value = proto::dht::Value {
-            key: proto::dht::KeyDescription {
-                key: make_dht_key(key.id(), DHT_KEY_ADDRESS),
-                id: key.full_id().as_tl(),
-                update_rule: proto::dht::UpdateRule::Signature,
-                signature: Default::default(),
-            },
-            value: &value,
-            ttl: now() + self.options.value_timeout_sec,
-            signature: Default::default(),
-        };
-        let key_signature = key.sign(value.key.as_boxed());
-        value.key.signature = &key_signature;
-
-        let value_signature = key.sign(value.as_boxed());
-        value.signature = &value_signature;
-
         let clock_tolerance_sec = self.adnl.options().clock_tolerance_sec;
 
-        self.store_value(value)?
+        self.entry(key.id(), DHT_KEY_ADDRESS)
+            .with_data(
+                proto::adnl::AddressList {
+                    address: Some(ip.as_tl()),
+                    version: now(),
+                    reinit_date: self.adnl.start_time(),
+                    expire_at: 0,
+                }
+                .into_boxed(),
+            )
+            .sign_and_store(key)?
             .ensure_stored(move |_, BoxedWrapper(address_list)| {
                 match parse_address_list(&address_list, clock_tolerance_sec)? {
                     stored_ip if stored_ip == ip => Ok(true),
@@ -558,6 +511,29 @@ impl DhtNode {
         };
         node.signature = self.node_key.sign(node.as_boxed()).to_vec().into();
         node
+    }
+
+    pub(super) fn parse_value_result<T>(
+        &self,
+        result: &[u8],
+    ) -> Result<Option<(proto::dht::KeyDescriptionOwned, T)>>
+    where
+        for<'a> T: TlRead<'a, Repr = tl_proto::Boxed> + 'static,
+    {
+        match tl_proto::deserialize::<proto::dht::ValueResult>(result)? {
+            proto::dht::ValueResult::ValueFound(BoxedWrapper(value)) => {
+                let parsed = tl_proto::deserialize(value.value)?;
+                Ok(Some((value.key.as_equivalent_owned(), parsed)))
+            }
+            proto::dht::ValueResult::ValueNotFound(proto::dht::NodesOwned { nodes }) => {
+                for node in nodes {
+                    if let Err(e) = self.add_dht_peer(node) {
+                        tracing::warn!("Failed to add DHT peer: {e:?}");
+                    }
+                }
+                Ok(None)
+            }
+        }
     }
 
     fn update_peer_status(&self, peer: &AdnlNodeIdShort, is_good: bool) {

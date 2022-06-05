@@ -5,7 +5,7 @@ use anyhow::Result;
 use smallvec::SmallVec;
 use tl_proto::{BoxedConstructor, HashWrapper, TlWrite};
 
-use super::{make_dht_key, DHT_KEY_NODES};
+use super::DHT_KEY_NODES;
 use crate::proto;
 use crate::utils::*;
 
@@ -103,7 +103,12 @@ impl Storage {
             _ => return Err(StorageError::InvalidKeyDescription.into()),
         };
 
-        if make_dht_key(&overlay_id, DHT_KEY_NODES) != value.key.key {
+        let required_key = proto::dht::Key {
+            id: overlay_id.as_slice(),
+            name: DHT_KEY_NODES.as_ref(),
+            idx: 0,
+        };
+        if value.key.key != required_key {
             return Err(StorageError::InvalidDhtKey.into());
         }
 
@@ -185,7 +190,7 @@ fn make_overlay_nodes_value<'a, 'b, const N: usize>(
 
     proto::dht::ValueOwned {
         key: value.key.as_equivalent_owned(),
-        value: stored_value,
+        value: stored_value.into(),
         ttl: value.ttl,
         signature: value.signature.to_vec().into(),
     }

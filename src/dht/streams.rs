@@ -2,6 +2,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use bytes::Bytes;
 use futures_util::future::BoxFuture;
 use futures_util::stream::FuturesUnordered;
 use futures_util::{Stream, StreamExt};
@@ -15,7 +16,7 @@ use crate::proto;
 #[must_use = "streams do nothing unless polled"]
 pub struct DhtValuesStream<T> {
     dht: Arc<DhtNode>,
-    key: proto::dht::KeyOwned,
+    query: Bytes,
     batch_len: Option<usize>,
     known_peers_version: u64,
     use_new_peers: bool,
@@ -38,9 +39,11 @@ where
         let batch_len = Some(dht.options.default_value_batch_len);
         let known_peers_version = dht.known_peers.version();
 
+        let query = tl_proto::serialize(proto::rpc::DhtFindValue { key: &key_id, k: 6 }).into();
+
         Self {
             dht,
-            key: key.as_equivalent_owned(),
+            query,
             batch_len,
             known_peers_version,
             use_new_peers: false,
@@ -67,12 +70,19 @@ where
         // Spawn at most `max_tasks` queries
         while let Some(peer_id) = self.peers_iter.next() {
             let dht = self.dht.clone();
-            let key = self.key.clone();
+            let query = self.query.clone();
 
             self.futures.push(Box::pin(async move {
-                let key = key.as_equivalent_ref();
-                match dht.query_value::<T>(&peer_id, key).await {
-                    Ok(value) => value,
+                match dht.query_raw(&peer_id, query).await {
+                    Ok(Some(result)) => match dht.parse_value_result::<T>(&result) {
+                        Ok(Some(value)) => Some(value),
+                        Ok(None) => None,
+                        Err(e) => {
+                            tracing::warn!("Failed to parse queried value: {e}");
+                            None
+                        }
+                    },
+                    Ok(None) => None,
                     Err(e) => {
                         tracing::warn!("Failed to query value: {e}");
                         None

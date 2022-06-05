@@ -102,7 +102,7 @@ impl Value<'_> {
     pub fn as_equivalent_owned(&self) -> ValueOwned {
         ValueOwned {
             key: self.key.as_equivalent_owned(),
-            value: self.value.to_vec(),
+            value: self.value.to_vec().into(),
             ttl: self.ttl,
             signature: self.signature.to_vec().into(),
         }
@@ -112,7 +112,7 @@ impl Value<'_> {
 #[derive(Clone, TlWrite, TlRead)]
 pub struct ValueOwned {
     pub key: KeyDescriptionOwned,
-    pub value: Vec<u8>,
+    pub value: Bytes,
     pub ttl: u32,
     pub signature: Bytes,
 }

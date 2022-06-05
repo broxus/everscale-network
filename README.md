@@ -1,6 +1,6 @@
 <p align="center">
-    <h3 align="center">tiny-adnl</h3>
-    <p align="center">Abstract Datagram Network Layer (ADNL) protocol implementation</p>
+    <h3 align="center">everscale-network</h3>
+    <p align="center">Everscale network primitives implementation</p>
     <p align="center">
         <a href="/LICENSE">
             <img alt="GitHub" src="https://img.shields.io/github/license/broxus/tiny-adnl" />
@@ -10,6 +10,22 @@
         </a>
     </p>
 </p>
+
+### Network stack
+
+```text
+┌────────────────────────────────┐
+│  Network                       │
+│          ┌─────────────────────┤
+│          │            Overlay  │
+├──────────┼──────────┐          │
+│    DHT   │   RLDP   │          │
+├──────────┴──────────┴──────────┤
+│              ADNL              │
+├────────────────────────────────┤
+│              UDP               │
+└────────────────────────────────┘
+ ```
 
 ### Requirements
 - Rust 1.60+
