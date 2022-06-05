@@ -42,7 +42,7 @@ impl DhtStoreValue {
 
     /// Wraps `DhtStoreValue` into future which verifies that value is stored in the DHT
     /// and passes the predicate test
-    pub fn ensure_stored<T, FV>(self, check_value: FV) -> DhtStoreValueWithCheck<T, FV> {
+    pub fn then_check<T, FV>(self, check_value: FV) -> DhtStoreValueWithCheck<T, FV> {
         DhtStoreValueWithCheck {
             store_value: self,
             find_value: None,

@@ -252,7 +252,7 @@ impl DhtNode {
         let mut nodes = Vec::new();
         let mut cache = FxHashSet::default();
         loop {
-            // Receive a several nodes records
+            // Receive several nodes records
             let received = self
                 .entry(overlay_id, DHT_KEY_NODES)
                 .values()
@@ -369,7 +369,7 @@ impl DhtNode {
         };
 
         self.store_value(value)?
-            .ensure_stored(
+            .then_check(
                 move |_, BoxedWrapper(proto::overlay::NodesOwned { nodes })| {
                     for stored_node in &nodes {
                         if stored_node.as_equivalent_ref() == node {
@@ -402,7 +402,7 @@ impl DhtNode {
                 .into_boxed(),
             )
             .sign_and_store(key)?
-            .ensure_stored(move |_, BoxedWrapper(address_list)| {
+            .then_check(move |_, BoxedWrapper(address_list)| {
                 match parse_address_list(&address_list, clock_tolerance_sec)? {
                     stored_ip if stored_ip == ip => Ok(true),
                     stored_ip => {
