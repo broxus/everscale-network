@@ -9,13 +9,25 @@ use super::DHT_KEY_NODES;
 use crate::proto;
 use crate::utils::*;
 
+pub struct StorageOptions {
+    pub max_key_name_len: usize,
+    pub max_key_index: u32,
+}
+
 /// Local DHT data storage
-#[derive(Default)]
 pub struct Storage {
     storage: FxDashMap<StorageKeyId, proto::dht::ValueOwned>,
+    options: StorageOptions,
 }
 
 impl Storage {
+    pub fn new(options: StorageOptions) -> Self {
+        Self {
+            storage: Default::default(),
+            options,
+        }
+    }
+
     /// Returns number of stored values
     pub fn len(&self) -> usize {
         self.storage.len()
@@ -43,6 +55,16 @@ impl Storage {
     pub fn insert(&self, value: proto::dht::Value<'_>) -> Result<bool> {
         if value.ttl <= now() {
             return Err(StorageError::ValueExpired.into());
+        }
+
+        if !(0..=self.options.max_key_name_len).contains(&value.key.key.name.len())
+            || value.key.key.idx > self.options.max_key_index
+        {
+            return Err(StorageError::InvalidKey.into());
+        }
+
+        if value.key.key.id != &tl_proto::hash(value.key.id) {
+            return Err(StorageError::InvalidKey.into());
         }
 
         match value.key.update_rule {
@@ -219,4 +241,6 @@ enum StorageError {
     EmptyOverlayNodes,
     #[error("Value expired")]
     ValueExpired,
+    #[error("Invalid key")]
+    InvalidKey,
 }

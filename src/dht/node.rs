@@ -13,7 +13,7 @@ use tl_proto::{BoxedConstructor, BoxedWrapper, TlRead, TlWrite};
 
 use super::buckets::Buckets;
 use super::futures::DhtStoreValue;
-use super::storage::Storage;
+use super::storage::{Storage, StorageOptions};
 use super::{DHT_KEY_ADDRESS, DHT_KEY_NODES};
 use crate::adnl::{AdnlNode, NewPeerContext};
 use crate::dht::entry::DhtEntry;
@@ -53,6 +53,20 @@ pub struct DhtNodeOptions {
     /// Default: `5`
     pub max_allowed_k: u32,
 
+    /// Max allowed key name length (in bytes).
+    ///
+    /// See [`proto::dht::Key`]
+    ///
+    /// Default: `127` bytes
+    pub max_key_name_len: usize,
+
+    /// Max allowed key index
+    ///
+    /// See [`proto::dht::Key`]
+    ///
+    /// Default: `15`
+    pub max_key_index: u32,
+
     /// Storage GC interval. Will remove all outdated entries
     ///
     /// Default: `10000` ms
@@ -67,6 +81,8 @@ impl Default for DhtNodeOptions {
             default_value_batch_len: 5,
             bad_peer_threshold: 5,
             max_allowed_k: 20,
+            max_key_name_len: 127,
+            max_key_index: 15,
             storage_gc_interval_ms: 10000,
         }
     }
@@ -101,15 +117,19 @@ impl DhtNode {
         let node_key = adnl.key_by_tag(key_tag)?.clone();
 
         let buckets = Buckets::new(node_key.id());
+        let storage = Storage::new(StorageOptions {
+            max_key_name_len: options.max_key_name_len,
+            max_key_index: options.max_key_index,
+        });
 
         let mut dht_node = Self {
             adnl,
             node_key,
             options,
             known_peers: PeersCache::with_capacity(MAX_OVERLAY_PEERS),
-            buckets,
             penalties: Default::default(),
-            storage: Storage::default(),
+            buckets,
+            storage,
             query_prefix: Vec::new(),
         };
 
