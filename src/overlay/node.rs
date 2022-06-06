@@ -19,7 +19,7 @@ pub struct OverlayNode {
     /// Overlay shards
     shards: FxDashMap<OverlayIdShort, Arc<OverlayShard>>,
     /// Overlay query subscribers
-    subscribers: FxDashMap<OverlayIdShort, Arc<dyn OverlaySubscriber>>,
+    subscribers: FxDashMap<OverlayIdShort, Arc<dyn QuerySubscriber>>,
     /// Overlay group "seed"
     zero_state_file_hash: [u8; 32],
 }
@@ -53,7 +53,7 @@ impl OverlayNode {
     pub fn add_subscriber(
         &self,
         overlay_id: OverlayIdShort,
-        subscriber: Arc<dyn OverlaySubscriber>,
+        subscriber: Arc<dyn QuerySubscriber>,
     ) -> bool {
         use dashmap::mapref::entry::Entry;
 
@@ -109,7 +109,7 @@ impl OverlayNode {
 }
 
 #[async_trait::async_trait]
-impl Subscriber for OverlayNode {
+impl MessageSubscriber for OverlayNode {
     async fn try_consume_custom(
         &self,
         local_id: &AdnlNodeIdShort,
@@ -144,7 +144,10 @@ impl Subscriber for OverlayNode {
             _ => Err(OverlayNodeError::UnsupportedOverlayBroadcastMessage.into()),
         }
     }
+}
 
+#[async_trait::async_trait]
+impl QuerySubscriber for OverlayNode {
     async fn try_consume_query<'a>(
         &self,
         local_id: &AdnlNodeIdShort,

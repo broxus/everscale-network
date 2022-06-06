@@ -3,13 +3,13 @@ use std::borrow::Cow;
 use anyhow::Result;
 
 use crate::proto;
-use crate::subscriber::{QueryConsumingResult, Subscriber};
+use crate::subscriber::{QueryConsumingResult, QuerySubscriber};
 use crate::utils::*;
 
 pub struct AdnlPingSubscriber;
 
 #[async_trait::async_trait]
-impl Subscriber for AdnlPingSubscriber {
+impl QuerySubscriber for AdnlPingSubscriber {
     async fn try_consume_query<'a>(
         &self,
         _: &AdnlNodeIdShort,

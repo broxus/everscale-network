@@ -23,14 +23,25 @@ impl AdnlNode {
     pub(super) fn start_receiver(
         self: &Arc<Self>,
         socket: Arc<UdpSocket>,
-        subscribers: Arc<Vec<Arc<dyn Subscriber>>>,
+        message_subscribers: Vec<Arc<dyn MessageSubscriber>>,
+        query_subscribers: Vec<Arc<dyn QuerySubscriber>>,
     ) {
         use futures_util::future::{select, Either};
+
+        struct ReceiverContext {
+            node: Arc<AdnlNode>,
+            message_subscribers: Vec<Arc<dyn MessageSubscriber>>,
+            query_subscribers: Vec<Arc<dyn QuerySubscriber>>,
+        }
 
         const RECV_BUFFER_SIZE: usize = 2048;
 
         let complete_signal = self.cancellation_token.clone();
-        let node = self.clone();
+        let ctx = Arc::new(ReceiverContext {
+            node: self.clone(),
+            message_subscribers,
+            query_subscribers,
+        });
 
         tokio::spawn(async move {
             let mut buffer = None;
@@ -72,11 +83,15 @@ impl AdnlNode {
                 };
 
                 // Process packet
-                let node = node.clone();
-                let subscribers = subscribers.clone();
+                let ctx = ctx.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = node
-                        .handle_received_data(PacketView::from(buffer.as_mut_slice()), &subscribers)
+                    if let Err(e) = ctx
+                        .node
+                        .handle_received_data(
+                            PacketView::from(buffer.as_mut_slice()),
+                            &ctx.message_subscribers,
+                            &ctx.query_subscribers,
+                        )
                         .await
                     {
                         tracing::trace!("Failed to handle received data: {e}");
@@ -90,7 +105,8 @@ impl AdnlNode {
     async fn handle_received_data(
         &self,
         mut data: PacketView<'_>,
-        subscribers: &[Arc<dyn Subscriber>],
+        message_subscribers: &[Arc<dyn MessageSubscriber>],
+        query_subscribers: &[Arc<dyn QuerySubscriber>],
     ) -> Result<()> {
         // Decrypt packet and extract peers
         let (priority, local_id, peer_id, version) = if let Some((local_id, version)) =
@@ -140,8 +156,15 @@ impl AdnlNode {
 
         // Process message(s)
         for message in packet.messages {
-            self.process_message(&local_id, &peer_id, message, subscribers, priority)
-                .await?;
+            self.process_message(
+                &local_id,
+                &peer_id,
+                message,
+                message_subscribers,
+                query_subscribers,
+                priority,
+            )
+            .await?;
         }
 
         // Done
@@ -153,7 +176,8 @@ impl AdnlNode {
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
         message: proto::adnl::Message<'_>,
-        subscribers: &[Arc<dyn Subscriber>],
+        message_subscribers: &[Arc<dyn MessageSubscriber>],
+        query_subscribers: &[Arc<dyn QuerySubscriber>],
         priority: bool,
     ) -> Result<()> {
         use dashmap::mapref::entry::Entry;
@@ -245,7 +269,7 @@ impl AdnlNode {
                     date,
                 ),
             proto::adnl::Message::Custom { data } => {
-                if process_message_custom(local_id, peer_id, subscribers, data).await? {
+                if process_message_custom(local_id, peer_id, message_subscribers, data).await? {
                     Ok(())
                 } else {
                     Err(AdnlReceiverError::NoSubscribersForCustomMessage.into())
@@ -253,7 +277,8 @@ impl AdnlNode {
             }
             proto::adnl::Message::Nop => Ok(()),
             proto::adnl::Message::Query { query_id, query } => {
-                let result = process_adnl_query(local_id, peer_id, subscribers, query).await?;
+                let result =
+                    process_adnl_query(local_id, peer_id, query_subscribers, query).await?;
 
                 match result {
                     QueryProcessingResult::Processed(Some(answer)) => self.send_message(
@@ -552,7 +577,7 @@ pub enum ChannelReceiver {
 async fn process_message_custom(
     local_id: &AdnlNodeIdShort,
     peer_id: &AdnlNodeIdShort,
-    subscribers: &[Arc<dyn Subscriber>],
+    subscribers: &[Arc<dyn MessageSubscriber>],
     data: &[u8],
 ) -> Result<bool> {
     let constructor = u32::read_from(data, &mut 0)?;
@@ -570,7 +595,7 @@ async fn process_message_custom(
 async fn process_adnl_query(
     local_id: &AdnlNodeIdShort,
     peer_id: &AdnlNodeIdShort,
-    subscribers: &[Arc<dyn Subscriber>],
+    subscribers: &[Arc<dyn QuerySubscriber>],
     query: &[u8],
 ) -> Result<QueryProcessingResult<Vec<u8>>> {
     process_query(local_id, peer_id, subscribers, Cow::Borrowed(query)).await

@@ -104,8 +104,8 @@ impl Default for AdnlNodeOptions {
 
 /// Unreliable UDP transport layer
 pub struct AdnlNode {
-    /// IPv4 address of the node
-    ip_address: PackedSocketAddr,
+    /// Socket address of the node
+    socket_addr: PackedSocketAddr,
     /// Immutable keystore
     keystore: Keystore,
     /// Configuration
@@ -142,12 +142,15 @@ pub struct AdnlNode {
 
 impl AdnlNode {
     /// Create new ADNL node on the specified address
-    pub fn new(
-        ip_address: PackedSocketAddr,
+    pub fn new<T>(
+        socket_addr: T,
         keystore: Keystore,
         options: AdnlNodeOptions,
         peer_filter: Option<Arc<dyn AdnlPeerFilter>>,
-    ) -> Arc<Self> {
+    ) -> Arc<Self>
+    where
+        T: Into<PackedSocketAddr>,
+    {
         let (sender_queue_tx, sender_queue_rx) = mpsc::unbounded_channel();
 
         // Add empty peers map for each local peer
@@ -158,7 +161,7 @@ impl AdnlNode {
         }
 
         Arc::new(Self {
-            ip_address,
+            socket_addr: socket_addr.into(),
             keystore,
             options,
             peer_filter,
@@ -192,7 +195,11 @@ impl AdnlNode {
     }
 
     /// Starts listening for incoming packets
-    pub fn start(self: &Arc<Self>, mut subscribers: Vec<Arc<dyn Subscriber>>) -> Result<()> {
+    pub fn start(
+        self: &Arc<Self>,
+        message_subscribers: Vec<Arc<dyn MessageSubscriber>>,
+        mut query_subscribers: Vec<Arc<dyn QuerySubscriber>>,
+    ) -> Result<()> {
         // Consume receiver
         let sender_queue_rx = match self.sender_queue_rx.lock().take() {
             Some(rx) => rx,
@@ -200,14 +207,14 @@ impl AdnlNode {
         };
 
         // Bind node socket
-        let socket = make_udp_socket(self.ip_address.port())?;
+        let socket = make_udp_socket(self.socket_addr.port())?;
 
-        subscribers.push(Arc::new(AdnlPingSubscriber));
-        let subscribers = Arc::new(subscribers);
+        query_subscribers.push(Arc::new(AdnlPingSubscriber));
+        let subscribers = query_subscribers;
 
         // Start background logic
         self.start_sender(socket.clone(), sender_queue_rx);
-        self.start_receiver(socket, subscribers);
+        self.start_receiver(socket, message_subscribers, subscribers);
 
         // Done
         Ok(())
@@ -224,10 +231,10 @@ impl AdnlNode {
         std::cmp::max(self.options.query_min_timeout_ms, timeout)
     }
 
-    /// IPv4 address of the node
+    /// Socket address of the node
     #[inline(always)]
-    pub fn ip_address(&self) -> PackedSocketAddr {
-        self.ip_address
+    pub fn socket_addr(&self) -> PackedSocketAddr {
+        self.socket_addr
     }
 
     /// Node start timestamp
@@ -239,7 +246,7 @@ impl AdnlNode {
     /// Builds new address list for the current ADNL node with no expiration date
     pub fn build_address_list(&self) -> proto::adnl::AddressList {
         proto::adnl::AddressList {
-            address: Some(self.ip_address.as_tl()),
+            address: Some(self.socket_addr.as_tl()),
             version: now(),
             reinit_date: self.start_time,
             expire_at: 0,
@@ -277,7 +284,7 @@ impl AdnlNode {
         use dashmap::mapref::entry::Entry;
 
         // Ignore ourself
-        if peer_id == local_id && peer_ip_address == self.ip_address {
+        if peer_id == local_id && peer_ip_address == self.socket_addr {
             return Ok(false);
         }
 

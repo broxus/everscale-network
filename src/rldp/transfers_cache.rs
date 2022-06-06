@@ -18,7 +18,7 @@ use crate::utils::*;
 pub struct TransfersCache {
     adnl: Arc<AdnlNode>,
     transfers: Arc<FxDashMap<TransferId, RldpTransfer>>,
-    subscribers: Arc<Vec<Arc<dyn Subscriber>>>,
+    subscribers: Arc<Vec<Arc<dyn QuerySubscriber>>>,
     query_options: QueryOptions,
     max_answer_size: u32,
     force_compression: bool,
@@ -27,7 +27,7 @@ pub struct TransfersCache {
 impl TransfersCache {
     pub fn new(
         adnl: Arc<AdnlNode>,
-        subscribers: Vec<Arc<dyn Subscriber>>,
+        subscribers: Vec<Arc<dyn QuerySubscriber>>,
         options: RldpNodeOptions,
     ) -> Self {
         Self {
@@ -406,7 +406,7 @@ impl IncomingContext {
     async fn answer(
         mut self,
         transfers: Arc<FxDashMap<TransferId, RldpTransfer>>,
-        subscribers: Arc<Vec<Arc<dyn Subscriber>>>,
+        subscribers: Arc<Vec<Arc<dyn QuerySubscriber>>>,
         query_options: QueryOptions,
         force_compression: bool,
     ) -> Result<Option<TransferId>> {
@@ -566,7 +566,7 @@ impl QueryOptions {
 async fn process_rldp_query(
     local_id: &AdnlNodeIdShort,
     peer_id: &AdnlNodeIdShort,
-    subscribers: &[Arc<dyn Subscriber>],
+    subscribers: &[Arc<dyn QuerySubscriber>],
     mut query: OwnedRldpMessageQuery,
     force_compression: bool,
 ) -> Result<QueryProcessingResult<Vec<u8>>> {

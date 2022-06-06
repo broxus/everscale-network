@@ -6,9 +6,9 @@ use tl_proto::TlRead;
 
 use crate::utils::*;
 
-/// ADNL or RLDP queries subscriber
+/// ADNL custom messages subscriber
 #[async_trait::async_trait]
-pub trait Subscriber: Send + Sync {
+pub trait MessageSubscriber: Send + Sync {
     async fn try_consume_custom(
         &self,
         local_id: &AdnlNodeIdShort,
@@ -22,31 +22,18 @@ pub trait Subscriber: Send + Sync {
         let _ = data;
         Ok(false)
     }
-
-    async fn try_consume_query<'a>(
-        &self,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
-        constructor: u32,
-        data: Cow<'a, [u8]>,
-    ) -> Result<QueryConsumingResult<'a>> {
-        let _ = local_id;
-        let _ = peer_id;
-        let _ = constructor;
-        Ok(QueryConsumingResult::Rejected(data))
-    }
 }
 
-/// Overlay queries subscriber
+/// ADNL, RLDP or overlay queries subscriber
 #[async_trait::async_trait]
-pub trait OverlaySubscriber: Send + Sync {
+pub trait QuerySubscriber: Send + Sync {
     async fn try_consume_query<'a>(
         &self,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
         constructor: u32,
         query: Cow<'a, [u8]>,
-    ) -> Result<QueryConsumingResult>;
+    ) -> Result<QueryConsumingResult<'a>>;
 }
 
 /// Subscriber response for consumed query
@@ -69,7 +56,7 @@ impl QueryConsumingResult<'_> {
 pub async fn process_query(
     local_id: &AdnlNodeIdShort,
     peer_id: &AdnlNodeIdShort,
-    subscribers: &[Arc<dyn Subscriber>],
+    subscribers: &[Arc<dyn QuerySubscriber>],
     mut query: Cow<'_, [u8]>,
 ) -> Result<QueryProcessingResult<Vec<u8>>> {
     let constructor = u32::read_from(&query, &mut 0)?;

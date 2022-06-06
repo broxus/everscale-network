@@ -580,7 +580,7 @@ impl DhtNode {
 }
 
 #[async_trait::async_trait]
-impl Subscriber for DhtNode {
+impl QuerySubscriber for DhtNode {
     async fn try_consume_query<'a>(
         &self,
         local_id: &AdnlNodeIdShort,

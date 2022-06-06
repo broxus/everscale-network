@@ -79,7 +79,7 @@ impl RldpNode {
     /// Create new RLDP node on top of the given ADNL node
     pub fn new(
         adnl: Arc<AdnlNode>,
-        subscribers: Vec<Arc<dyn Subscriber>>,
+        subscribers: Vec<Arc<dyn QuerySubscriber>>,
         options: RldpNodeOptions,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -179,7 +179,7 @@ impl RldpNode {
 }
 
 #[async_trait::async_trait]
-impl Subscriber for RldpNode {
+impl MessageSubscriber for RldpNode {
     async fn try_consume_custom(
         &self,
         local_id: &AdnlNodeIdShort,

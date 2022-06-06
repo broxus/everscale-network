@@ -236,7 +236,7 @@ impl AdnlNode {
 
         let now = now();
         let address = proto::adnl::AddressList {
-            address: Some(self.ip_address.as_tl()),
+            address: Some(self.socket_addr.as_tl()),
             version: now,
             reinit_date: self.start_time,
             expire_at: now + self.options.address_list_timeout_sec,

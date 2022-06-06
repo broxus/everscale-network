@@ -7,7 +7,7 @@ pub use self::dht::{DhtNode, DhtNodeMetrics, DhtNodeOptions};
 pub use self::overlay::{OverlayNode, OverlayShard, OverlayShardMetrics, OverlayShardOptions};
 #[cfg(feature = "rldp")]
 pub use self::rldp::{RldpNode, RldpNodeMetrics, RldpNodeOptions};
-pub use self::subscriber::{OverlaySubscriber, QueryConsumingResult, Subscriber};
+pub use self::subscriber::{MessageSubscriber, QueryConsumingResult, QuerySubscriber};
 
 pub mod adnl;
 #[cfg(feature = "dht")]

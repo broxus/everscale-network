@@ -45,12 +45,12 @@ async fn main() -> Result<()> {
         NewPeerContext::AdnlPacket,
         &left_node_id,
         &left_node_id,
-        right_node.ip_address(),
+        right_node.socket_addr(),
         right_node_full_id,
     )?;
 
-    left_node.start(Vec::new())?;
-    right_node.start(vec![Arc::new(Service)])?;
+    left_node.start(Vec::new(), Vec::new())?;
+    right_node.start(Vec::new(), vec![Arc::new(Service)])?;
 
     let iterations = Arc::new(AtomicUsize::new(0));
     let mut handles = Vec::new();
@@ -102,7 +102,7 @@ async fn query_data<Q, A>(
 struct Service;
 
 #[async_trait::async_trait]
-impl everscale_network::Subscriber for Service {
+impl everscale_network::QuerySubscriber for Service {
     async fn try_consume_query<'a>(
         &self,
         _: &AdnlNodeIdShort,
