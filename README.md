@@ -1,4 +1,4 @@
-## everscale-network &emsp; [![Latest Version]][crates.io] [![everscale-network: rustc 1.60+]][Rust 1.60] [![Workflow badge]][Workflow] [![License Apache badge]][License Apache]
+## everscale-network &emsp; [![Latest Version]][crates.io] [![Workflow badge]][Workflow] [![License Apache badge]][License Apache] [![Docs badge]][Docs]
 
 Implementation of the network part of the Everscale blockchain.
 
@@ -63,6 +63,8 @@ async fn example() -> Result<()> {
 }
 ```
 
+For more information you can check the [docs](https://docs.rs/everscale-network) or the [examples](https://github.com/broxus/everscale-network/tree/master/examples).
+
 ### Minimum Rust version
 
 The current minimum required Rust version is 1.60.
@@ -73,9 +75,9 @@ This project is licensed under the [License Apache].
 
 [Latest Version]: https://img.shields.io/crates/v/everscale-network.svg
 [crates.io]: https://crates.io/crates/everscale-network
-[everscale-network: rustc 1.60+]: https://img.shields.io/badge/rustc-1.60+-lightgray.svg
-[Rust 1.60]: https://blog.rust-lang.org/2022/04/07/Rust-1.60.0.html
 [Workflow badge]: https://img.shields.io/github/workflow/status/broxus/everscale-network/master
 [Workflow]: https://github.com/broxus/everscale-network/actions?query=workflow%3Amaster
 [License Apache badge]: https://img.shields.io/github/license/broxus/everscale-network
 [License Apache]: https://opensource.org/licenses/Apache-2.0
+[Docs badge]: https://docs.rs/everscale-network/badge.svg
+[Docs]: https://docs.rs/everscale-network

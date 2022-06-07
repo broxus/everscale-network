@@ -1,13 +1,13 @@
 [package]
 name = "everscale-network"
-version = "0.2.0"
+version = "0.2.1"
 description = "Implementation of the network part of the Everscale blockchain"
 repository = "https://github.com/broxus/everscale-network"
 authors = ["Ivan Kalinin <i.kalinin@dexpa.io>"]
 rust-version = "1.60.0"
 edition = "2021"
-include = ["src/**/*.rs", "README.md", "LICENSE"]
-license-file = "./LICENSE"
+include = ["src/**/*.rs", "README.md"]
+license = "Apache-2.0"
 
 [[example]]
 name = "udp_adnl"
