@@ -5,6 +5,8 @@ use std::hash::BuildHasherDefault;
 use rustc_hash::FxHasher;
 pub use rustc_hash::{FxHashMap, FxHashSet};
 
+pub use self::deferred_initialization::*;
+pub use self::network_builder::*;
 pub use self::node_id::*;
 pub use self::overlay_id::*;
 pub use self::packed_socket_addr::*;
@@ -14,6 +16,8 @@ pub use self::updated_at::*;
 
 #[cfg(feature = "rldp")]
 pub mod compression;
+mod deferred_initialization;
+mod network_builder;
 mod node_id;
 mod overlay_id;
 mod packed_socket_addr;

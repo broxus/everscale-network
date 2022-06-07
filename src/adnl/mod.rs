@@ -75,9 +75,16 @@
 //! [`AdnlNodeIdShort`]: crate::utils::AdnlNodeIdShort
 //! [`Message`]: crate::proto::adnl::Message
 
+use std::sync::Arc;
+
+use frunk_core::hlist::{HCons, HNil};
+use frunk_core::indices::Here;
+
 pub use self::keystore::Keystore;
 pub use self::node::{AdnlNode, AdnlNodeMetrics, AdnlNodeOptions};
 pub use self::peer::{AdnlPeerFilter, NewPeerContext};
+
+use crate::utils::{NetworkBuilder, PackedSocketAddr};
 
 mod channel;
 mod encryption;
@@ -90,3 +97,28 @@ mod ping_subscriber;
 mod queries_cache;
 mod socket;
 mod transfer;
+
+impl NetworkBuilder<HNil, Here> {
+    pub fn with_adnl<T>(
+        socket_addr: T,
+        keystore: Keystore,
+        options: AdnlNodeOptions,
+    ) -> NetworkBuilder<HCons<Arc<AdnlNode>, HNil>, Here>
+    where
+        T: Into<PackedSocketAddr>,
+    {
+        NetworkBuilder(
+            HCons {
+                head: AdnlNode::new(socket_addr, keystore, options, None),
+                tail: HNil,
+            },
+            Default::default(),
+        )
+    }
+}
+
+impl<I> NetworkBuilder<HCons<Arc<AdnlNode>, HNil>, I> {
+    pub fn build(self) -> Arc<AdnlNode> {
+        self.0.head
+    }
+}
