@@ -1,5 +1,8 @@
 #![allow(clippy::too_many_arguments)]
 
+// Re-export TL-proto crate
+pub use tl_proto;
+
 pub use self::adnl::{AdnlNode, AdnlNodeMetrics, AdnlNodeOptions, Keystore, NewPeerContext};
 #[cfg(feature = "dht")]
 pub use self::dht::{DhtNode, DhtNodeMetrics, DhtNodeOptions};

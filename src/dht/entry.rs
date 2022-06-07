@@ -111,6 +111,12 @@ impl<'a> DhtEntryWithData<'a> {
         self
     }
 
+    /// Sets expiration time for the value as `now + ttl`
+    pub fn with_ttl(mut self, ttl: u32) -> Self {
+        self.expire_at = Some(now() + ttl);
+        self
+    }
+
     /// Creates signed TL representation of the entry.
     pub fn sign(self, key: &StoredAdnlNodeKey) -> proto::dht::ValueOwned {
         let mut value = self.make_value(key);
