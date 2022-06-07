@@ -53,17 +53,15 @@ impl PacketsHistory {
         }
     }
 
-    pub fn seqno(&self) -> i64 {
-        self.seqno.load(Ordering::Acquire) as i64
+    pub fn seqno(&self) -> u64 {
+        self.seqno.load(Ordering::Acquire)
     }
 
-    pub fn bump_seqno(&self) -> i64 {
-        self.seqno.fetch_add(1, Ordering::AcqRel) as i64 + 1
+    pub fn bump_seqno(&self) -> u64 {
+        self.seqno.fetch_add(1, Ordering::AcqRel) + 1
     }
 
-    pub fn deliver_packet(&self, seqno: i64) -> bool {
-        let seqno = seqno as u64;
-
+    pub fn deliver_packet(&self, seqno: u64) -> bool {
         let mask = match &self.mask {
             Some(mask) => mask,
             None => loop {

@@ -1,14 +1,13 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::OutgoingBroadcastInfo;
 use anyhow::Result;
-use ton_api::ton::TLObject;
+use tl_proto::{TlRead, TlWrite};
 
 use super::neighbour::Neighbour;
 use super::neighbours::Neighbours;
-use crate::overlay_node::{IncomingBroadcastInfo, OverlayShard};
-use crate::rldp_node::RldpNode;
+use crate::overlay::{IncomingBroadcastInfo, OutgoingBroadcastInfo, OverlayShard};
+use crate::rldp::RldpNode;
 use crate::utils::*;
 
 pub struct OverlayClient {
@@ -42,26 +41,27 @@ impl OverlayClient {
         &self.overlay_shard
     }
 
-    pub fn resolve_ip(&self, neighbour: &Neighbour) -> Option<AdnlAddressUdp> {
-        self.overlay_shard
+    pub fn resolve_ip(&self, neighbour: &Neighbour) -> Option<PackedSocketAddr> {
+        self.rldp
             .adnl()
             .get_peer_ip(self.overlay_shard.overlay_key().id(), neighbour.peer_id())
     }
 
+    #[track_caller]
     pub async fn send_rldp_query<Q, A>(
         &self,
-        query: &Q,
+        query: Q,
         neighbour: Arc<Neighbour>,
         attempt: u32,
     ) -> Result<A>
     where
-        Q: ton_api::BoxedSerialize + std::fmt::Debug,
-        A: ton_api::BoxedDeserialize,
+        Q: TlWrite,
+        for<'a> A: TlRead<'a, Repr = tl_proto::Boxed> + 'static,
     {
         let (answer, neighbour, roundtrip) = self
             .send_rldp_query_to_neighbour(neighbour, query, attempt)
             .await?;
-        match ton_api::Deserializer::new(&mut answer.as_slice()).read_boxed() {
+        match tl_proto::deserialize(&answer) {
             Ok(answer) => {
                 neighbour.query_succeeded(roundtrip, true);
                 Ok(answer)
@@ -74,7 +74,7 @@ impl OverlayClient {
                     true,
                     true,
                 );
-                Err(anyhow::Error::msg(e))
+                Err(e.into())
             }
         }
     }
@@ -82,11 +82,11 @@ impl OverlayClient {
     pub async fn send_rldp_query_raw<Q>(
         &self,
         neighbour: Arc<Neighbour>,
-        query: &Q,
+        query: Q,
         attempt: u32,
     ) -> Result<Vec<u8>>
     where
-        Q: ton_api::BoxedSerialize + std::fmt::Debug,
+        Q: TlWrite,
     {
         let (answer, neighbour, roundtrip) = self
             .send_rldp_query_to_neighbour(neighbour, query, attempt)
@@ -103,12 +103,14 @@ impl OverlayClient {
         explicit_neighbour: Option<&Arc<Neighbour>>,
     ) -> Result<(A, Arc<Neighbour>)>
     where
-        Q: ton_api::AnyBoxedSerialize,
-        A: ton_api::AnyBoxedSerialize,
+        Q: TlWrite,
+        for<'a> A: TlRead<'a, Repr = tl_proto::Boxed> + 'static,
     {
         const NO_NEIGHBOURS_DELAY: u64 = 1000; // Milliseconds
 
-        let query = TLObject::new(query);
+        let query = tl_proto::serialize(query);
+        let query = tl_proto::RawBytes::<tl_proto::Boxed>::new(&query);
+
         let attempts = attempts.unwrap_or(DEFAULT_ADNL_ATTEMPTS);
 
         for _ in 0..attempts {
@@ -124,14 +126,14 @@ impl OverlayClient {
             };
 
             if let Some(answer) = self
-                .send_adnl_query_to_neighbour::<Q, A>(&neighbour, &query, timeout)
+                .send_adnl_query_to_neighbour::<_, A>(&neighbour, query, timeout)
                 .await?
             {
                 return Ok((answer, neighbour));
             }
         }
 
-        Err(OverlayClientError::AdnlQueryFailed(query, attempts).into())
+        Err(OverlayClientError::AdnlQueryFailed(attempts).into())
     }
 
     pub fn broadcast(
@@ -139,7 +141,7 @@ impl OverlayClient {
         data: Vec<u8>,
         source: Option<&Arc<StoredAdnlNodeKey>>,
     ) -> OutgoingBroadcastInfo {
-        self.overlay_shard.broadcast(data, source)
+        self.overlay_shard.broadcast(self.rldp.adnl(), data, source)
     }
 
     pub async fn wait_for_broadcast(&self) -> IncomingBroadcastInfo {
@@ -149,40 +151,39 @@ impl OverlayClient {
     async fn send_adnl_query_to_neighbour<Q, A>(
         &self,
         neighbour: &Neighbour,
-        query: &TLObject,
+        query: Q,
         timeout: Option<u64>,
     ) -> Result<Option<A>>
     where
-        Q: ton_api::AnyBoxedSerialize,
-        A: ton_api::AnyBoxedSerialize,
+        Q: TlWrite,
+        for<'a> A: TlRead<'a, Repr = tl_proto::Boxed> + 'static,
     {
-        let timeout = timeout.or_else(|| {
-            Some(
-                self.overlay_shard
-                    .adnl()
-                    .compute_query_timeout(neighbour.roundtrip_adnl()),
-            )
-        });
+        let adnl = self.rldp.adnl();
+        let timeout =
+            timeout.or_else(|| Some(adnl.compute_query_timeout(neighbour.roundtrip_adnl())));
         let peer_id = neighbour.peer_id();
 
         let now = Instant::now();
-        let answer = self.overlay_shard.query(peer_id, query, timeout).await?;
+        let answer = self
+            .overlay_shard
+            .adnl_query(adnl, peer_id, query, timeout)
+            .await?;
         let roundtrip = now.elapsed().as_millis() as u64;
 
-        match answer.map(|answer| answer.downcast::<A>()) {
+        match answer.map(|answer| tl_proto::deserialize::<A>(&answer)) {
             Some(Ok(answer)) => {
                 neighbour.query_succeeded(roundtrip, false);
                 return Ok(Some(answer));
             }
-            Some(Err(answer)) => {
+            Some(Err(e)) => {
                 tracing::warn!(
-                    "Wrong answer {answer:?} to {query:?} from {peer_id} ({})",
+                    "Invalid answer from {peer_id} ({}): {e:?}",
                     ResolvedIp(self.resolve_ip(neighbour))
                 );
             }
             None => {
                 tracing::warn!(
-                    "No reply to {query:?} from {peer_id} ({})",
+                    "No reply from {peer_id} ({})",
                     ResolvedIp(self.resolve_ip(neighbour))
                 );
             }
@@ -193,26 +194,28 @@ impl OverlayClient {
         Ok(None)
     }
 
-    async fn send_rldp_query_to_neighbour<Q>(
+    async fn send_rldp_query_to_neighbour<T>(
         &self,
         neighbour: Arc<Neighbour>,
-        query: &Q,
+        query: T,
         attempt: u32,
     ) -> Result<(Vec<u8>, Arc<Neighbour>, u64)>
     where
-        Q: ton_api::BoxedSerialize + std::fmt::Debug,
+        T: TlWrite,
     {
         const ATTEMPT_INTERVAL: u64 = 50; // Milliseconds
 
-        let mut data = self.overlay_shard.query_prefix().clone();
-        serialize_append(&mut data, query);
+        let prefix = self.overlay_shard.query_prefix();
+        let mut query_data = Vec::with_capacity(prefix.len() + query.max_size_hint());
+        query_data.extend_from_slice(prefix);
+        query.write_to(&mut query_data);
 
         let (answer, roundtrip) = self
             .overlay_shard
-            .query_via_rldp(
-                neighbour.peer_id(),
-                data,
+            .rldp_query(
                 &self.rldp,
+                neighbour.peer_id(),
+                query_data,
                 neighbour
                     .roundtrip_rldp()
                     .map(|roundtrip| roundtrip + attempt as u64 * ATTEMPT_INTERVAL),
@@ -237,7 +240,7 @@ impl OverlayClient {
 
 const DEFAULT_ADNL_ATTEMPTS: u32 = 50;
 
-struct ResolvedIp(Option<AdnlAddressUdp>);
+struct ResolvedIp(Option<PackedSocketAddr>);
 
 impl std::fmt::Display for ResolvedIp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -252,8 +255,8 @@ impl std::fmt::Display for ResolvedIp {
 enum OverlayClientError {
     #[error("No neighbours found")]
     NeNeighboursFound,
-    #[error("Failed to send adnl query {:?} in {} attempts", .0, .1)]
-    AdnlQueryFailed(TLObject, u32),
+    #[error("Failed to send adnl query in {} attempts", .0)]
+    AdnlQueryFailed(u32),
     #[error("No RLDP query answer from {}", .0)]
     NoRldpQueryAnswer(AdnlNodeIdShort),
 }

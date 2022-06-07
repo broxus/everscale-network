@@ -1,97 +1,81 @@
+use std::borrow::Cow;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use ton_api::ton::TLObject;
-use ton_api::{BoxedSerialize, IntoBoxed};
+use tl_proto::TlRead;
 
-pub use self::ping_subscriber::AdnlPingSubscriber;
+use crate::adnl::AdnlNode;
 use crate::utils::*;
 
-mod ping_subscriber;
-
+/// ADNL custom messages subscriber
 #[async_trait::async_trait]
-pub trait Subscriber: Send + Sync {
-    async fn poll(&self, _start: &Arc<Instant>) {
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    }
-
-    async fn try_consume_custom(
+pub trait MessageSubscriber: Send + Sync {
+    async fn try_consume_custom<'a>(
         &self,
-        _local_id: &AdnlNodeIdShort,
-        _peer_id: &AdnlNodeIdShort,
-        _data: &[u8],
-    ) -> Result<bool> {
-        Ok(false)
-    }
-
-    async fn try_consume_query(
-        &self,
-        _local_id: &AdnlNodeIdShort,
-        _peer_id: &AdnlNodeIdShort,
-        query: TLObject,
-    ) -> Result<QueryConsumingResult> {
-        Ok(QueryConsumingResult::Rejected(query))
-    }
-
-    async fn try_consume_query_bundle(
-        &self,
-        _local_id: &AdnlNodeIdShort,
-        _peer_id: &AdnlNodeIdShort,
-        queries: Vec<TLObject>,
-    ) -> Result<QueryBundleConsumingResult> {
-        Ok(QueryBundleConsumingResult::Rejected(queries))
-    }
+        ctx: SubscriberContext<'a>,
+        constructor: u32,
+        data: &'a [u8],
+    ) -> Result<bool>;
 }
 
+/// ADNL, RLDP or overlay queries subscriber
 #[async_trait::async_trait]
-pub trait OverlaySubscriber: Send + Sync {
-    async fn try_consume_query(
+pub trait QuerySubscriber: Send + Sync {
+    async fn try_consume_query<'a>(
         &self,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
-        query: TLObject,
-    ) -> Result<QueryConsumingResult>;
+        ctx: SubscriberContext<'a>,
+        constructor: u32,
+        query: Cow<'a, [u8]>,
+    ) -> Result<QueryConsumingResult<'a>>;
 }
 
-pub enum QueryConsumingResult {
-    Consumed(Option<QueryAnswer>),
-    Rejected(TLObject),
+#[derive(Copy, Clone)]
+pub struct SubscriberContext<'a> {
+    pub adnl: &'a Arc<AdnlNode>,
+    pub local_id: &'a AdnlNodeIdShort,
+    pub peer_id: &'a AdnlNodeIdShort,
 }
 
-pub enum QueryBundleConsumingResult {
-    Consumed(Option<QueryAnswer>),
-    Rejected(Vec<TLObject>),
+/// Subscriber response for consumed query
+pub enum QueryConsumingResult<'a> {
+    /// Query is accepted and processed
+    Consumed(Option<Vec<u8>>),
+    /// Query rejected and will be processed by the next subscriber
+    Rejected(Cow<'a, [u8]>),
 }
 
-macro_rules! impl_consume {
-    ($consuming_result:ident) => {
-        impl $consuming_result {
-            pub fn consume<A: IntoBoxed>(answer: A) -> Result<Self>
-            where
-                <A as IntoBoxed>::Boxed: serde::Serialize + Send + Sync + 'static,
-            {
-                Ok(Self::Consumed(Some(QueryAnswer::Object(TLObject::new(
-                    answer.into_boxed(),
-                )))))
+impl QueryConsumingResult<'_> {
+    pub fn consume<T>(answer: T) -> Result<Self>
+    where
+        T: tl_proto::TlWrite<Repr = tl_proto::Boxed>,
+    {
+        Ok(Self::Consumed(Some(tl_proto::serialize(answer))))
+    }
+}
+
+pub async fn process_query<'a>(
+    ctx: SubscriberContext<'a>,
+    subscribers: &[Arc<dyn QuerySubscriber>],
+    mut query: Cow<'_, [u8]>,
+) -> Result<QueryProcessingResult<Vec<u8>>> {
+    let constructor = u32::read_from(&query, &mut 0)?;
+
+    for subscriber in subscribers {
+        query = match subscriber
+            .try_consume_query(ctx, constructor, query)
+            .await?
+        {
+            QueryConsumingResult::Consumed(answer) => {
+                return Ok(QueryProcessingResult::Processed(answer))
             }
+            QueryConsumingResult::Rejected(query) => query,
+        };
+    }
 
-            pub fn consume_boxed<A>(answer: A) -> Result<Self>
-            where
-                A: BoxedSerialize + serde::Serialize + Send + Sync + 'static,
-            {
-                Ok(Self::Consumed(Some(QueryAnswer::Object(TLObject::new(
-                    answer,
-                )))))
-            }
-        }
-    };
+    Ok(QueryProcessingResult::Rejected)
 }
 
-impl_consume!(QueryConsumingResult);
-impl_consume!(QueryBundleConsumingResult);
-
-pub enum QueryAnswer {
-    Object(TLObject),
-    Raw(Vec<u8>),
+pub enum QueryProcessingResult<T> {
+    Processed(Option<T>),
+    Rejected,
 }

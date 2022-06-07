@@ -115,27 +115,6 @@ impl PeersCache {
     }
 }
 
-#[derive(Default)]
-pub struct ExternalPeersCacheIter(usize);
-
-impl ExternalPeersCacheIter {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn get(&self, cache: &PeersCache) -> Option<AdnlNodeIdShort> {
-        cache.get(self.0)
-    }
-
-    pub fn bump(&mut self) {
-        self.0 += 1;
-    }
-
-    pub fn reset(&mut self) {
-        self.0 = 0;
-    }
-}
-
 pub struct PeersCacheIter<'a> {
     _state: RwLockReadGuard<'a, PeersCacheState>,
     iter: std::slice::Iter<'a, AdnlNodeIdShort>,

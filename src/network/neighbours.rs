@@ -1,15 +1,15 @@
-use std::convert::TryFrom;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use ton_api::ton::{self, TLObject};
+use tokio::sync::Semaphore;
 
 use super::neighbour::*;
 use super::neighbours_cache::*;
-use crate::dht_node::*;
-use crate::overlay_node::*;
+use crate::dht::*;
+use crate::overlay::*;
+use crate::proto;
 use crate::utils::*;
 
 pub struct Neighbours {
@@ -154,6 +154,8 @@ impl Neighbours {
         let interval = Duration::from_millis(self.options.search_interval_ms);
 
         let neighbours = Arc::downgrade(self);
+        let adnl = self.dht.adnl().clone();
+
         tokio::spawn(async move {
             tokio::time::sleep(interval).await;
 
@@ -168,34 +170,17 @@ impl Neighbours {
 
                 match neighbours
                     .overlay_shard
-                    .get_random_peers(&peer_id, None)
+                    .get_random_peers(&adnl, &peer_id, &neighbours.overlay_peers, None)
                     .await
                 {
-                    Ok(Some(peers)) => {
-                        let mut new_peers = Vec::new();
-
-                        for peer in peers.into_iter() {
-                            match AdnlNodeIdFull::try_from(&peer.id)
-                                .map(|full_id| full_id.compute_short_id())
-                            {
-                                Ok(peer_id) => {
-                                    if !neighbours.contains_overlay_peer(&peer_id) {
-                                        new_peers.push(peer_id);
-                                    }
-                                }
-                                Err(e) => tracing::warn!("Failed to process peer: {e}"),
-                            }
-                        }
-
-                        if !new_peers.is_empty() {
-                            neighbours.add_new_peers(new_peers);
-                        }
+                    Ok(Some(new_peers)) if !new_peers.is_empty() => {
+                        neighbours.add_new_peers(new_peers);
                     }
                     Err(e) => {
                         tracing::warn!("Failed to get random peers: {e}");
                     }
                     _ => {}
-                }
+                };
             }
         });
     }
@@ -283,7 +268,7 @@ impl Neighbours {
         }
 
         let max_tasks = std::cmp::min(neighbour_count, self.options.max_ping_tasks);
-        let mut response_collector = LimitedResponseCollector::new(max_tasks);
+        let semaphore = Arc::new(Semaphore::new(max_tasks));
         loop {
             let neighbour = match self.cache.get_next_for_ping(&self.start) {
                 Some(neighbour) => neighbour,
@@ -305,19 +290,15 @@ impl Neighbours {
             };
             tokio::time::sleep(Duration::from_millis(additional_sleep)).await;
 
-            if let Some(response_tx) = response_collector.make_request() {
-                let neighbours = self.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = neighbours.update_capabilities(neighbour).await {
-                        tracing::debug!("Failed to ping peer: {e}");
-                    }
-                    response_tx.send(Some(()));
-                });
-            } else {
-                while response_collector.count_pending() > 0 {
-                    response_collector.wait(false).await;
+            let guard = semaphore.clone().acquire_owned().await?;
+            let neighbours = self.clone();
+            tokio::spawn(async move {
+                if let Err(e) = neighbours.update_capabilities(neighbour).await {
+                    tracing::debug!("Failed to ping peer: {e}");
                 }
-            }
+                // Explicitly release acquired semaphore
+                drop(guard);
+            });
         }
     }
 
@@ -370,7 +351,7 @@ impl Neighbours {
     pub fn set_neighbour_capabilities(
         &self,
         peer_id: &AdnlNodeIdShort,
-        capabilities: &ton::ton_node::Capabilities,
+        capabilities: proto::ton_node::Capabilities,
     ) {
         if let Some(neighbour) = self.cache.get(peer_id) {
             neighbour.update_proto_version(capabilities);
@@ -378,7 +359,6 @@ impl Neighbours {
     }
 
     async fn update_capabilities(self: &Arc<Self>, neighbour: Arc<Neighbour>) -> Result<()> {
-        let query = TLObject::new(ton::rpc::ton_node::GetCapabilities);
         tracing::trace!(
             "Query capabilities from {} in {}",
             neighbour.peer_id(),
@@ -394,13 +374,14 @@ impl Neighbours {
         let now = Instant::now();
         neighbour.set_last_ping(self.elapsed());
 
+        let query = proto::rpc::TonNodeGetCapabilities;
         match self
             .overlay_shard
-            .query(neighbour.peer_id(), &query, timeout)
+            .adnl_query(self.dht.adnl(), neighbour.peer_id(), query, timeout)
             .await
         {
             Ok(Some(answer)) => {
-                let capabilities = parse_answer::<ton::ton_node::Capabilities>(answer)?;
+                let capabilities = tl_proto::deserialize(&answer)?;
                 tracing::debug!(
                     "Got capabilities from {} {}: {capabilities:?}",
                     neighbour.peer_id(),
@@ -409,7 +390,7 @@ impl Neighbours {
 
                 let roundtrip = now.elapsed().as_millis() as u64;
                 self.update_neighbour_stats(neighbour.peer_id(), roundtrip, true, false, false);
-                self.set_neighbour_capabilities(neighbour.peer_id(), &capabilities);
+                self.set_neighbour_capabilities(neighbour.peer_id(), capabilities);
 
                 Ok(())
             }
@@ -448,6 +429,17 @@ impl Neighbours {
 #[derive(Debug, Copy, Clone)]
 pub struct NeighboursMetrics {
     pub peer_search_task_count: usize,
+}
+
+fn ordered_boundaries<T>(min: T, max: T) -> (T, T)
+where
+    T: Ord,
+{
+    if min > max {
+        (max, min)
+    } else {
+        (min, max)
+    }
 }
 
 #[derive(thiserror::Error, Debug)]

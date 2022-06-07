@@ -1,26 +1,29 @@
 #![allow(clippy::too_many_arguments)]
 
-pub use adnl_node::{
-    AdnlKeystore, AdnlNode, AdnlNodeFilter, AdnlNodeMetrics, AdnlNodeOptions, PeerContext,
-};
-pub use adnl_tcp_client::{AdnlTcpClient, AdnlTcpClientConfig};
-pub use dht_node::{DhtNode, DhtNodeMetrics, DhtNodeOptions, ExternalDhtIter};
-pub use network::{Neighbour, Neighbours, NeighboursMetrics, NeighboursOptions, OverlayClient};
-pub use overlay_node::{
-    IncomingBroadcastInfo, OutgoingBroadcastInfo, OverlayNode, OverlayShard, OverlayShardMetrics,
-    OverlayShardOptions, MAX_OVERLAY_PEERS,
-};
-pub use rldp_node::{RldpNode, RldpNodeMetrics, RldpNodeOptions};
-pub use subscriber::{
-    AdnlPingSubscriber, OverlaySubscriber, QueryAnswer, QueryBundleConsumingResult,
-    QueryConsumingResult, Subscriber,
-};
+// Re-export TL-proto crate
+pub use tl_proto;
 
-mod adnl_node;
-mod adnl_tcp_client;
-mod dht_node;
-mod network;
-mod overlay_node;
-mod rldp_node;
+pub use self::adnl::{AdnlNode, AdnlNodeMetrics, AdnlNodeOptions, Keystore, NewPeerContext};
+#[cfg(feature = "dht")]
+pub use self::dht::{DhtNode, DhtNodeMetrics, DhtNodeOptions};
+#[cfg(feature = "overlay")]
+pub use self::overlay::{OverlayNode, OverlayShard, OverlayShardMetrics, OverlayShardOptions};
+#[cfg(feature = "rldp")]
+pub use self::rldp::{RldpNode, RldpNodeMetrics, RldpNodeOptions};
+pub use self::subscriber::{
+    MessageSubscriber, QueryConsumingResult, QuerySubscriber, SubscriberContext,
+};
+pub use utils::NetworkBuilder;
+
+pub mod adnl;
+#[cfg(feature = "dht")]
+pub mod dht;
+#[cfg(feature = "full")]
+pub mod network;
+#[cfg(feature = "overlay")]
+pub mod overlay;
+pub mod proto;
+#[cfg(feature = "rldp")]
+pub mod rldp;
 mod subscriber;
 pub mod utils;
