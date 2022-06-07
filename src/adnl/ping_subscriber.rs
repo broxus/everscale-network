@@ -11,7 +11,7 @@ pub struct AdnlPingSubscriber;
 impl QuerySubscriber for AdnlPingSubscriber {
     async fn try_consume_query<'a>(
         &self,
-        _: SubscriberContext,
+        _: SubscriberContext<'a>,
         constructor: u32,
         query: Cow<'a, [u8]>,
     ) -> Result<QueryConsumingResult<'a>> {
