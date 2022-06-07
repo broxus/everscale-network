@@ -36,8 +36,8 @@ where
         let key_id = tl_proto::hash_as_boxed(key);
         let peers_iter = PeersIter::with_key_id(key_id);
 
-        let batch_len = Some(dht.options.default_value_batch_len);
-        let known_peers_version = dht.known_peers.version();
+        let batch_len = Some(dht.options().default_value_batch_len);
+        let known_peers_version = dht.known_peers().version();
 
         let query = tl_proto::serialize(proto::rpc::DhtFindValue { key: &key_id, k: 6 }).into();
 
@@ -122,7 +122,7 @@ where
             match this.futures.poll_next_unpin(cx) {
                 Poll::Ready(Some(value)) => {
                     // Refill peers iterator when version has changed and `use_new_peers` is set
-                    match this.dht.known_peers.version() {
+                    match this.dht.known_peers().version() {
                         version if this.use_new_peers && version != this.known_peers_version => {
                             this.peers_iter.fill(&this.dht, this.batch_len);
                             this.known_peers_version = version;

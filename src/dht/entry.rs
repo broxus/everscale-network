@@ -153,7 +153,7 @@ impl<'a> DhtEntryWithData<'a> {
             value: &self.data,
             ttl: self
                 .expire_at
-                .unwrap_or_else(|| now() + self.inner.dht.options.value_ttl_sec),
+                .unwrap_or_else(|| now() + self.inner.dht.options().value_ttl_sec),
             signature: Default::default(),
         }
     }

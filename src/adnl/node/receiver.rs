@@ -103,7 +103,7 @@ impl AdnlNode {
 
     /// Decrypts and processes received data
     async fn handle_received_data(
-        &self,
+        self: &Arc<Self>,
         mut data: PacketView<'_>,
         message_subscribers: &[Arc<dyn MessageSubscriber>],
         query_subscribers: &[Arc<dyn QuerySubscriber>],
@@ -172,7 +172,7 @@ impl AdnlNode {
     }
 
     async fn process_message(
-        &self,
+        self: &Arc<Self>,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
         message: proto::adnl::Message<'_>,
@@ -269,7 +269,12 @@ impl AdnlNode {
                     date,
                 ),
             proto::adnl::Message::Custom { data } => {
-                if process_message_custom(local_id, peer_id, message_subscribers, data).await? {
+                let ctx = SubscriberContext {
+                    adnl: self,
+                    local_id,
+                    peer_id,
+                };
+                if process_message_custom(ctx, message_subscribers, data).await? {
                     Ok(())
                 } else {
                     Err(AdnlReceiverError::NoSubscribersForCustomMessage.into())
@@ -277,10 +282,12 @@ impl AdnlNode {
             }
             proto::adnl::Message::Nop => Ok(()),
             proto::adnl::Message::Query { query_id, query } => {
-                let result =
-                    process_adnl_query(local_id, peer_id, query_subscribers, query).await?;
-
-                match result {
+                let ctx = SubscriberContext {
+                    adnl: self,
+                    local_id,
+                    peer_id,
+                };
+                match process_query(ctx, query_subscribers, Cow::Borrowed(query)).await? {
                     QueryProcessingResult::Processed(Some(answer)) => self.send_message(
                         local_id,
                         peer_id,
@@ -574,31 +581,21 @@ pub enum ChannelReceiver {
     Priority(Arc<AdnlChannel>),
 }
 
-async fn process_message_custom(
-    local_id: &AdnlNodeIdShort,
-    peer_id: &AdnlNodeIdShort,
+async fn process_message_custom<'a>(
+    ctx: SubscriberContext<'a>,
     subscribers: &[Arc<dyn MessageSubscriber>],
     data: &[u8],
 ) -> Result<bool> {
     let constructor = u32::read_from(data, &mut 0)?;
     for subscriber in subscribers {
         if subscriber
-            .try_consume_custom(local_id, peer_id, constructor, data)
+            .try_consume_custom(ctx, constructor, data)
             .await?
         {
             return Ok(true);
         }
     }
     Ok(false)
-}
-
-async fn process_adnl_query(
-    local_id: &AdnlNodeIdShort,
-    peer_id: &AdnlNodeIdShort,
-    subscribers: &[Arc<dyn QuerySubscriber>],
-    query: &[u8],
-) -> Result<QueryProcessingResult<Vec<u8>>> {
-    process_query(local_id, peer_id, subscribers, Cow::Borrowed(query)).await
 }
 
 const ADNL_INITIAL_VERSION: u16 = 0;

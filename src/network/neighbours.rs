@@ -154,6 +154,8 @@ impl Neighbours {
         let interval = Duration::from_millis(self.options.search_interval_ms);
 
         let neighbours = Arc::downgrade(self);
+        let adnl = self.dht.adnl().clone();
+
         tokio::spawn(async move {
             tokio::time::sleep(interval).await;
 
@@ -168,7 +170,7 @@ impl Neighbours {
 
                 match neighbours
                     .overlay_shard
-                    .get_random_peers(&peer_id, &neighbours.overlay_peers, None)
+                    .get_random_peers(&adnl, &peer_id, &neighbours.overlay_peers, None)
                     .await
                 {
                     Ok(Some(new_peers)) if !new_peers.is_empty() => {
@@ -375,7 +377,7 @@ impl Neighbours {
         let query = proto::rpc::TonNodeGetCapabilities;
         match self
             .overlay_shard
-            .adnl_query(neighbour.peer_id(), query, timeout)
+            .adnl_query(self.dht.adnl(), neighbour.peer_id(), query, timeout)
             .await
         {
             Ok(Some(answer)) => {

@@ -3,8 +3,7 @@ use std::borrow::Cow;
 use anyhow::Result;
 
 use crate::proto;
-use crate::subscriber::{QueryConsumingResult, QuerySubscriber};
-use crate::utils::*;
+use crate::subscriber::{QueryConsumingResult, QuerySubscriber, SubscriberContext};
 
 pub struct AdnlPingSubscriber;
 
@@ -12,8 +11,7 @@ pub struct AdnlPingSubscriber;
 impl QuerySubscriber for AdnlPingSubscriber {
     async fn try_consume_query<'a>(
         &self,
-        _: &AdnlNodeIdShort,
-        _: &AdnlNodeIdShort,
+        _: SubscriberContext,
         constructor: u32,
         query: Cow<'a, [u8]>,
     ) -> Result<QueryConsumingResult<'a>> {

@@ -67,10 +67,12 @@ impl Default for RldpNodeOptions {
 
 /// Reliable UDP transport layer
 pub struct RldpNode {
+    /// Underlying ADNL node
+    adnl: Arc<AdnlNode>,
     /// Parallel requests limiter
     semaphores: FxDashMap<AdnlNodeIdShort, Arc<Semaphore>>,
     /// Transfers handler
-    transfers: TransfersCache,
+    transfers: Arc<TransfersCache>,
     /// Configuration
     options: RldpNodeOptions,
 }
@@ -81,12 +83,23 @@ impl RldpNode {
         adnl: Arc<AdnlNode>,
         subscribers: Vec<Arc<dyn QuerySubscriber>>,
         options: RldpNodeOptions,
-    ) -> Arc<Self> {
-        Arc::new(Self {
+    ) -> Result<Arc<Self>> {
+        let transfers = Arc::new(TransfersCache::new(subscribers, options));
+
+        adnl.add_message_subscriber(transfers.clone())?;
+
+        Ok(Arc::new(Self {
+            adnl,
             semaphores: Default::default(),
-            transfers: TransfersCache::new(adnl, subscribers, options),
+            transfers,
             options,
-        })
+        }))
+    }
+
+    /// Underlying ADNL node
+    #[inline(always)]
+    pub fn adnl(&self) -> &Arc<AdnlNode> {
+        &self.adnl
     }
 
     #[inline(always)]
@@ -128,7 +141,7 @@ impl RldpNode {
         let result = {
             let _permit = peer.acquire().await.ok();
             self.transfers
-                .query(local_id, peer_id, query, roundtrip)
+                .query(&self.adnl, local_id, peer_id, query, roundtrip)
                 .await
         };
 
@@ -179,13 +192,12 @@ impl RldpNode {
 }
 
 #[async_trait::async_trait]
-impl MessageSubscriber for RldpNode {
-    async fn try_consume_custom(
+impl MessageSubscriber for TransfersCache {
+    async fn try_consume_custom<'a>(
         &self,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
+        ctx: SubscriberContext<'a>,
         constructor: u32,
-        data: &[u8],
+        data: &'a [u8],
     ) -> Result<bool> {
         if constructor != proto::rldp::MessagePart::TL_ID_MESSAGE_PART
             && constructor != proto::rldp::MessagePart::TL_ID_CONFIRM
@@ -195,8 +207,7 @@ impl MessageSubscriber for RldpNode {
         }
 
         let message_part = tl_proto::deserialize(data)?;
-        self.transfers
-            .handle_message(local_id, peer_id, message_part)
+        self.handle_message(ctx.adnl, ctx.local_id, ctx.peer_id, message_part)
             .await?;
 
         Ok(true)

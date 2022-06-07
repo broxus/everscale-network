@@ -26,7 +26,7 @@ pub struct DhtStoreValue {
 
 impl DhtStoreValue {
     pub(super) fn new(dht: Arc<DhtNode>, value: proto::dht::Value<'_>) -> Result<Self> {
-        dht.storage.insert(value)?;
+        dht.storage().insert(value)?;
 
         let key = value.key.key.as_equivalent_owned();
         let query = tl_proto::serialize(proto::rpc::DhtStore { value }).into();
@@ -61,7 +61,7 @@ impl Future for DhtStoreValue {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         if !self.started {
-            for &peer_id in self.dht.known_peers.iter() {
+            for &peer_id in self.dht.iter_known_peers() {
                 let dht = self.dht.clone();
                 let query = self.query.clone();
                 self.futures.push(Box::pin(async move {

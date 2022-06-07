@@ -19,7 +19,6 @@ mod overlay_id;
 mod packed_socket_addr;
 mod packets_history;
 mod peers_cache;
-pub mod untuple;
 mod updated_at;
 
 pub type FxDashSet<K> = dashmap::DashSet<K, BuildHasherDefault<FxHasher>>;

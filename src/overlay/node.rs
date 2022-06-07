@@ -16,10 +16,8 @@ pub struct OverlayNode {
     adnl: Arc<AdnlNode>,
     /// Local ADNL key
     node_key: Arc<StoredAdnlNodeKey>,
-    /// Overlay shards
-    shards: FxDashMap<OverlayIdShort, Arc<OverlayShard>>,
-    /// Overlay query subscribers
-    subscribers: FxDashMap<OverlayIdShort, Arc<dyn QuerySubscriber>>,
+    /// Shared state
+    state: Arc<OverlayNodeState>,
     /// Overlay group "seed"
     zero_state_file_hash: [u8; 32],
 }
@@ -31,17 +29,28 @@ impl OverlayNode {
         key_tag: usize,
     ) -> Result<Arc<Self>> {
         let node_key = adnl.key_by_tag(key_tag)?.clone();
+        let state = Arc::new(OverlayNodeState::default());
+
+        adnl.add_query_subscriber(state.clone())?;
+        adnl.add_message_subscriber(state.clone())?;
+
         Ok(Arc::new(Self {
             adnl,
             node_key,
-            shards: Default::default(),
-            subscribers: Default::default(),
+            state,
             zero_state_file_hash,
         }))
     }
 
+    pub fn query_subscriber(&self) -> Arc<dyn QuerySubscriber> {
+        self.state.clone()
+    }
+
     pub fn metrics(&self) -> impl Iterator<Item = (OverlayIdShort, OverlayShardMetrics)> + '_ {
-        self.shards.iter().map(|item| (*item.id(), item.metrics()))
+        self.state
+            .shards
+            .iter()
+            .map(|item| (*item.id(), item.metrics()))
     }
 
     /// Underlying ADNL node
@@ -50,14 +59,14 @@ impl OverlayNode {
     }
 
     /// Add overlay queries subscriber
-    pub fn add_subscriber(
+    pub fn add_overlay_subscriber(
         &self,
         overlay_id: OverlayIdShort,
         subscriber: Arc<dyn QuerySubscriber>,
     ) -> bool {
         use dashmap::mapref::entry::Entry;
 
-        match self.subscribers.entry(overlay_id) {
+        match self.state.subscribers.entry(overlay_id) {
             Entry::Vacant(entry) => {
                 entry.insert(subscriber);
                 true
@@ -74,14 +83,9 @@ impl OverlayNode {
     ) -> (Arc<OverlayShard>, bool) {
         use dashmap::mapref::entry::Entry;
 
-        match self.shards.entry(*overlay_id) {
+        match self.state.shards.entry(*overlay_id) {
             Entry::Vacant(entry) => {
-                let overlay_shard = OverlayShard::new(
-                    self.adnl.clone(),
-                    self.node_key.clone(),
-                    *overlay_id,
-                    options,
-                );
+                let overlay_shard = OverlayShard::new(self.node_key.clone(), *overlay_id, options);
                 entry.insert(overlay_shard.clone());
                 (overlay_shard, true)
             }
@@ -90,11 +94,9 @@ impl OverlayNode {
     }
 
     /// Returns overlay by specified id
+    #[inline(always)]
     pub fn get_overlay(&self, overlay_id: &OverlayIdShort) -> Result<Arc<OverlayShard>> {
-        match self.shards.get(overlay_id) {
-            Some(shard) => Ok(shard.clone()),
-            None => Err(OverlayNodeError::UnknownOverlay.into()),
-        }
+        self.state.get_overlay(overlay_id)
     }
 
     /// Computes full overlay id using zero state file hash
@@ -108,14 +110,30 @@ impl OverlayNode {
     }
 }
 
+#[derive(Default)]
+struct OverlayNodeState {
+    /// Overlay shards
+    shards: FxDashMap<OverlayIdShort, Arc<OverlayShard>>,
+    /// Overlay query subscribers
+    subscribers: FxDashMap<OverlayIdShort, Arc<dyn QuerySubscriber>>,
+}
+
+impl OverlayNodeState {
+    fn get_overlay(&self, overlay_id: &OverlayIdShort) -> Result<Arc<OverlayShard>> {
+        match self.shards.get(overlay_id) {
+            Some(shard) => Ok(shard.clone()),
+            None => Err(OverlayNodeError::UnknownOverlay.into()),
+        }
+    }
+}
+
 #[async_trait::async_trait]
-impl MessageSubscriber for OverlayNode {
-    async fn try_consume_custom(
+impl MessageSubscriber for OverlayNodeState {
+    async fn try_consume_custom<'a>(
         &self,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
+        ctx: SubscriberContext<'a>,
         constructor: u32,
-        data: &[u8],
+        data: &'a [u8],
     ) -> Result<bool> {
         if constructor != proto::overlay::Message::TL_ID {
             return Ok(false);
@@ -131,13 +149,13 @@ impl MessageSubscriber for OverlayNode {
         match broadcast {
             proto::overlay::Broadcast::Broadcast(broadcast) => {
                 shard
-                    .receive_broadcast(local_id, peer_id, broadcast, data)
+                    .receive_broadcast(ctx.adnl, ctx.local_id, ctx.peer_id, broadcast, data)
                     .await?;
                 Ok(true)
             }
             proto::overlay::Broadcast::BroadcastFec(broadcast) => {
                 shard
-                    .receive_fec_broadcast(local_id, peer_id, broadcast, data)
+                    .receive_fec_broadcast(ctx.adnl, ctx.local_id, ctx.peer_id, broadcast, data)
                     .await?;
                 Ok(true)
             }
@@ -147,11 +165,10 @@ impl MessageSubscriber for OverlayNode {
 }
 
 #[async_trait::async_trait]
-impl QuerySubscriber for OverlayNode {
+impl QuerySubscriber for OverlayNodeState {
     async fn try_consume_query<'a>(
         &self,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
+        ctx: SubscriberContext<'a>,
         constructor: u32,
         query: Cow<'a, [u8]>,
     ) -> Result<QueryConsumingResult<'a>> {
@@ -176,10 +193,7 @@ impl QuerySubscriber for OverlayNode {
             None => return Err(OverlayNodeError::NoConsumerFound.into()),
         };
 
-        match consumer
-            .try_consume_query(local_id, peer_id, constructor, query)
-            .await?
-        {
+        match consumer.try_consume_query(ctx, constructor, query).await? {
             QueryConsumingResult::Consumed(result) => Ok(QueryConsumingResult::Consumed(result)),
             QueryConsumingResult::Rejected(_) => Err(OverlayNodeError::UnsupportedQuery.into()),
         }

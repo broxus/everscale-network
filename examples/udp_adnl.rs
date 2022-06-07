@@ -7,7 +7,7 @@ use anyhow::Result;
 use everscale_crypto::ed25519;
 use everscale_network::utils::*;
 use everscale_network::{
-    AdnlNode, AdnlNodeOptions, Keystore, NewPeerContext, QueryConsumingResult,
+    AdnlNode, AdnlNodeOptions, Keystore, NewPeerContext, QueryConsumingResult, SubscriberContext,
 };
 use tl_proto::{TlRead, TlWrite};
 
@@ -37,6 +37,7 @@ async fn main() -> Result<()> {
         adnl_node_options,
         None,
     );
+    right_node.add_query_subscriber(Arc::new(Service))?;
 
     let right_node_full_id = *right_node.key_by_tag(0)?.full_id();
     let right_node_id = right_node_full_id.compute_short_id();
@@ -49,8 +50,8 @@ async fn main() -> Result<()> {
         right_node_full_id,
     )?;
 
-    left_node.start(Vec::new(), Vec::new())?;
-    right_node.start(Vec::new(), vec![Arc::new(Service)])?;
+    left_node.start()?;
+    right_node.start()?;
 
     let iterations = Arc::new(AtomicUsize::new(0));
     let mut handles = Vec::new();
@@ -105,8 +106,7 @@ struct Service;
 impl everscale_network::QuerySubscriber for Service {
     async fn try_consume_query<'a>(
         &self,
-        _: &AdnlNodeIdShort,
-        _: &AdnlNodeIdShort,
+        _: SubscriberContext<'a>,
         _: u32,
         _: Cow<'a, [u8]>,
     ) -> Result<QueryConsumingResult<'a>> {

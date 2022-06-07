@@ -68,14 +68,11 @@ impl PeersIter {
 
     fn next_known_peer(&mut self, dht: &DhtNode) -> Option<AdnlNodeIdShort> {
         loop {
-            let peer_id = dht.known_peers.get(self.index);
+            let peer_id = dht.known_peers().get(self.index);
             self.index += 1;
 
             if let Some(peer) = &peer_id {
-                if matches!(
-                    dht.penalties.get(peer),
-                    Some(penalty) if *penalty > dht.options.bad_peer_threshold
-                ) {
+                if dht.is_bad_peer(peer) {
                     continue;
                 }
             }

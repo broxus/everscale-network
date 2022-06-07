@@ -42,7 +42,7 @@ impl OverlayClient {
     }
 
     pub fn resolve_ip(&self, neighbour: &Neighbour) -> Option<PackedSocketAddr> {
-        self.overlay_shard
+        self.rldp
             .adnl()
             .get_peer_ip(self.overlay_shard.overlay_key().id(), neighbour.peer_id())
     }
@@ -141,7 +141,7 @@ impl OverlayClient {
         data: Vec<u8>,
         source: Option<&Arc<StoredAdnlNodeKey>>,
     ) -> OutgoingBroadcastInfo {
-        self.overlay_shard.broadcast(data, source)
+        self.overlay_shard.broadcast(self.rldp.adnl(), data, source)
     }
 
     pub async fn wait_for_broadcast(&self) -> IncomingBroadcastInfo {
@@ -158,19 +158,15 @@ impl OverlayClient {
         Q: TlWrite,
         for<'a> A: TlRead<'a, Repr = tl_proto::Boxed> + 'static,
     {
-        let timeout = timeout.or_else(|| {
-            Some(
-                self.overlay_shard
-                    .adnl()
-                    .compute_query_timeout(neighbour.roundtrip_adnl()),
-            )
-        });
+        let adnl = self.rldp.adnl();
+        let timeout =
+            timeout.or_else(|| Some(adnl.compute_query_timeout(neighbour.roundtrip_adnl())));
         let peer_id = neighbour.peer_id();
 
         let now = Instant::now();
         let answer = self
             .overlay_shard
-            .adnl_query(peer_id, query, timeout)
+            .adnl_query(adnl, peer_id, query, timeout)
             .await?;
         let roundtrip = now.elapsed().as_millis() as u64;
 
@@ -217,9 +213,9 @@ impl OverlayClient {
         let (answer, roundtrip) = self
             .overlay_shard
             .rldp_query(
+                &self.rldp,
                 neighbour.peer_id(),
                 query_data,
-                &self.rldp,
                 neighbour
                     .roundtrip_rldp()
                     .map(|roundtrip| roundtrip + attempt as u64 * ATTEMPT_INTERVAL),

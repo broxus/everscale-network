@@ -113,8 +113,6 @@ impl Default for OverlayShardOptions {
 
 /// P2P messages distribution layer
 pub struct OverlayShard {
-    /// Underlying ADNL node
-    adnl: Arc<AdnlNode>,
     /// Unique overlay id
     overlay_id: OverlayIdShort,
     /// Local ADNL key
@@ -153,8 +151,7 @@ pub struct OverlayShard {
 
 impl OverlayShard {
     /// Create new overlay node on top of the given ADNL node
-    pub fn new(
-        adnl: Arc<AdnlNode>,
+    pub(super) fn new(
         node_key: Arc<StoredAdnlNodeKey>,
         overlay_id: OverlayIdShort,
         options: OverlayShardOptions,
@@ -167,7 +164,6 @@ impl OverlayShard {
         });
 
         let overlay = Arc::new(Self {
-            adnl,
             overlay_id,
             node_key,
             options,
@@ -234,11 +230,6 @@ impl OverlayShard {
         }
     }
 
-    /// Underlying ADNL node
-    pub fn adnl(&self) -> &Arc<AdnlNode> {
-        &self.adnl
-    }
-
     /// Short overlay id
     pub fn id(&self) -> &OverlayIdShort {
         &self.overlay_id
@@ -255,6 +246,7 @@ impl OverlayShard {
     /// See [`OverlayShard::add_public_peers`] for multiple peers.
     pub fn add_public_peer(
         &self,
+        adnl: &AdnlNode,
         ip_address: PackedSocketAddr,
         node: proto::overlay::Node<'_>,
     ) -> Result<Option<AdnlNodeIdShort>> {
@@ -266,7 +258,7 @@ impl OverlayShard {
         let peer_id_full = AdnlNodeIdFull::try_from(node.id)?;
         let peer_id = peer_id_full.compute_short_id();
 
-        let is_new_peer = self.adnl.add_peer(
+        let is_new_peer = adnl.add_peer(
             NewPeerContext::PublicOverlay,
             self.node_key.id(),
             &peer_id,
@@ -284,7 +276,7 @@ impl OverlayShard {
     /// Verifies and adds new peers to the overlay. Returns a list of successfully added peers.
     ///
     /// See [`OverlayShard::add_public_peer`] for single peer.
-    pub fn add_public_peers<'a, I>(&self, nodes: I) -> Result<Vec<AdnlNodeIdShort>>
+    pub fn add_public_peers<'a, I>(&self, adnl: &AdnlNode, nodes: I) -> Result<Vec<AdnlNodeIdShort>>
     where
         I: IntoIterator<Item = (PackedSocketAddr, proto::overlay::Node<'a>)>,
     {
@@ -298,7 +290,7 @@ impl OverlayShard {
             let peer_id_full = AdnlNodeIdFull::try_from(node.id)?;
             let peer_id = peer_id_full.compute_short_id();
 
-            let is_new_peer = self.adnl.add_peer(
+            let is_new_peer = adnl.add_peer(
                 NewPeerContext::PublicOverlay,
                 self.node_key.id(),
                 &peer_id,
@@ -346,13 +338,18 @@ impl OverlayShard {
     /// Sends direct ADNL message ([`proto::adnl::Message::Custom`]) to the given peer.
     ///
     /// NOTE: Local id ([`OverlayShard::overlay_key`]) will be used as sender
-    pub fn send_message(&self, peer_id: &AdnlNodeIdShort, data: &[u8]) -> Result<()> {
+    pub fn send_message(
+        &self,
+        adnl: &AdnlNode,
+        peer_id: &AdnlNodeIdShort,
+        data: &[u8],
+    ) -> Result<()> {
         let local_id = self.overlay_key().id();
 
         let mut buffer = Vec::with_capacity(self.message_prefix().len() + data.len());
         buffer.extend_from_slice(self.message_prefix());
         buffer.extend_from_slice(data);
-        self.adnl.send_custom_message(local_id, peer_id, &buffer)
+        adnl.send_custom_message(local_id, peer_id, &buffer)
     }
 
     /// Sends ADNL query directly to the given peer. In case of timeout returns `Ok(None)`
@@ -360,6 +357,7 @@ impl OverlayShard {
     /// NOTE: Local id ([`OverlayShard::overlay_key`]) will be used as sender
     pub async fn adnl_query<Q>(
         &self,
+        adnl: &AdnlNode,
         peer_id: &AdnlNodeIdShort,
         query: Q,
         timeout: Option<u64>,
@@ -369,8 +367,7 @@ impl OverlayShard {
     {
         let local_id = self.overlay_key().id();
         type Value = tl_proto::OwnedRawBytes<tl_proto::Boxed>;
-        match self
-            .adnl
+        match adnl
             .query_with_prefix::<Q, Value>(local_id, peer_id, self.query_prefix(), query, timeout)
             .await?
         {
@@ -384,9 +381,9 @@ impl OverlayShard {
     /// NOTE: Local id ([`OverlayShard::overlay_key`]) will be used as sender
     pub async fn rldp_query(
         &self,
+        rldp: &RldpNode,
         peer_id: &AdnlNodeIdShort,
         data: Vec<u8>,
-        rldp: &Arc<RldpNode>,
         roundtrip: Option<u64>,
     ) -> Result<(Option<Vec<u8>>, u64)> {
         let local_id = self.overlay_key().id();
@@ -400,6 +397,7 @@ impl OverlayShard {
     /// NOTE: If `data` len is greater than
     pub fn broadcast(
         self: &Arc<Self>,
+        adnl: &Arc<AdnlNode>,
         data: Vec<u8>,
         source: Option<&Arc<StoredAdnlNodeKey>>,
     ) -> OutgoingBroadcastInfo {
@@ -411,9 +409,9 @@ impl OverlayShard {
         };
 
         if data.len() <= self.options.max_ordinary_broadcast_len {
-            self.send_broadcast(local_id, data, key)
+            self.send_broadcast(adnl, local_id, data, key)
         } else {
-            self.send_fec_broadcast(local_id, data, key)
+            self.send_fec_broadcast(adnl, local_id, data, key)
         }
     }
 
@@ -454,6 +452,7 @@ impl OverlayShard {
     /// Get random peers from the specified peer. Returns `Ok(None)` in case of timeout
     pub async fn get_random_peers(
         &self,
+        adnl: &AdnlNode,
         peer_id: &AdnlNodeIdShort,
         existing_peers: &FxDashSet<AdnlNodeIdShort>,
         timeout: Option<u64>,
@@ -461,7 +460,7 @@ impl OverlayShard {
         let query = proto::rpc::OverlayGetRandomPeersOwned {
             peers: self.prepare_random_peers(),
         };
-        let answer = match self.adnl_query(peer_id, query, timeout).await? {
+        let answer = match self.adnl_query(adnl, peer_id, query, timeout).await? {
             Some(answer) => answer,
             None => {
                 tracing::trace!("No random peers from {peer_id}");
@@ -496,6 +495,7 @@ impl OverlayShard {
     /// Process ordinary broadcast
     pub(super) async fn receive_broadcast(
         self: &Arc<Self>,
+        adnl: &AdnlNode,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
         broadcast: proto::overlay::OverlayBroadcast<'_>,
@@ -554,7 +554,7 @@ impl OverlayShard {
         let neighbours = self
             .neighbours
             .get_random_peers(self.options.secondary_broadcast_target_count, Some(peer_id));
-        self.distribute_broadcast(local_id, &neighbours, raw_data);
+        self.distribute_broadcast(adnl, local_id, &neighbours, raw_data);
         self.spawn_broadcast_gc_task(broadcast_id);
 
         Ok(())
@@ -563,6 +563,7 @@ impl OverlayShard {
     /// Process FEC broadcast
     pub(super) async fn receive_fec_broadcast(
         self: &Arc<Self>,
+        adnl: &AdnlNode,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
         broadcast: proto::overlay::OverlayBroadcastFec<'_>,
@@ -627,7 +628,7 @@ impl OverlayShard {
             self.options.secondary_fec_broadcast_target_count,
             Some(peer_id),
         );
-        self.distribute_broadcast(local_id, &neighbours, raw_data);
+        self.distribute_broadcast(adnl, local_id, &neighbours, raw_data);
 
         Ok(())
     }
@@ -667,6 +668,7 @@ impl OverlayShard {
     /// Send ordinary broadcast
     fn send_broadcast(
         self: &Arc<Self>,
+        adnl: &AdnlNode,
         local_id: &AdnlNodeIdShort,
         mut data: Vec<u8>,
         key: &Arc<StoredAdnlNodeKey>,
@@ -703,7 +705,7 @@ impl OverlayShard {
         let neighbours = self
             .neighbours
             .get_random_peers(self.options.broadcast_target_count, None);
-        self.distribute_broadcast(local_id, &neighbours, &buffer);
+        self.distribute_broadcast(adnl, local_id, &neighbours, &buffer);
         self.spawn_broadcast_gc_task(broadcast_id);
 
         OutgoingBroadcastInfo {
@@ -715,6 +717,7 @@ impl OverlayShard {
     /// Send FEC broadcast
     fn send_fec_broadcast(
         self: &Arc<Self>,
+        adnl: &Arc<AdnlNode>,
         local_id: &AdnlNodeIdShort,
         mut data: Vec<u8>,
         key: &Arc<StoredAdnlNodeKey>,
@@ -754,6 +757,7 @@ impl OverlayShard {
         let wave_len = self.options.broadcast_wave_len;
         let waves_interval = Duration::from_millis(self.options.broadcast_wave_interval_ms);
         let overlay_shard = self.clone();
+        let adnl = adnl.clone();
         let local_id = *local_id;
         let key = key.clone();
         tokio::spawn(async move {
@@ -770,7 +774,7 @@ impl OverlayShard {
                             }
                         };
 
-                    overlay_shard.distribute_broadcast(&local_id, &neighbours, &data);
+                    overlay_shard.distribute_broadcast(&adnl, &local_id, &neighbours, &data);
                     if outgoing_transfer.seqno > info.packets {
                         break 'outer;
                     }
@@ -1024,12 +1028,13 @@ impl OverlayShard {
     /// Sends ADNL messages to neighbours
     fn distribute_broadcast(
         &self,
+        adnl: &AdnlNode,
         local_id: &AdnlNodeIdShort,
         neighbours: &[AdnlNodeIdShort],
         data: &[u8],
     ) {
         for peer_id in neighbours {
-            if let Err(e) = self.adnl.send_custom_message(local_id, peer_id, data) {
+            if let Err(e) = adnl.send_custom_message(local_id, peer_id, data) {
                 tracing::warn!("Failed to distribute broadcast: {e}");
             }
         }

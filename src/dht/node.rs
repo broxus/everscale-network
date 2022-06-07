@@ -90,61 +90,64 @@ impl Default for DhtNodeOptions {
 /// Kademlia-like DHT node
 pub struct DhtNode {
     /// Underlying ADNL node
-    pub(super) adnl: Arc<AdnlNode>,
-    /// Local ADNL key
-    pub(super) node_key: Arc<StoredAdnlNodeKey>,
-    /// Configuration
-    pub(super) options: DhtNodeOptions,
+    adnl: Arc<AdnlNode>,
 
-    /// Known DHT nodes
-    pub(super) known_peers: PeersCache,
-    /// DHT nodes penalty scores table
-    pub(super) penalties: Penalties,
-
-    /// DHT nodes organized by buckets
-    pub(super) buckets: Buckets,
-    /// Local DHT values storage
-    pub(super) storage: Storage,
+    /// Local ADNL peer id
+    local_id: AdnlNodeIdShort,
 
     /// Serialized [`proto::rpc::DhtQuery`] with own DHT node info
-    pub(super) query_prefix: Vec<u8>,
+    query_prefix: Vec<u8>,
+
+    /// Configuration
+    options: DhtNodeOptions,
+
+    /// State
+    state: Arc<DhtNodeState>,
 }
 
 impl DhtNode {
     /// Create new DHT node on top of ADNL node
     pub fn new(adnl: Arc<AdnlNode>, key_tag: usize, options: DhtNodeOptions) -> Result<Arc<Self>> {
-        let node_key = adnl.key_by_tag(key_tag)?.clone();
+        let key = adnl.key_by_tag(key_tag)?.clone();
 
-        let buckets = Buckets::new(node_key.id());
+        let buckets = Buckets::new(key.id());
         let storage = Storage::new(StorageOptions {
             max_key_name_len: options.max_key_name_len,
             max_key_index: options.max_key_index,
         });
 
-        let mut dht_node = Self {
-            adnl,
-            node_key,
-            options,
+        let state = Arc::new(DhtNodeState {
+            key: key.clone(),
             known_peers: PeersCache::with_capacity(MAX_DHT_PEERS),
             penalties: Default::default(),
             buckets,
             storage,
-            query_prefix: Vec::new(),
-        };
-
-        dht_node.query_prefix = tl_proto::serialize(proto::rpc::DhtQuery {
-            node: dht_node.sign_local_node().as_equivalent_ref(),
+            max_allowed_k: options.max_allowed_k,
         });
 
-        let dht_node = Arc::new(dht_node);
+        adnl.add_query_subscriber(state.clone())?;
 
-        let dht = Arc::downgrade(&dht_node);
+        let query_prefix = tl_proto::serialize(proto::rpc::DhtQuery {
+            node: state
+                .sign_local_node(adnl.build_address_list())
+                .as_equivalent_ref(),
+        });
+
+        let dht_node = Arc::new(Self {
+            adnl,
+            local_id: *key.id(),
+            query_prefix,
+            options,
+            state,
+        });
+
+        let state = Arc::downgrade(&dht_node.state);
         let interval = Duration::from_millis(dht_node.options.storage_gc_interval_ms);
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(interval).await;
-                if let Some(dht) = dht.upgrade() {
-                    dht.storage.gc();
+                if let Some(state) = state.upgrade() {
+                    state.storage.gc();
                 }
             }
         });
@@ -159,13 +162,9 @@ impl DhtNode {
     }
 
     /// Instant metrics
+    #[inline(always)]
     pub fn metrics(&self) -> DhtNodeMetrics {
-        DhtNodeMetrics {
-            peers_cache_len: self.known_peers.len(),
-            bucket_peer_count: self.buckets.iter().map(|bucket| bucket.len()).sum(),
-            storage_len: self.storage.len(),
-            storage_total_size: self.storage.total_size(),
-        }
+        self.state.metrics()
     }
 
     /// Underlying ADNL node
@@ -176,50 +175,24 @@ impl DhtNode {
 
     #[inline(always)]
     pub fn key(&self) -> &Arc<StoredAdnlNodeKey> {
-        &self.node_key
+        &self.state.key
     }
 
     pub fn iter_known_peers(&self) -> impl Iterator<Item = &AdnlNodeIdShort> {
-        self.known_peers.iter()
+        self.state.known_peers.iter()
     }
 
     /// Adds new peer to DHT or explicitly marks existing as good. Returns new peer short id
-    pub fn add_dht_peer(&self, mut peer: proto::dht::NodeOwned) -> Result<Option<AdnlNodeIdShort>> {
-        let peer_full_id = AdnlNodeIdFull::try_from(peer.id.as_equivalent_ref())?;
+    pub fn add_dht_peer(&self, peer: proto::dht::NodeOwned) -> Result<Option<AdnlNodeIdShort>> {
+        self.state.add_dht_peer(&self.adnl, peer)
+    }
 
-        // Verify signature
-        let signature = std::mem::take(&mut peer.signature);
-        if peer_full_id.verify(peer.as_boxed(), &signature).is_err() {
-            tracing::warn!("Invalid DHT peer signature");
-            return Ok(None);
-        }
-        peer.signature = signature;
-
-        // Parse remaining peer data
-        let peer_id = peer_full_id.compute_short_id();
-        let peer_ip_address =
-            parse_address_list(&peer.addr_list, self.adnl.options().clock_tolerance_sec)?;
-
-        // Add new ADNL peer
-        let is_new_peer = self.adnl.add_peer(
-            NewPeerContext::Dht,
-            self.node_key.id(),
-            &peer_id,
-            peer_ip_address,
-            peer_full_id,
-        )?;
-        if !is_new_peer {
-            return Ok(None);
-        }
-
-        // Add new peer to the bucket
-        if self.known_peers.put(peer_id) {
-            self.buckets.insert(&peer_id, peer);
-        } else {
-            self.set_good_peer(&peer_id);
-        }
-
-        Ok(Some(peer_id))
+    /// Checks whether the specified peer was marked as bad
+    pub fn is_bad_peer(&self, peer: &AdnlNodeIdShort) -> bool {
+        matches!(
+            self.state.penalties.get(peer),
+            Some(penalty) if *penalty > self.options.bad_peer_threshold
+        )
     }
 
     /// Sends ping query to the given peer
@@ -250,7 +223,7 @@ impl DhtNode {
         k: u32,
     ) -> Result<Vec<proto::dht::NodeOwned>> {
         let query = proto::rpc::DhtFindNode {
-            key: self.node_key.id().as_slice(),
+            key: self.local_id.as_slice(),
             k,
         };
         Ok(match self.query_with_prefix(peer_id, query).await? {
@@ -433,56 +406,13 @@ impl DhtNode {
             .await
     }
 
-    fn process_find_node(&self, query: proto::rpc::DhtFindNode<'_>) -> proto::dht::NodesOwned {
-        self.buckets.find(query.key, query.k)
-    }
-
-    fn process_find_value(
-        &self,
-        query: proto::rpc::DhtFindValue<'_>,
-    ) -> Result<proto::dht::ValueResultOwned> {
-        if query.k == 0 || query.k > self.options.max_allowed_k {
-            return Err(DhtNodeError::InvalidNodeCountLimit.into());
-        }
-
-        Ok(if let Some(value) = self.storage.get_ref(query.key) {
-            proto::dht::ValueResultOwned::ValueFound(value.clone().into_boxed())
-        } else {
-            let mut nodes = Vec::with_capacity(query.k as usize);
-
-            'outer: for bucket in &self.buckets {
-                for peer in bucket {
-                    nodes.push(peer.clone());
-
-                    if nodes.len() >= query.k as usize {
-                        break 'outer;
-                    }
-                }
-            }
-
-            proto::dht::ValueResultOwned::ValueNotFound(proto::dht::NodesOwned { nodes })
-        })
-    }
-
-    fn process_get_signed_address_list(&self) -> proto::dht::NodeOwned {
-        self.sign_local_node()
-    }
-
-    fn process_store(&self, query: proto::rpc::DhtStore<'_>) -> Result<proto::dht::Stored> {
-        self.storage.insert(query.value)?;
-        Ok(proto::dht::Stored)
-    }
-
     async fn query<Q, A>(&self, peer_id: &AdnlNodeIdShort, query: Q) -> Result<Option<A>>
     where
         Q: TlWrite,
         for<'a> A: TlRead<'a, Repr = tl_proto::Boxed> + 'static,
     {
-        let result = self
-            .adnl
-            .query(self.node_key.id(), peer_id, query, None)
-            .await;
-        self.update_peer_status(peer_id, result.is_ok());
+        let result = self.adnl.query(&self.local_id, peer_id, query, None).await;
+        self.state.update_peer_status(peer_id, result.is_ok());
         result
     }
 
@@ -494,13 +424,13 @@ impl DhtNode {
         let result = self
             .adnl
             .query_raw(
-                self.node_key.id(),
+                &self.local_id,
                 peer_id,
                 query,
                 Some(self.options.query_timeout_ms),
             )
             .await;
-        self.update_peer_status(peer_id, result.is_ok());
+        self.state.update_peer_status(peer_id, result.is_ok());
         result
     }
 
@@ -515,21 +445,10 @@ impl DhtNode {
     {
         let result = self
             .adnl
-            .query_with_prefix::<Q, A>(self.node_key.id(), peer_id, &self.query_prefix, query, None)
+            .query_with_prefix::<Q, A>(&self.local_id, peer_id, &self.query_prefix, query, None)
             .await;
-        self.update_peer_status(peer_id, result.is_ok());
+        self.state.update_peer_status(peer_id, result.is_ok());
         result
-    }
-
-    fn sign_local_node(&self) -> proto::dht::NodeOwned {
-        let mut node = proto::dht::NodeOwned {
-            id: self.node_key.full_id().as_tl().as_equivalent_owned(),
-            addr_list: self.adnl.build_address_list(),
-            version: now(),
-            signature: Default::default(),
-        };
-        node.signature = self.node_key.sign(node.as_boxed()).to_vec().into();
-        node
     }
 
     pub(super) fn parse_value_result<T>(
@@ -555,6 +474,98 @@ impl DhtNode {
         }
     }
 
+    #[inline(always)]
+    pub(super) fn known_peers(&self) -> &PeersCache {
+        &self.state.known_peers
+    }
+
+    #[inline(always)]
+    pub(super) fn storage(&self) -> &Storage {
+        &self.state.storage
+    }
+}
+
+struct DhtNodeState {
+    /// Local ADNL key
+    key: Arc<StoredAdnlNodeKey>,
+
+    /// Known DHT nodes
+    known_peers: PeersCache,
+    /// DHT nodes penalty scores table
+    penalties: Penalties,
+
+    /// DHT nodes organized by buckets
+    buckets: Buckets,
+    /// Local DHT values storage
+    storage: Storage,
+
+    /// Max allowed `k` value for DHT `FindValue` query.
+    max_allowed_k: u32,
+}
+
+impl DhtNodeState {
+    fn metrics(&self) -> DhtNodeMetrics {
+        DhtNodeMetrics {
+            peers_cache_len: self.known_peers.len(),
+            bucket_peer_count: self.buckets.iter().map(|bucket| bucket.len()).sum(),
+            storage_len: self.storage.len(),
+            storage_total_size: self.storage.total_size(),
+        }
+    }
+
+    fn sign_local_node(&self, addr_list: proto::adnl::AddressList) -> proto::dht::NodeOwned {
+        let mut node = proto::dht::NodeOwned {
+            id: self.key.full_id().as_tl().as_equivalent_owned(),
+            addr_list,
+            version: addr_list.version,
+            signature: Default::default(),
+        };
+        node.signature = self.key.sign(node.as_boxed()).to_vec().into();
+        node
+    }
+
+    fn add_dht_peer(
+        &self,
+        adnl: &AdnlNode,
+        mut peer: proto::dht::NodeOwned,
+    ) -> Result<Option<AdnlNodeIdShort>> {
+        let peer_full_id = AdnlNodeIdFull::try_from(peer.id.as_equivalent_ref())?;
+
+        // Verify signature
+        let signature = std::mem::take(&mut peer.signature);
+        if peer_full_id.verify(peer.as_boxed(), &signature).is_err() {
+            tracing::warn!("Invalid DHT peer signature");
+            return Ok(None);
+        }
+        peer.signature = signature;
+
+        // Parse remaining peer data
+        let peer_id = peer_full_id.compute_short_id();
+        let peer_ip_address =
+            parse_address_list(&peer.addr_list, adnl.options().clock_tolerance_sec)?;
+
+        // Add new ADNL peer
+        let is_new_peer = adnl.add_peer(
+            NewPeerContext::Dht,
+            self.key.id(),
+            &peer_id,
+            peer_ip_address,
+            peer_full_id,
+        )?;
+        if !is_new_peer {
+            return Ok(None);
+        }
+
+        // Add new peer to the bucket
+        if self.known_peers.put(peer_id) {
+            self.buckets.insert(&peer_id, peer);
+        } else {
+            self.set_good_peer(&peer_id);
+        }
+
+        Ok(Some(peer_id))
+    }
+
     fn update_peer_status(&self, peer: &AdnlNodeIdShort, is_good: bool) {
         use dashmap::mapref::entry::Entry;
 
@@ -577,14 +588,49 @@ impl DhtNode {
             *count.value_mut() = count.saturating_sub(1);
         }
     }
+
+    fn process_find_node(&self, query: proto::rpc::DhtFindNode<'_>) -> proto::dht::NodesOwned {
+        self.buckets.find(query.key, query.k)
+    }
+
+    fn process_find_value(
+        &self,
+        query: proto::rpc::DhtFindValue<'_>,
+    ) -> Result<proto::dht::ValueResultOwned> {
+        if query.k == 0 || query.k > self.max_allowed_k {
+            return Err(DhtNodeError::InvalidNodeCountLimit.into());
+        }
+
+        Ok(if let Some(value) = self.storage.get_ref(query.key) {
+            proto::dht::ValueResultOwned::ValueFound(value.clone().into_boxed())
+        } else {
+            let mut nodes = Vec::with_capacity(query.k as usize);
+
+            'outer: for bucket in &self.buckets {
+                for peer in bucket {
+                    nodes.push(peer.clone());
+
+                    if nodes.len() >= query.k as usize {
+                        break 'outer;
+                    }
+                }
+            }
+
+            proto::dht::ValueResultOwned::ValueNotFound(proto::dht::NodesOwned { nodes })
+        })
+    }
+
+    fn process_store(&self, query: proto::rpc::DhtStore<'_>) -> Result<proto::dht::Stored> {
+        self.storage.insert(query.value)?;
+        Ok(proto::dht::Stored)
+    }
 }
 
 #[async_trait::async_trait]
-impl QuerySubscriber for DhtNode {
+impl QuerySubscriber for DhtNodeState {
     async fn try_consume_query<'a>(
         &self,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
+        ctx: SubscriberContext<'a>,
         constructor: u32,
         query: Cow<'a, [u8]>,
     ) -> Result<QueryConsumingResult<'a>> {
@@ -601,9 +647,10 @@ impl QuerySubscriber for DhtNode {
                 let query = tl_proto::deserialize(&query)?;
                 QueryConsumingResult::consume(self.process_find_value(query)?)
             }
-            proto::rpc::DhtGetSignedAddressList::TL_ID => {
-                QueryConsumingResult::consume(self.process_get_signed_address_list().into_boxed())
-            }
+            proto::rpc::DhtGetSignedAddressList::TL_ID => QueryConsumingResult::consume(
+                self.sign_local_node(ctx.adnl.build_address_list())
+                    .into_boxed(),
+            ),
             proto::rpc::DhtStore::TL_ID => {
                 let query = tl_proto::deserialize(&query)?;
                 QueryConsumingResult::consume(self.process_store(query)?)
@@ -617,15 +664,10 @@ impl QuerySubscriber for DhtNode {
                     return Err(DhtNodeError::UnexpectedQuery.into());
                 }
 
-                self.add_dht_peer(node.as_equivalent_owned())?;
+                self.add_dht_peer(ctx.adnl, node.as_equivalent_owned())?;
 
                 match self
-                    .try_consume_query(
-                        local_id,
-                        peer_id,
-                        constructor,
-                        Cow::Borrowed(&query[offset..]),
-                    )
+                    .try_consume_query(ctx, constructor, Cow::Borrowed(&query[offset..]))
                     .await?
                 {
                     QueryConsumingResult::Consumed(answer) => {

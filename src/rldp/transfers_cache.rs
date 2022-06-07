@@ -16,7 +16,6 @@ use crate::subscriber::*;
 use crate::utils::*;
 
 pub struct TransfersCache {
-    adnl: Arc<AdnlNode>,
     transfers: Arc<FxDashMap<TransferId, RldpTransfer>>,
     subscribers: Arc<Vec<Arc<dyn QuerySubscriber>>>,
     query_options: QueryOptions,
@@ -25,13 +24,8 @@ pub struct TransfersCache {
 }
 
 impl TransfersCache {
-    pub fn new(
-        adnl: Arc<AdnlNode>,
-        subscribers: Vec<Arc<dyn QuerySubscriber>>,
-        options: RldpNodeOptions,
-    ) -> Self {
+    pub fn new(subscribers: Vec<Arc<dyn QuerySubscriber>>, options: RldpNodeOptions) -> Self {
         Self {
-            adnl,
             transfers: Arc::new(Default::default()),
             subscribers: Arc::new(subscribers),
             query_options: QueryOptions {
@@ -48,6 +42,7 @@ impl TransfersCache {
     /// Sends serialized query and waits answer
     pub async fn query(
         &self,
+        adnl: &Arc<AdnlNode>,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
         data: Vec<u8>,
@@ -72,14 +67,14 @@ impl TransfersCache {
 
         // Prepare contexts
         let outgoing_context = OutgoingContext {
-            adnl: self.adnl.clone(),
+            adnl: adnl.clone(),
             local_id: *local_id,
             peer_id: *peer_id,
             transfer: outgoing_transfer,
         };
 
         let mut incoming_context = IncomingContext {
-            adnl: self.adnl.clone(),
+            adnl: adnl.clone(),
             local_id: *local_id,
             peer_id: *peer_id,
             parts_rx,
@@ -170,6 +165,7 @@ impl TransfersCache {
     /// Handles incoming message
     pub async fn handle_message(
         &self,
+        adnl: &Arc<AdnlNode>,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
         message: proto::rldp::MessagePart<'_>,
@@ -210,13 +206,13 @@ impl TransfersCache {
                                 seqno,
                             }
                             .write_to(&mut buffer);
-                            self.adnl.send_custom_message(local_id, peer_id, &buffer)?;
+                            adnl.send_custom_message(local_id, peer_id, &buffer)?;
 
                             // Send complete message
                             buffer.clear();
                             proto::rldp::MessagePart::Complete { transfer_id, part }
                                 .write_to(&mut buffer);
-                            self.adnl.send_custom_message(local_id, peer_id, &buffer)?;
+                            adnl.send_custom_message(local_id, peer_id, &buffer)?;
 
                             // Done
                             break;
@@ -224,7 +220,7 @@ impl TransfersCache {
                     },
                     // If transfer doesn't exist (it is a query from other node)
                     None => match self
-                        .create_answer_handler(local_id, peer_id, *transfer_id)
+                        .create_answer_handler(adnl, local_id, peer_id, *transfer_id)
                         .await?
                     {
                         // Forward message part on `incoming` state (for newly created transfer)
@@ -272,6 +268,7 @@ impl TransfersCache {
     /// Receives incoming query and sends answer
     async fn create_answer_handler(
         &self,
+        adnl: &Arc<AdnlNode>,
         local_id: &AdnlNodeIdShort,
         peer_id: &AdnlNodeIdShort,
         transfer_id: TransferId,
@@ -291,7 +288,7 @@ impl TransfersCache {
 
         // Prepare context
         let mut incoming_context = IncomingContext {
-            adnl: self.adnl.clone(),
+            adnl: adnl.clone(),
             local_id: *local_id,
             peer_id: *peer_id,
             parts_rx,
@@ -417,15 +414,12 @@ impl IncomingContext {
         };
 
         // Process query
-        let answer = match process_rldp_query(
-            &self.local_id,
-            &self.peer_id,
-            &subscribers,
-            query,
-            force_compression,
-        )
-        .await?
-        {
+        let ctx = SubscriberContext {
+            adnl: &self.adnl,
+            local_id: &self.local_id,
+            peer_id: &self.peer_id,
+        };
+        let answer = match process_rldp_query(ctx, &subscribers, query, force_compression).await? {
             QueryProcessingResult::Processed(Some(answer)) => answer,
             QueryProcessingResult::Processed(None) => return Ok(None),
             QueryProcessingResult::Rejected => {
@@ -563,9 +557,8 @@ impl QueryOptions {
     }
 }
 
-async fn process_rldp_query(
-    local_id: &AdnlNodeIdShort,
-    peer_id: &AdnlNodeIdShort,
+async fn process_rldp_query<'a>(
+    ctx: SubscriberContext<'a>,
     subscribers: &[Arc<dyn QuerySubscriber>],
     mut query: OwnedRldpMessageQuery,
     force_compression: bool,
@@ -578,7 +571,7 @@ async fn process_rldp_query(
         None => force_compression,
     };
 
-    match process_query(local_id, peer_id, subscribers, Cow::Owned(query.data)).await? {
+    match process_query(ctx, subscribers, Cow::Owned(query.data)).await? {
         QueryProcessingResult::Processed(answer) => Ok(match answer {
             Some(mut answer) => {
                 if answer_compression {

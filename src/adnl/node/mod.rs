@@ -130,8 +130,8 @@ pub struct AdnlNode {
 
     /// Outgoing packets queue
     sender_queue_tx: SenderQueueTx,
-    /// Receiver end of the outgoing packets queue (NOTE: used only for initialization)
-    sender_queue_rx: Mutex<Option<SenderQueueRx>>,
+    /// Stated used during initialization
+    init_state: Mutex<Option<InitializationState>>,
 
     /// Node start timestamp. Used as reinit date for connections
     start_time: u32,
@@ -171,7 +171,11 @@ impl AdnlNode {
             incoming_transfers: Default::default(),
             queries: Default::default(),
             sender_queue_tx,
-            sender_queue_rx: Mutex::new(Some(sender_queue_rx)),
+            init_state: Mutex::new(Some(InitializationState {
+                sender_queue_rx,
+                message_subscribers: Default::default(),
+                query_subscribers: Default::default(),
+            })),
             start_time: now(),
             cancellation_token: Default::default(),
         })
@@ -194,27 +198,47 @@ impl AdnlNode {
         }
     }
 
-    /// Starts listening for incoming packets
-    pub fn start(
-        self: &Arc<Self>,
-        message_subscribers: Vec<Arc<dyn MessageSubscriber>>,
-        mut query_subscribers: Vec<Arc<dyn QuerySubscriber>>,
+    pub fn add_message_subscriber(
+        &self,
+        message_subscriber: Arc<dyn MessageSubscriber>,
     ) -> Result<()> {
+        let mut init = self.init_state.lock();
+        match &mut *init {
+            Some(init) => {
+                init.message_subscribers.push(message_subscriber);
+                Ok(())
+            }
+            None => Err(AdnlNodeError::AlreadyRunning.into()),
+        }
+    }
+
+    pub fn add_query_subscriber(&self, query_subscriber: Arc<dyn QuerySubscriber>) -> Result<()> {
+        let mut init = self.init_state.lock();
+        match &mut *init {
+            Some(init) => {
+                init.query_subscribers.push(query_subscriber);
+                Ok(())
+            }
+            None => Err(AdnlNodeError::AlreadyRunning.into()),
+        }
+    }
+
+    /// Starts listening for incoming packets
+    pub fn start(self: &Arc<Self>) -> Result<()> {
         // Consume receiver
-        let sender_queue_rx = match self.sender_queue_rx.lock().take() {
-            Some(rx) => rx,
+        let mut init = match self.init_state.lock().take() {
+            Some(init) => init,
             None => return Err(AdnlNodeError::AlreadyRunning.into()),
         };
 
         // Bind node socket
         let socket = make_udp_socket(self.socket_addr.port())?;
 
-        query_subscribers.push(Arc::new(AdnlPingSubscriber));
-        let subscribers = query_subscribers;
+        init.query_subscribers.push(Arc::new(AdnlPingSubscriber));
 
         // Start background logic
-        self.start_sender(socket.clone(), sender_queue_rx);
-        self.start_receiver(socket, message_subscribers, subscribers);
+        self.start_sender(socket.clone(), init.sender_queue_rx);
+        self.start_receiver(socket, init.message_subscribers, init.query_subscribers);
 
         // Done
         Ok(())
@@ -516,6 +540,13 @@ pub struct AdnlNodeMetrics {
     pub incoming_transfers_len: usize,
     /// Current queries cache len
     pub query_count: usize,
+}
+
+struct InitializationState {
+    /// Receiver end of the outgoing packets queue
+    sender_queue_rx: SenderQueueRx,
+    message_subscribers: Vec<Arc<dyn MessageSubscriber>>,
+    query_subscribers: Vec<Arc<dyn QuerySubscriber>>,
 }
 
 fn make_query<T>(prefix: Option<&[u8]>, query: T) -> Bytes
