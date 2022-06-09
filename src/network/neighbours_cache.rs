@@ -3,10 +3,11 @@ use std::time::Instant;
 
 use parking_lot::{RwLock, RwLockWriteGuard};
 use rand::Rng;
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use super::neighbour::{Neighbour, NeighbourOptions};
-use crate::utils::*;
+use crate::utils::AdnlNodeIdShort;
 
 pub struct NeighboursCache {
     state: RwLock<NeighboursCacheState>,

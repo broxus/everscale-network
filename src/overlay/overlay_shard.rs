@@ -468,7 +468,7 @@ impl OverlayShard {
             }
         };
 
-        let answer = tl_proto::deserialize(&answer)?;
+        let answer = tl_proto::deserialize_as_boxed(&answer)?;
         tracing::trace!("Got random peers from {peer_id}");
         let proto::overlay::Nodes { nodes } = self.filter_nodes(answer);
 

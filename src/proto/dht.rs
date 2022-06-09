@@ -63,7 +63,7 @@ impl Node<'_> {
     }
 }
 
-#[derive(Clone, TlWrite, TlRead)]
+#[derive(Debug, Clone, TlWrite, TlRead)]
 pub struct NodeOwned {
     pub id: everscale_crypto::tl::PublicKeyOwned,
     pub addr_list: adnl::AddressList,
@@ -109,7 +109,7 @@ impl Value<'_> {
     }
 }
 
-#[derive(Clone, TlWrite, TlRead)]
+#[derive(Debug, Clone, TlWrite, TlRead)]
 pub struct ValueOwned {
     pub key: KeyDescriptionOwned,
     pub value: Bytes,

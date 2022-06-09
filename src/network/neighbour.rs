@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use rand::Rng;
 
 use crate::proto;
-use crate::utils::*;
+use crate::utils::AdnlNodeIdShort;
 
 pub struct Neighbour {
     peer_id: AdnlNodeIdShort,

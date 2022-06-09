@@ -38,15 +38,7 @@ impl AdnlNode {
             } {
                 // Send packet
                 let target: SocketAddrV4 = packet.destination.into();
-                match socket.send_to(&packet.data, target).await {
-                    Ok(len) if len != packet.data.len() => {
-                        tracing::warn!("Incomplete send: {len} of {}", packet.data.len());
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to send data: {e}");
-                    }
-                    _ => {}
-                };
+                socket.send_to(&packet.data, target).await.ok();
             }
         });
     }
