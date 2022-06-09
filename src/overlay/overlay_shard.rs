@@ -449,8 +449,8 @@ impl OverlayShard {
         }
     }
 
-    /// Get random peers from the specified peer. Returns `Ok(None)` in case of timeout
-    pub async fn get_random_peers(
+    /// Exchanges random peers with the specified peer. Returns `Ok(None)` in case of timeout
+    pub async fn exchange_random_peers(
         &self,
         adnl: &AdnlNode,
         peer_id: &AdnlNodeIdShort,

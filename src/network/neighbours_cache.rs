@@ -76,6 +76,10 @@ impl NeighboursCache {
         self.state.read().get(peer_id)
     }
 
+    pub fn get_peer_id(&self, index: usize) -> Option<AdnlNodeIdShort> {
+        self.state.read().indices.get(index).cloned()
+    }
+
     pub fn get_next_for_ping(&self, start: &Instant) -> Option<Arc<Neighbour>> {
         self.state.write().get_next_for_ping(start)
     }
@@ -294,23 +298,6 @@ impl NeighboursCacheState {
             }
             Entry::Occupied(_) => (hint, None),
         }
-    }
-}
-
-#[derive(Default)]
-pub struct ExternalNeighboursCacheIter(usize);
-
-impl ExternalNeighboursCacheIter {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn get(&self, cache: &NeighboursCache) -> Option<AdnlNodeIdShort> {
-        cache.state.read().indices.get(self.0).cloned()
-    }
-
-    pub fn bump(&mut self) {
-        self.0 += 1;
     }
 }
 

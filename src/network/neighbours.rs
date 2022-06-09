@@ -49,6 +49,8 @@ pub struct NeighboursOptions {
     pub default_rldp_roundtrip_ms: u64,
     /// Default: 6
     pub max_ping_tasks: usize,
+    /// Default: 6
+    pub max_exchange_tasks: usize,
 }
 
 impl Default for NeighboursOptions {
@@ -63,6 +65,7 @@ impl Default for NeighboursOptions {
             ping_max_timeout_ms: 1000,
             default_rldp_roundtrip_ms: 2000,
             max_ping_tasks: 6,
+            max_exchange_tasks: 6,
         }
     }
 }
@@ -103,6 +106,27 @@ impl Neighbours {
         &self.overlay_shard
     }
 
+    /// Starts background process of sending ping queries to all neighbours
+    pub fn start_pinging_neighbours(self: &Arc<Self>) {
+        let interval = Duration::from_millis(self.options.ping_interval_ms);
+
+        let neighbours = Arc::downgrade(self);
+        tokio::spawn(async move {
+            loop {
+                let neighbours = match neighbours.upgrade() {
+                    Some(neighbours) => neighbours,
+                    None => return,
+                };
+
+                if let Err(e) = neighbours.ping_neighbours().await {
+                    tracing::warn!("Failed to ping neighbours: {e}");
+                    tokio::time::sleep(interval).await;
+                }
+            }
+        });
+    }
+
+    /// Starts background process of updating neighbours cache
     pub fn start_reloading_neighbours(self: &Arc<Self>) {
         use rand::distributions::Distribution;
 
@@ -131,68 +155,68 @@ impl Neighbours {
         });
     }
 
-    pub fn start_pinging_neighbours(self: &Arc<Self>) {
-        let interval = Duration::from_millis(self.options.ping_interval_ms);
-
-        let neighbours = Arc::downgrade(self);
-        tokio::spawn(async move {
-            loop {
-                let neighbours = match neighbours.upgrade() {
-                    Some(neighbours) => neighbours,
-                    None => return,
-                };
-
-                if let Err(e) = neighbours.ping_neighbours().await {
-                    tracing::warn!("Failed to ping neighbours: {e}");
-                    tokio::time::sleep(interval).await;
-                }
-            }
-        });
-    }
-
-    pub fn start_searching_peers(self: &Arc<Self>) {
+    /// Starts background process of broadcasting random peers to all neighbours
+    pub fn start_exchanging_peers(self: &Arc<Self>) {
         let interval = Duration::from_millis(self.options.search_interval_ms);
 
         let neighbours = Arc::downgrade(self);
         let adnl = self.dht.adnl().clone();
 
+        let semaphore = Arc::new(Semaphore::new(self.options.max_exchange_tasks));
         tokio::spawn(async move {
-            tokio::time::sleep(interval).await;
+            loop {
+                tokio::time::sleep(interval).await;
 
-            let neighbours = match neighbours.upgrade() {
-                Some(neighbours) => neighbours,
-                None => return,
-            };
-
-            let mut external_iter = ExternalNeighboursCacheIter::new();
-            while let Some(peer_id) = external_iter.get(&neighbours.cache) {
-                external_iter.bump();
-
-                match neighbours
-                    .overlay_shard
-                    .get_random_peers(&adnl, &peer_id, &neighbours.overlay_peers, None)
-                    .await
-                {
-                    Ok(Some(new_peers)) if !new_peers.is_empty() => {
-                        neighbours.add_new_peers(new_peers);
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to get random peers: {e}");
-                    }
-                    _ => {}
+                let neighbours = match neighbours.upgrade() {
+                    Some(neighbours) => neighbours,
+                    None => return,
                 };
+
+                let mut index = 0;
+                while let Some(peer_id) = neighbours.cache.get_peer_id(index) {
+                    index += 1;
+
+                    let new_peers = match neighbours
+                        .overlay_shard
+                        .exchange_random_peers(&adnl, &peer_id, &neighbours.overlay_peers, None)
+                        .await
+                    {
+                        Ok(Some(new_peers)) if !new_peers.is_empty() => new_peers,
+                        _ => continue,
+                    };
+
+                    let permit = semaphore.clone().acquire_owned().await.ok();
+                    let neighbours = neighbours.clone();
+                    tokio::spawn(async move {
+                        for peer_id in new_peers.into_iter() {
+                            match neighbours.dht.find_address(&peer_id).await {
+                                Ok((ip, _)) => {
+                                    tracing::info!("Found overlay peer {peer_id}: {ip}");
+                                    neighbours.add_overlay_peer(peer_id);
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Failed to find overlay peer address: {e}");
+                                }
+                            }
+                        }
+                        drop(permit);
+                    });
+                }
             }
         });
     }
 
+    /// Returns neighbours cache len
     pub fn len(&self) -> usize {
         self.cache.len()
     }
 
+    /// Returns whether neighbours cache is empty
     pub fn is_empty(&self) -> bool {
         self.cache.is_empty()
     }
 
+    /// Instant neighbours metrics
     pub fn metrics(&self) -> NeighboursMetrics {
         NeighboursMetrics {
             peer_search_task_count: self.peer_search_task_count.load(Ordering::Acquire),
@@ -238,25 +262,29 @@ impl Neighbours {
             / std::cmp::max(self.all_attempts.load(Ordering::Acquire), 1) as f64
     }
 
-    pub fn reload_neighbours(&self) -> Result<()> {
-        tracing::trace!(
-            "Start reload_neighbours (overlay: {})",
-            self.overlay_shard.id()
-        );
+    pub fn update_neighbour_stats(
+        &self,
+        peer_id: &AdnlNodeIdShort,
+        roundtrip: u64,
+        success: bool,
+        is_rldp: bool,
+        update_attempts: bool,
+    ) {
+        let neighbour = match self.cache.get(peer_id) {
+            Some(neighbour) => neighbour,
+            None => return,
+        };
 
-        let peers = PeersCache::with_capacity(self.options.max_neighbours * 2 + 1);
-        self.overlay_shard
-            .write_cached_peers(self.options.max_neighbours * 2, &peers);
-        self.process_neighbours(peers)?;
-
-        tracing::trace!(
-            "Finish reload_neighbours (overlay: {})",
-            self.overlay_shard.id()
-        );
-        Ok(())
+        neighbour.update_stats(roundtrip, success, is_rldp, update_attempts);
+        if update_attempts {
+            self.all_attempts.fetch_add(1, Ordering::Release);
+            if !success {
+                self.failed_attempts.fetch_add(1, Ordering::Release);
+            }
+        }
     }
 
-    pub async fn ping_neighbours(self: &Arc<Self>) -> Result<()> {
+    async fn ping_neighbours(self: &Arc<Self>) -> Result<()> {
         let neighbour_count = self.cache.len();
         if neighbour_count == 0 {
             return Err(NeighboursError::NoPeersInOverlay(*self.overlay_shard.id()).into());
@@ -302,60 +330,22 @@ impl Neighbours {
         }
     }
 
-    pub fn add_new_peers(self: &Arc<Self>, peers: Vec<AdnlNodeIdShort>) {
-        let neighbours = self.clone();
+    fn reload_neighbours(&self) -> Result<()> {
+        tracing::trace!(
+            "Start reload_neighbours (overlay: {})",
+            self.overlay_shard.id()
+        );
 
-        self.peer_search_task_count.fetch_add(1, Ordering::Release);
-        let peer_search_task_count = self.peer_search_task_count.clone();
+        let peers = PeersCache::with_capacity(self.options.max_neighbours * 2 + 1);
+        self.overlay_shard
+            .write_cached_peers(self.options.max_neighbours * 2, &peers);
+        self.process_neighbours(peers)?;
 
-        tokio::spawn(async move {
-            for peer_id in peers.into_iter() {
-                tracing::trace!("add_new_peers: start searching address for peer {peer_id}");
-                match neighbours.dht.find_address(&peer_id).await {
-                    Ok((ip, _)) => {
-                        tracing::info!("add_new_peers: found overlay peer address: {ip}");
-                        neighbours.add_overlay_peer(peer_id);
-                    }
-                    Err(e) => {
-                        tracing::warn!("add_new_peers: failed to find overlay peer address: {e}");
-                    }
-                }
-            }
-
-            peer_search_task_count.fetch_sub(1, Ordering::Release);
-        });
-    }
-
-    pub fn update_neighbour_stats(
-        &self,
-        peer_id: &AdnlNodeIdShort,
-        roundtrip: u64,
-        success: bool,
-        is_rldp: bool,
-        update_attempts: bool,
-    ) {
-        let neighbour = match self.cache.get(peer_id) {
-            Some(neighbour) => neighbour,
-            None => return,
-        };
-
-        neighbour.update_stats(roundtrip, success, is_rldp, update_attempts);
-        if update_attempts {
-            self.all_attempts.fetch_add(1, Ordering::Release);
-            if !success {
-                self.failed_attempts.fetch_add(1, Ordering::Release);
-            }
-        }
-    }
-
-    pub fn set_neighbour_capabilities(
-        &self,
-        peer_id: &AdnlNodeIdShort,
-        capabilities: proto::ton_node::Capabilities,
-    ) {
-        if let Some(neighbour) = self.cache.get(peer_id) {
-            neighbour.update_proto_version(capabilities);
-        }
+        tracing::trace!(
+            "Finish reload_neighbours (overlay: {})",
+            self.overlay_shard.id()
+        );
+        Ok(())
     }
 
     async fn update_capabilities(self: &Arc<Self>, neighbour: Arc<Neighbour>) -> Result<()> {
@@ -365,11 +355,10 @@ impl Neighbours {
             self.overlay_shard.id()
         );
 
-        let timeout = Some(
-            self.dht
-                .adnl()
-                .compute_query_timeout(neighbour.roundtrip_adnl()),
-        );
+        let timeout = self
+            .dht
+            .adnl()
+            .compute_query_timeout(neighbour.roundtrip_adnl());
 
         let now = Instant::now();
         neighbour.set_last_ping(self.elapsed());
@@ -377,7 +366,7 @@ impl Neighbours {
         let query = proto::rpc::TonNodeGetCapabilities;
         match self
             .overlay_shard
-            .adnl_query(self.dht.adnl(), neighbour.peer_id(), query, timeout)
+            .adnl_query(self.dht.adnl(), neighbour.peer_id(), query, Some(timeout))
             .await
         {
             Ok(Some(answer)) => {
@@ -390,7 +379,10 @@ impl Neighbours {
 
                 let roundtrip = now.elapsed().as_millis() as u64;
                 self.update_neighbour_stats(neighbour.peer_id(), roundtrip, true, false, false);
-                self.set_neighbour_capabilities(neighbour.peer_id(), capabilities);
+
+                if let Some(neighbour) = self.cache.get(neighbour.peer_id()) {
+                    neighbour.update_proto_version(capabilities);
+                }
 
                 Ok(())
             }
