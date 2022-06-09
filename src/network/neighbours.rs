@@ -195,7 +195,7 @@ impl Neighbours {
                                     neighbours.add_overlay_peer(peer_id);
                                 }
                                 Err(e) => {
-                                    tracing::warn!("Failed to find overlay peer address: {e}");
+                                    tracing::debug!("Failed to find overlay peer address: {e}");
                                 }
                             }
                         }
