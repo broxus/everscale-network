@@ -40,7 +40,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --all-targets --features full
+          args: --all-targets
 
   lints:
     name: Lints
@@ -67,4 +67,4 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: --all-targets --features full -- -D warnings
+          args: --all-targets -- -D warnings
