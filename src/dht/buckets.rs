@@ -1,16 +1,17 @@
 use std::borrow::Borrow;
 
+use crate::adnl;
 use crate::proto;
 use crate::utils::*;
 
 /// DHT nodes, distributed by max equal bits
 pub struct Buckets {
     local_id: [u8; 32],
-    buckets: Box<[FxDashMap<AdnlNodeIdShort, proto::dht::NodeOwned>; 256]>,
+    buckets: Box<[FxDashMap<adnl::NodeIdShort, proto::dht::NodeOwned>; 256]>,
 }
 
 impl Buckets {
-    pub fn new(local_id: &AdnlNodeIdShort) -> Self {
+    pub fn new(local_id: &adnl::NodeIdShort) -> Self {
         Self {
             local_id: *local_id.as_slice(),
             buckets: Box::new([(); 256].map(|_| Default::default())),
@@ -18,12 +19,12 @@ impl Buckets {
     }
 
     /// Returns iterator over all buckets, starting from the most distant
-    pub fn iter(&self) -> std::slice::Iter<FxDashMap<AdnlNodeIdShort, proto::dht::NodeOwned>> {
+    pub fn iter(&self) -> std::slice::Iter<FxDashMap<adnl::NodeIdShort, proto::dht::NodeOwned>> {
         self.buckets.iter()
     }
 
     /// Inserts DHT node into the bucket based on its distance
-    pub fn insert(&self, peer_id: &AdnlNodeIdShort, peer: proto::dht::NodeOwned) {
+    pub fn insert(&self, peer_id: &adnl::NodeIdShort, peer: proto::dht::NodeOwned) {
         use dashmap::mapref::entry::Entry;
 
         let affinity = get_affinity(&self.local_id, peer_id.borrow());
@@ -100,8 +101,8 @@ impl Buckets {
 }
 
 impl<'a> IntoIterator for &'a Buckets {
-    type Item = &'a FxDashMap<AdnlNodeIdShort, proto::dht::NodeOwned>;
-    type IntoIter = std::slice::Iter<'a, FxDashMap<AdnlNodeIdShort, proto::dht::NodeOwned>>;
+    type Item = &'a FxDashMap<adnl::NodeIdShort, proto::dht::NodeOwned>;
+    type IntoIter = std::slice::Iter<'a, FxDashMap<adnl::NodeIdShort, proto::dht::NodeOwned>>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()

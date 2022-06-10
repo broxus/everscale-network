@@ -1,17 +1,18 @@
 use anyhow::Result;
+use everscale_raptorq::{Encoder, EncodingPacket};
 
 use crate::proto::rldp::RaptorQFecType;
 
 pub struct RaptorQEncoder {
-    engine: everscale_raptorq::Encoder,
+    engine: Encoder,
     params: RaptorQFecType,
-    source_packets: Vec<everscale_raptorq::EncodingPacket>,
+    source_packets: Vec<EncodingPacket>,
     encoder_index: usize,
 }
 
 impl RaptorQEncoder {
     pub fn with_data(data: &[u8]) -> Self {
-        let engine = everscale_raptorq::Encoder::with_defaults(data, MAX_TRANSMISSION_UNIT as u16);
+        let engine = Encoder::with_defaults(data, MAX_TRANSMISSION_UNIT as u16);
         let source_packets = engine
             .get_block_encoders()
             .iter()

@@ -5,23 +5,22 @@ use std::time::Duration;
 
 use anyhow::Result;
 use everscale_crypto::ed25519;
-use everscale_network::utils::*;
-use everscale_network::{
-    AdnlNode, AdnlNodeOptions, Keystore, NewPeerContext, QueryConsumingResult, SubscriberContext,
-};
+use everscale_network::adnl;
+use everscale_network::utils::PackedSocketAddr;
+use everscale_network::{QueryConsumingResult, QuerySubscriber, SubscriberContext};
 use tl_proto::{TlRead, TlWrite};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // env_logger::init();
 
-    let adnl_node_options = AdnlNodeOptions::default();
+    let adnl_node_options = adnl::NodeOptions::default();
 
     let first_key = ed25519::SecretKey::generate(&mut rand::thread_rng());
 
-    let left_node = AdnlNode::new(
+    let left_node = adnl::Node::new(
         PackedSocketAddr::localhost(20000),
-        Keystore::builder()
+        adnl::Keystore::builder()
             .with_tagged_keys([(first_key.to_bytes(), 0)])?
             .build(),
         adnl_node_options,
@@ -29,9 +28,9 @@ async fn main() -> Result<()> {
     );
     let left_node_id = *left_node.key_by_tag(0)?.id();
 
-    let right_node = AdnlNode::new(
+    let right_node = adnl::Node::new(
         PackedSocketAddr::localhost(20001),
-        Keystore::builder()
+        adnl::Keystore::builder()
             .with_tagged_keys([(first_key.to_bytes(), 0)])?
             .build(),
         adnl_node_options,
@@ -43,7 +42,7 @@ async fn main() -> Result<()> {
     let right_node_id = right_node_full_id.compute_short_id();
 
     left_node.add_peer(
-        NewPeerContext::AdnlPacket,
+        adnl::NewPeerContext::AdnlPacket,
         &left_node_id,
         &left_node_id,
         right_node.socket_addr(),
@@ -82,9 +81,9 @@ async fn main() -> Result<()> {
 }
 
 async fn query_data<Q, A>(
-    left_node: &Arc<AdnlNode>,
-    left_node_id: &AdnlNodeIdShort,
-    right_node_id: &AdnlNodeIdShort,
+    left_node: &Arc<adnl::Node>,
+    left_node_id: &adnl::NodeIdShort,
+    right_node_id: &adnl::NodeIdShort,
     query: Q,
 ) where
     Q: TlWrite,
@@ -103,7 +102,7 @@ async fn query_data<Q, A>(
 struct Service;
 
 #[async_trait::async_trait]
-impl everscale_network::QuerySubscriber for Service {
+impl QuerySubscriber for Service {
     async fn try_consume_query<'a>(
         &self,
         _: SubscriberContext<'a>,

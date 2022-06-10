@@ -11,10 +11,11 @@ use tokio_util::sync::CancellationToken;
 
 use self::receiver::*;
 use self::sender::*;
-use super::channel::{AdnlChannel, AdnlChannelId};
-use super::keystore::{Keystore, KeystoreError};
-use super::peer::{AdnlPeer, AdnlPeerFilter, AdnlPeers, NewPeerContext};
-use super::ping_subscriber::AdnlPingSubscriber;
+use super::channel::{AdnlChannelId, Channel};
+use super::keystore::{Key, Keystore, KeystoreError};
+use super::node_id::{NodeIdFull, NodeIdShort};
+use super::peer::{NewPeerContext, Peer, PeerFilter, Peers};
+use super::ping_subscriber::PingSubscriber;
 use super::queries_cache::{QueriesCache, QueryId};
 use super::socket::make_udp_socket;
 use super::transfer::*;
@@ -28,19 +29,19 @@ mod sender;
 /// ADNL node configuration
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct AdnlNodeOptions {
+pub struct NodeOptions {
     /// Minimal ADNL query timeout. Will override the used timeout if it is less.
     ///
     /// Default: `500` ms
     ///
-    /// See [`AdnlNode::query`], [`AdnlNode::query_with_prefix`], [`AdnlNode::query_raw`]
+    /// See [`Node::query`], [`Node::query_with_prefix`], [`Node::query_raw`]
     pub query_min_timeout_ms: u64,
 
     /// Default ADNL query timeout. Will be used if no timeout is specified.
     ///
     /// Default: `5000` ms
     ///
-    /// See [`AdnlNode::query`], [`AdnlNode::query_with_prefix`], [`AdnlNode::query_raw`]
+    /// See [`Node::query`], [`Node::query_with_prefix`], [`Node::query_raw`]
     pub query_default_timeout_ms: u64,
 
     /// ADNL multipart transfer timeout. It will drop the transfer if it is not completed
@@ -85,7 +86,7 @@ pub struct AdnlNodeOptions {
     pub version: Option<u16>,
 }
 
-impl Default for AdnlNodeOptions {
+impl Default for NodeOptions {
     fn default() -> Self {
         Self {
             query_min_timeout_ms: 500,
@@ -103,24 +104,24 @@ impl Default for AdnlNodeOptions {
 }
 
 /// Unreliable UDP transport layer
-pub struct AdnlNode {
+pub struct Node {
     /// Socket address of the node
     socket_addr: PackedSocketAddr,
     /// Immutable keystore
     keystore: Keystore,
     /// Configuration
-    options: AdnlNodeOptions,
+    options: NodeOptions,
 
     /// If specified, peers are only accepted if they match the filter
-    peer_filter: Option<Arc<dyn AdnlPeerFilter>>,
+    peer_filter: Option<Arc<dyn PeerFilter>>,
 
     /// Known peers for each local node id
-    peers: FxHashMap<AdnlNodeIdShort, AdnlPeers>,
+    peers: FxHashMap<NodeIdShort, Peers>,
 
     /// Channels table used to fast search on incoming packets
     channels_by_id: FxDashMap<AdnlChannelId, ChannelReceiver>,
     /// Channels table used to fast search when sending messages
-    channels_by_peers: FxDashMap<AdnlNodeIdShort, Arc<AdnlChannel>>,
+    channels_by_peers: FxDashMap<NodeIdShort, Arc<Channel>>,
 
     /// Pending transfers of large messages that were split
     incoming_transfers: Arc<FxDashMap<TransferId, Arc<Transfer>>>,
@@ -140,13 +141,13 @@ pub struct AdnlNode {
     cancellation_token: CancellationToken,
 }
 
-impl AdnlNode {
+impl Node {
     /// Create new ADNL node on the specified address
     pub fn new<T>(
         socket_addr: T,
         keystore: Keystore,
-        options: AdnlNodeOptions,
-        peer_filter: Option<Arc<dyn AdnlPeerFilter>>,
+        options: NodeOptions,
+        peer_filter: Option<Arc<dyn PeerFilter>>,
     ) -> Arc<Self>
     where
         T: Into<PackedSocketAddr>,
@@ -183,13 +184,13 @@ impl AdnlNode {
 
     /// ADNL node options
     #[inline(always)]
-    pub fn options(&self) -> &AdnlNodeOptions {
+    pub fn options(&self) -> &NodeOptions {
         &self.options
     }
 
     /// Instant metrics
-    pub fn metrics(&self) -> AdnlNodeMetrics {
-        AdnlNodeMetrics {
+    pub fn metrics(&self) -> NodeMetrics {
+        NodeMetrics {
             peer_count: self.peers.values().map(|peers| peers.len()).sum(),
             channels_by_id_len: self.channels_by_id.len(),
             channels_by_peers_len: self.channels_by_peers.len(),
@@ -208,7 +209,7 @@ impl AdnlNode {
                 init.message_subscribers.push(message_subscriber);
                 Ok(())
             }
-            None => Err(AdnlNodeError::AlreadyRunning.into()),
+            None => Err(NodeError::AlreadyRunning.into()),
         }
     }
 
@@ -219,7 +220,7 @@ impl AdnlNode {
                 init.query_subscribers.push(query_subscriber);
                 Ok(())
             }
-            None => Err(AdnlNodeError::AlreadyRunning.into()),
+            None => Err(NodeError::AlreadyRunning.into()),
         }
     }
 
@@ -228,13 +229,13 @@ impl AdnlNode {
         // Consume receiver
         let mut init = match self.init_state.lock().take() {
             Some(init) => init,
-            None => return Err(AdnlNodeError::AlreadyRunning.into()),
+            None => return Err(NodeError::AlreadyRunning.into()),
         };
 
         // Bind node socket
         let socket = make_udp_socket(self.socket_addr.port())?;
 
-        init.query_subscribers.push(Arc::new(AdnlPingSubscriber));
+        init.query_subscribers.push(Arc::new(PingSubscriber));
 
         // Start background logic
         self.start_sender(socket.clone(), init.sender_queue_rx);
@@ -279,31 +280,28 @@ impl AdnlNode {
 
     /// Searches for the stored ADNL key by it's short id
     ///
-    /// See [AdnlNode::key_by_tag]
-    pub fn key_by_id(
-        &self,
-        id: &AdnlNodeIdShort,
-    ) -> Result<&Arc<StoredAdnlNodeKey>, KeystoreError> {
+    /// See [`Node::key_by_tag`]
+    pub fn key_by_id(&self, id: &NodeIdShort) -> Result<&Arc<Key>, KeystoreError> {
         self.keystore.key_by_id(id)
     }
 
     /// Searches for the stored ADNL key by it's tag
     ///
-    /// See [AdnlNode::key_by_id]
-    pub fn key_by_tag(&self, tag: usize) -> Result<&Arc<StoredAdnlNodeKey>, KeystoreError> {
+    /// See [`Node::key_by_id`]
+    pub fn key_by_tag(&self, tag: usize) -> Result<&Arc<Key>, KeystoreError> {
         self.keystore.key_by_tag(tag)
     }
 
     /// Adds new remote peer. Returns whether the peer was added
     ///
-    /// See [AdnlNode::remove_peer]
+    /// See [`Node::remove_peer`]
     pub fn add_peer(
         &self,
         ctx: NewPeerContext,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
+        local_id: &NodeIdShort,
+        peer_id: &NodeIdShort,
         peer_ip_address: PackedSocketAddr,
-        peer_full_id: AdnlNodeIdFull,
+        peer_full_id: NodeIdFull,
     ) -> Result<bool> {
         use dashmap::mapref::entry::Entry;
 
@@ -325,11 +323,7 @@ impl AdnlNode {
             Entry::Occupied(entry) => entry.get().set_ip_address(peer_ip_address),
             // Create new peer state otherwise
             Entry::Vacant(entry) => {
-                entry.insert(AdnlPeer::new(
-                    self.start_time,
-                    peer_ip_address,
-                    peer_full_id,
-                ));
+                entry.insert(Peer::new(self.start_time, peer_ip_address, peer_full_id));
 
                 tracing::trace!(
                     "Added ADNL peer {peer_ip_address}. PEER ID {peer_id} -> LOCAL ID {local_id}"
@@ -345,12 +339,8 @@ impl AdnlNode {
     /// NOTE: This method will return an error if there is no peers table
     /// for the specified local id.
     ///
-    /// See [AdnlNode::add_peer]
-    pub fn remove_peer(
-        &self,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
-    ) -> Result<bool> {
+    /// See [`Node::add_peer`]
+    pub fn remove_peer(&self, local_id: &NodeIdShort, peer_id: &NodeIdShort) -> Result<bool> {
         let peers = self.get_peers(local_id)?;
 
         self.channels_by_peers
@@ -366,8 +356,8 @@ impl AdnlNode {
     /// Searches for remote peer ip in the known peers
     pub fn get_peer_ip(
         &self,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
+        local_id: &NodeIdShort,
+        peer_id: &NodeIdShort,
     ) -> Option<PackedSocketAddr> {
         let peers = self.get_peers(local_id).ok()?;
         let peer = peers.get(peer_id)?;
@@ -379,8 +369,8 @@ impl AdnlNode {
     /// NOTE: In case of timeout returns `Ok(None)`
     pub async fn query<Q, A>(
         &self,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
+        local_id: &NodeIdShort,
+        peer_id: &NodeIdShort,
         query: Q,
         timeout: Option<u64>,
     ) -> Result<Option<A>>
@@ -402,8 +392,8 @@ impl AdnlNode {
     /// NOTE: In case of timeout returns `Ok(None)`
     pub async fn query_with_prefix<Q, A>(
         &self,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
+        local_id: &NodeIdShort,
+        peer_id: &NodeIdShort,
         prefix: &[u8],
         query: Q,
         timeout: Option<u64>,
@@ -426,8 +416,8 @@ impl AdnlNode {
     /// NOTE: In case of timeout returns `Ok(None)`
     pub async fn query_raw(
         &self,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
+        local_id: &NodeIdShort,
+        peer_id: &NodeIdShort,
         query: Bytes,
         timeout: Option<u64>,
     ) -> Result<Option<Vec<u8>>> {
@@ -481,8 +471,8 @@ impl AdnlNode {
 
     pub fn send_custom_message(
         &self,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
+        local_id: &NodeIdShort,
+        peer_id: &NodeIdShort,
         data: &[u8],
     ) -> Result<()> {
         self.send_message(
@@ -493,17 +483,17 @@ impl AdnlNode {
         )
     }
 
-    fn get_peers(&self, local_id: &AdnlNodeIdShort) -> Result<&AdnlPeers> {
+    fn get_peers(&self, local_id: &NodeIdShort) -> Result<&Peers> {
         if let Some(peers) = self.peers.get(local_id) {
             Ok(peers)
         } else {
-            Err(AdnlNodeError::PeersNotFound.into())
+            Err(NodeError::PeersNotFound.into())
         }
     }
 
-    fn reset_peer(&self, local_id: &AdnlNodeIdShort, peer_id: &AdnlNodeIdShort) -> Result<()> {
+    fn reset_peer(&self, local_id: &NodeIdShort, peer_id: &NodeIdShort) -> Result<()> {
         let peers = self.get_peers(local_id)?;
-        let mut peer = peers.get_mut(peer_id).ok_or(AdnlNodeError::UnknownPeer)?;
+        let mut peer = peers.get_mut(peer_id).ok_or(NodeError::UnknownPeer)?;
 
         tracing::trace!("Resetting peer pair {local_id} -> {peer_id}");
 
@@ -520,7 +510,7 @@ impl AdnlNode {
     }
 }
 
-impl Drop for AdnlNode {
+impl Drop for Node {
     fn drop(&mut self) {
         // Cancel all tasks on drop
         self.shutdown()
@@ -529,7 +519,7 @@ impl Drop for AdnlNode {
 
 /// Instant ADNL node metrics
 #[derive(Debug, Copy, Clone)]
-pub struct AdnlNodeMetrics {
+pub struct NodeMetrics {
     /// Total remote peer count for all local keys
     pub peer_count: usize,
     /// Total unique channel count (including priority/remote duplicates)
@@ -566,7 +556,7 @@ where
 }
 
 #[derive(thiserror::Error, Debug)]
-enum AdnlNodeError {
+enum NodeError {
     #[error("ADNL node is already running")]
     AlreadyRunning,
     #[error("Local id peers not found")]

@@ -9,8 +9,8 @@
 //!
 //! Each peer has its own keypair. In most cases it is a ed25519 keypair
 //! (see [`KeyPair`]). The public key of this keypair is also called
-//! a **full peer id** ([`AdnlNodeIdFull`]). The hash of the TL representation
-//! of its full id is a **short peer id** ([`AdnlNodeIdShort`]).
+//! a **full peer id** ([`NodeIdFull`]). The hash of the TL representation
+//! of its full id is a **short peer id** ([`NodeIdShort`]).
 //!
 //! Each peer remembers unix timestamp (in seconds) at the moment of initialization.
 //! It is called **reinit date** and used to describe peer's state "version".
@@ -71,8 +71,8 @@
 //! is regenerated.
 //!
 //! [`KeyPair`]: everscale_crypto::ed25519::KeyPair
-//! [`AdnlNodeIdFull`]: crate::utils::AdnlNodeIdFull
-//! [`AdnlNodeIdShort`]: crate::utils::AdnlNodeIdShort
+//! [`NodeIdFull`]: NodeIdFull
+//! [`NodeIdShort`]: NodeIdShort
 //! [`Message`]: crate::proto::adnl::Message
 
 use std::sync::Arc;
@@ -80,9 +80,11 @@ use std::sync::Arc;
 use frunk_core::hlist::{HCons, HNil};
 use frunk_core::indices::Here;
 
-pub use self::keystore::Keystore;
-pub use self::node::{AdnlNode, AdnlNodeMetrics, AdnlNodeOptions};
-pub use self::peer::{AdnlPeerFilter, NewPeerContext};
+pub use self::keystore::{Key, Keystore};
+pub use self::node::{Node, NodeMetrics, NodeOptions};
+pub use self::node_id::{ComputeNodeIds, NodeIdFull, NodeIdShort};
+pub use self::peer::{NewPeerContext, PeerFilter};
+pub use self::peers_set::PeersSet;
 
 use crate::utils::{NetworkBuilder, PackedSocketAddr};
 
@@ -91,8 +93,10 @@ mod encryption;
 mod handshake;
 mod keystore;
 mod node;
+mod node_id;
 mod packet_view;
 mod peer;
+mod peers_set;
 mod ping_subscriber;
 mod queries_cache;
 mod socket;
@@ -102,14 +106,14 @@ impl NetworkBuilder<HNil, Here> {
     pub fn with_adnl<T>(
         socket_addr: T,
         keystore: Keystore,
-        options: AdnlNodeOptions,
-    ) -> NetworkBuilder<HCons<Arc<AdnlNode>, HNil>, Here>
+        options: NodeOptions,
+    ) -> NetworkBuilder<HCons<Arc<Node>, HNil>, Here>
     where
         T: Into<PackedSocketAddr>,
     {
         NetworkBuilder(
             HCons {
-                head: AdnlNode::new(socket_addr, keystore, options, None),
+                head: Node::new(socket_addr, keystore, options, None),
                 tail: HNil,
             },
             Default::default(),
@@ -117,8 +121,8 @@ impl NetworkBuilder<HNil, Here> {
     }
 }
 
-impl<I> NetworkBuilder<HCons<Arc<AdnlNode>, HNil>, I> {
-    pub fn build(self) -> Arc<AdnlNode> {
+impl<I> NetworkBuilder<HCons<Arc<Node>, HNil>, I> {
+    pub fn build(self) -> Arc<Node> {
         self.0.head
     }
 }

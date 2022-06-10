@@ -1,6 +1,6 @@
 [package]
 name = "everscale-network"
-version = "0.2.4"
+version = "0.3.0"
 description = "Implementation of the network part of the Everscale blockchain"
 repository = "https://github.com/broxus/everscale-network"
 authors = ["Ivan Kalinin <i.kalinin@dexpa.io>"]
@@ -52,8 +52,6 @@ tokio = { version = "1", features = ["rt-multi-thread", "parking_lot"] }
 [features]
 default = ["log", "rldp", "dht", "overlay"]
 log = ["tracing/log"]
-pkg-config = ["zstd?/pkg-config"]
 rldp = ["dep:everscale-raptorq", "dep:zstd"]
 dht = []
 overlay = ["rldp", "dep:crossbeam-queue"]
-full = ["rldp", "dht", "overlay"]

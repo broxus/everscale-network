@@ -9,16 +9,17 @@ use tokio::net::UdpSocket;
 
 use crate::adnl::channel::*;
 use crate::adnl::handshake::*;
+use crate::adnl::node_id::{NodeIdFull, NodeIdShort};
 use crate::adnl::packet_view::*;
 use crate::adnl::peer::*;
 use crate::adnl::queries_cache::*;
 use crate::adnl::transfer::*;
-use crate::adnl::AdnlNode;
+use crate::adnl::Node;
 use crate::proto;
 use crate::subscriber::*;
 use crate::utils::*;
 
-impl AdnlNode {
+impl Node {
     /// Starts a process that listens for and processes packets from the UDP socket
     pub(super) fn start_receiver(
         self: &Arc<Self>,
@@ -29,7 +30,7 @@ impl AdnlNode {
         use futures_util::future::{select, Either};
 
         struct ReceiverContext {
-            node: Arc<AdnlNode>,
+            node: Arc<Node>,
             message_subscribers: Vec<Arc<dyn MessageSubscriber>>,
             query_subscribers: Vec<Arc<dyn QuerySubscriber>>,
         }
@@ -173,8 +174,8 @@ impl AdnlNode {
 
     async fn process_message(
         self: &Arc<Self>,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
+        local_id: &NodeIdShort,
+        peer_id: &NodeIdShort,
         message: proto::adnl::Message<'_>,
         message_subscribers: &[Arc<dyn MessageSubscriber>],
         query_subscribers: &[Arc<dyn QuerySubscriber>],
@@ -317,8 +318,8 @@ impl AdnlNode {
 
     fn process_message_confirm_channel(
         &self,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
+        local_id: &NodeIdShort,
+        peer_id: &NodeIdShort,
         peer_channel_public_key: ed25519::PublicKey,
         peer_channel_date: u32,
     ) -> Result<()> {
@@ -333,8 +334,8 @@ impl AdnlNode {
 
     fn process_message_create_channel(
         &self,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
+        local_id: &NodeIdShort,
+        peer_id: &NodeIdShort,
         peer_channel_public_key: ed25519::PublicKey,
         peer_channel_date: u32,
     ) -> Result<()> {
@@ -352,10 +353,10 @@ impl AdnlNode {
         &self,
         raw_packet: &PacketView<'_>,
         packet: &mut proto::adnl::IncomingPacketContents<'_>,
-        local_id: &AdnlNodeIdShort,
-        peer_id: Option<AdnlNodeIdShort>,
+        local_id: &NodeIdShort,
+        peer_id: Option<NodeIdShort>,
         priority: bool,
-    ) -> Result<Option<AdnlNodeIdShort>> {
+    ) -> Result<Option<NodeIdShort>> {
         use std::cmp::Ordering;
 
         fn verify(
@@ -392,7 +393,7 @@ impl AdnlNode {
             }
             (peer_id, true)
         } else if let Some(public_key) = packet.from {
-            let full_id: AdnlNodeIdFull = public_key.try_into()?;
+            let full_id: NodeIdFull = public_key.try_into()?;
             let peer_id = full_id.compute_short_id();
 
             if matches!(packet.from_short, Some(id) if peer_id.as_slice() != id) {
@@ -419,7 +420,7 @@ impl AdnlNode {
 
             (peer_id, false)
         } else if let Some(peer_id) = packet.from_short {
-            (AdnlNodeIdShort::new(*peer_id), true)
+            (NodeIdShort::new(*peer_id), true)
         } else {
             return Err(AdnlPacketError::NoKeyDataInPacket.into());
         };
@@ -497,8 +498,8 @@ impl AdnlNode {
 
     fn create_channel(
         &self,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
+        local_id: &NodeIdShort,
+        peer_id: &NodeIdShort,
         peer_channel_public_key: ed25519::PublicKey,
         peer_channel_date: u32,
         context: ChannelCreationContext,
@@ -523,7 +524,7 @@ impl AdnlNode {
                     return Ok(());
                 }
 
-                let new_channel = Arc::new(AdnlChannel::new(
+                let new_channel = Arc::new(Channel::new(
                     *local_id,
                     *peer_id,
                     peer.channel_key(),
@@ -549,7 +550,7 @@ impl AdnlNode {
             }
             Entry::Vacant(entry) => {
                 let new_channel = entry
-                    .insert(Arc::new(AdnlChannel::new(
+                    .insert(Arc::new(Channel::new(
                         *local_id,
                         *peer_id,
                         peer.channel_key(),
@@ -577,8 +578,8 @@ impl AdnlNode {
 
 /// Duplicated channel
 pub enum ChannelReceiver {
-    Ordinary(Arc<AdnlChannel>),
-    Priority(Arc<AdnlChannel>),
+    Ordinary(Arc<Channel>),
+    Priority(Arc<Channel>),
 }
 
 async fn process_message_custom<'a>(

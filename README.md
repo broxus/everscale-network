@@ -5,11 +5,9 @@ Implementation of the network part of the Everscale blockchain.
 ### Network stack
 
 ```text
-┌────────────────────────────────┐
-│  Network                       │ - Network: Blockchain-specific network interface
-│          ┌─────────────────────┤
-│          │            Overlay  │ - Overlay: Virtual subnetwork
-├──────────┼──────────┐          │ - DHT: Kademlia-like Distributed Hash Table
+           ┌─────────────────────┐
+           │            Overlay  │ - Overlay: Virtual subnetwork
+┌──────────┼──────────┐          │ - DHT: Kademlia-like Distributed Hash Table
 │    DHT   │   RLDP   │          │ - RLDP: Reliable Large Datagram Protocol
 ├──────────┴──────────┴──────────┤
 │              ADNL              │ - ADNL: Abstract Data Network Layer
@@ -24,10 +22,10 @@ Implementation of the network part of the Everscale blockchain.
 use std::net::SocketAddrV4;
 
 use anyhow::Result;
-use everscale_network::{Keystore, NetworkBuilder};
+use everscale_network::{adnl, NetworkBuilder};
 use tl_proto::TlWrite;
 
-#[derive(TlWrite)]
+#[derive(TlWrite, TlRead)]
 #[tl(boxed, id = 0x11223344)]
 struct MyCustomData {
     counter: u32,
@@ -40,7 +38,7 @@ async fn example() -> Result<()> {
     let socket_addr = "1.2.3.4:10000".parse::<SocketAddrV4>()?;
 
     // Create and fill keystore
-    let keystore = Keystore::builder()
+    let keystore = adnl::Keystore::builder()
         .with_tagged_key([1u8; 32], DHT_KEY_TAG)?
         .build();
 

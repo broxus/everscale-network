@@ -11,21 +11,21 @@ use futures_util::{FutureExt, StreamExt};
 use tl_proto::TlRead;
 
 use super::streams::DhtValuesStream;
-use super::DhtNode;
+use super::Node;
 use crate::proto;
 
 /// Future for the `DhtNode::store_value` method.
 #[must_use = "futures do nothing unless polled"]
-pub struct DhtStoreValue {
-    dht: Arc<DhtNode>,
+pub struct StoreValue {
+    dht: Arc<Node>,
     key: proto::dht::KeyOwned,
     query: Bytes,
     futures: FuturesUnordered<StoreFuture>,
     started: bool,
 }
 
-impl DhtStoreValue {
-    pub(super) fn new(dht: Arc<DhtNode>, value: proto::dht::Value<'_>) -> Result<Self> {
+impl StoreValue {
+    pub(super) fn new(dht: Arc<Node>, value: proto::dht::Value<'_>) -> Result<Self> {
         dht.storage().insert(value)?;
 
         let key = value.key.key.as_equivalent_owned();
@@ -56,7 +56,7 @@ impl DhtStoreValue {
     pub fn only_locally(self) {}
 }
 
-impl Future for DhtStoreValue {
+impl Future for StoreValue {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -84,7 +84,7 @@ impl Future for DhtStoreValue {
 /// Future for the `DhtStoreValue::ensure_stored` method.
 #[must_use = "futures do nothing unless polled"]
 pub struct DhtStoreValueWithCheck<T, FV> {
-    store_value: DhtStoreValue,
+    store_value: StoreValue,
     find_value: Option<DhtValuesStream<T>>,
     check_value: FV,
     check_all: bool,

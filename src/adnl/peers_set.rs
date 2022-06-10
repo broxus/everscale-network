@@ -1,17 +1,18 @@
 use parking_lot::{RwLock, RwLockReadGuard};
 use rand::seq::SliceRandom;
 
-use super::node_id::*;
+use super::node_id::NodeIdShort;
 use crate::utils::{FxDashSet, FxHashMap};
 
-pub struct PeersCache {
-    state: RwLock<PeersCacheState>,
+/// A set of unique short node ids
+pub struct PeersSet {
+    state: RwLock<PeersSetState>,
 }
 
-impl PeersCache {
+impl PeersSet {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            state: RwLock::new(PeersCacheState {
+            state: RwLock::new(PeersSetState {
                 version: 0,
                 cache: Default::default(),
                 index: Default::default(),
@@ -25,11 +26,11 @@ impl PeersCache {
         self.state.read().version
     }
 
-    pub fn contains(&self, peer: &AdnlNodeIdShort) -> bool {
+    pub fn contains(&self, peer: &NodeIdShort) -> bool {
         self.state.read().cache.contains_key(peer)
     }
 
-    pub fn get(&self, index: usize) -> Option<AdnlNodeIdShort> {
+    pub fn get(&self, index: usize) -> Option<NodeIdShort> {
         self.state.read().index.get(index).cloned()
     }
 
@@ -48,8 +49,8 @@ impl PeersCache {
     pub fn get_random_peers(
         &self,
         amount: usize,
-        except: Option<&AdnlNodeIdShort>,
-    ) -> Vec<AdnlNodeIdShort> {
+        except: Option<&NodeIdShort>,
+    ) -> Vec<NodeIdShort> {
         let state = self.state.read();
 
         let items = state
@@ -66,13 +67,17 @@ impl PeersCache {
         }
     }
 
-    /// NOTE: will deadlock if `other` is the same as self
     pub fn randomly_fill_from(
         &self,
-        other: &PeersCache,
+        other: &PeersSet,
         amount: usize,
-        except: Option<&FxDashSet<AdnlNodeIdShort>>,
+        except: Option<&FxDashSet<NodeIdShort>>,
     ) {
+        // NOTE: early return, otherwise it will deadlock if `other` is the same as self
+        if std::ptr::eq(self, other) {
+            return;
+        }
+
         let selected_amount = match except {
             Some(peers) => amount + peers.len(),
             None => amount,
@@ -91,37 +96,40 @@ impl PeersCache {
                     .filter(|peer_id| !except.contains(peer_id))
                     .take(amount)
                     .for_each(|peer_id| {
-                        state.put(peer_id);
+                        state.insert(peer_id);
                     });
             }
             None => new_peers.for_each(|peer_id| {
-                state.put(peer_id);
+                state.insert(peer_id);
             }),
         }
     }
 
-    pub fn put(&self, peer_id: AdnlNodeIdShort) -> bool {
-        self.state.write().put(peer_id)
+    /// Adds a value to the set.
+    ///
+    /// If the set did not have this value present, `true` is returned.
+    pub fn insert(&self, peer_id: NodeIdShort) -> bool {
+        self.state.write().insert(peer_id)
     }
 
     pub fn extend<I>(&self, peers: I)
     where
-        I: IntoIterator<Item = AdnlNodeIdShort>,
+        I: IntoIterator<Item = NodeIdShort>,
     {
         let mut state = self.state.write();
         for peer_id in peers.into_iter() {
-            state.put(peer_id);
+            state.insert(peer_id);
         }
     }
 }
 
 pub struct PeersCacheIter<'a> {
-    _state: RwLockReadGuard<'a, PeersCacheState>,
-    iter: std::slice::Iter<'a, AdnlNodeIdShort>,
+    _state: RwLockReadGuard<'a, PeersSetState>,
+    iter: std::slice::Iter<'a, NodeIdShort>,
 }
 
 impl<'a> PeersCacheIter<'a> {
-    fn new(state: RwLockReadGuard<'a, PeersCacheState>) -> Self {
+    fn new(state: RwLockReadGuard<'a, PeersSetState>) -> Self {
         // SAFETY: index array lifetime is bounded to the lifetime of the `RwLockReadGuard`
         let iter = unsafe {
             std::slice::from_raw_parts::<'a>(state.index.as_ptr(), state.index.len()).iter()
@@ -134,7 +142,7 @@ impl<'a> PeersCacheIter<'a> {
 }
 
 impl<'a> Iterator for PeersCacheIter<'a> {
-    type Item = &'a AdnlNodeIdShort;
+    type Item = &'a NodeIdShort;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next()
@@ -145,17 +153,17 @@ impl<'a> Iterator for PeersCacheIter<'a> {
     }
 }
 
-impl IntoIterator for PeersCache {
-    type Item = AdnlNodeIdShort;
-    type IntoIter = std::vec::IntoIter<AdnlNodeIdShort>;
+impl IntoIterator for PeersSet {
+    type Item = NodeIdShort;
+    type IntoIter = std::vec::IntoIter<NodeIdShort>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.state.into_inner().index.into_iter()
     }
 }
 
-impl<'a> IntoIterator for &'a PeersCache {
-    type Item = &'a AdnlNodeIdShort;
+impl<'a> IntoIterator for &'a PeersSet {
+    type Item = &'a NodeIdShort;
     type IntoIter = PeersCacheIter<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -163,16 +171,16 @@ impl<'a> IntoIterator for &'a PeersCache {
     }
 }
 
-struct PeersCacheState {
+struct PeersSetState {
     version: u64,
-    cache: FxHashMap<AdnlNodeIdShort, u32>,
-    index: Vec<AdnlNodeIdShort>,
+    cache: FxHashMap<NodeIdShort, u32>,
+    index: Vec<NodeIdShort>,
     capacity: u32,
     upper: u32,
 }
 
-impl PeersCacheState {
-    fn put(&mut self, peer_id: AdnlNodeIdShort) -> bool {
+impl PeersSetState {
+    fn insert(&mut self, peer_id: NodeIdShort) -> bool {
         use std::collections::hash_map::Entry;
 
         // Insert new peer into cache
@@ -226,28 +234,28 @@ mod tests {
 
     #[test]
     fn test_insertion() {
-        let cache = PeersCache::with_capacity(10);
+        let cache = PeersSet::with_capacity(10);
 
-        let peer_id = AdnlNodeIdShort::random();
-        assert!(cache.put(peer_id));
-        assert!(!cache.put(peer_id));
+        let peer_id = NodeIdShort::random();
+        assert!(cache.insert(peer_id));
+        assert!(!cache.insert(peer_id));
     }
 
     #[test]
     fn test_entries_replacing() {
-        let cache = PeersCache::with_capacity(3);
+        let cache = PeersSet::with_capacity(3);
 
-        let peers = std::iter::repeat_with(AdnlNodeIdShort::random)
+        let peers = std::iter::repeat_with(NodeIdShort::random)
             .take(4)
             .collect::<Vec<_>>();
 
         for peer_id in peers.iter().take(3) {
-            assert!(cache.put(*peer_id));
+            assert!(cache.insert(*peer_id));
         }
 
         assert!(cache.contains(&peers[0]));
 
-        cache.put(peers[3]);
+        cache.insert(peers[3]);
         assert!(cache.contains(&peers[3]));
 
         assert!(!cache.contains(&peers[0]));
@@ -255,24 +263,24 @@ mod tests {
 
     #[test]
     fn test_full_entries_replacing() {
-        let cache = PeersCache::with_capacity(3);
+        let cache = PeersSet::with_capacity(3);
 
-        let peers = std::iter::repeat_with(AdnlNodeIdShort::random)
+        let peers = std::iter::repeat_with(NodeIdShort::random)
             .take(3)
             .collect::<Vec<_>>();
 
         for peer_id in peers.iter() {
-            assert!(cache.put(*peer_id));
+            assert!(cache.insert(*peer_id));
         }
 
         for peer_id in peers.iter() {
             assert!(cache.contains(peer_id));
         }
 
-        std::iter::repeat_with(AdnlNodeIdShort::random)
+        std::iter::repeat_with(NodeIdShort::random)
             .take(6)
             .for_each(|peer_id| {
-                cache.put(peer_id);
+                cache.insert(peer_id);
             });
 
         for peer_id in peers.iter() {
@@ -282,14 +290,14 @@ mod tests {
 
     #[test]
     fn test_iterator() {
-        let cache = PeersCache::with_capacity(10);
+        let cache = PeersSet::with_capacity(10);
 
-        let peers = std::iter::repeat_with(AdnlNodeIdShort::random)
+        let peers = std::iter::repeat_with(NodeIdShort::random)
             .take(3)
             .collect::<Vec<_>>();
 
         for peer_id in peers.iter() {
-            assert!(cache.put(*peer_id));
+            assert!(cache.insert(*peer_id));
         }
 
         assert_eq!(peers.len(), cache.iter().count());
@@ -300,21 +308,21 @@ mod tests {
 
     #[test]
     fn test_overlapping_insertion() {
-        let cache = PeersCache::with_capacity(10);
+        let cache = PeersSet::with_capacity(10);
 
         for i in 1..1000 {
-            assert!(cache.put(AdnlNodeIdShort::random()));
+            assert!(cache.insert(NodeIdShort::random()));
             assert_eq!(cache.len(), std::cmp::min(i, 10));
         }
     }
 
     #[test]
     fn test_random_peers() {
-        let cache = PeersCache::with_capacity(10);
-        std::iter::repeat_with(AdnlNodeIdShort::random)
+        let cache = PeersSet::with_capacity(10);
+        std::iter::repeat_with(NodeIdShort::random)
             .take(10)
             .for_each(|peer_id| {
-                cache.put(peer_id);
+                cache.insert(peer_id);
             });
 
         let peers = cache.get_random_peers(5, None);

@@ -5,10 +5,10 @@ use anyhow::Result;
 use crate::proto;
 use crate::subscriber::{QueryConsumingResult, QuerySubscriber, SubscriberContext};
 
-pub struct AdnlPingSubscriber;
+pub struct PingSubscriber;
 
 #[async_trait::async_trait]
-impl QuerySubscriber for AdnlPingSubscriber {
+impl QuerySubscriber for PingSubscriber {
     async fn try_consume_query<'a>(
         &self,
         _: SubscriberContext<'a>,

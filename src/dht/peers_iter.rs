@@ -1,11 +1,11 @@
 use super::buckets::get_affinity;
+use super::node::Node;
 use super::storage::StorageKeyId;
-use super::DhtNode;
-use crate::utils::*;
+use crate::adnl;
 
 pub struct PeersIter {
     key_id: StorageKeyId,
-    peer_ids: Vec<(u8, AdnlNodeIdShort)>,
+    peer_ids: Vec<(u8, adnl::NodeIdShort)>,
     index: usize,
 }
 
@@ -18,11 +18,11 @@ impl PeersIter {
         }
     }
 
-    pub fn next(&mut self) -> Option<AdnlNodeIdShort> {
+    pub fn next(&mut self) -> Option<adnl::NodeIdShort> {
         self.peer_ids.pop().map(|(_, peer_id)| peer_id)
     }
 
-    pub fn fill(&mut self, dht: &DhtNode, batch_len: Option<usize>) {
+    pub fn fill(&mut self, dht: &Node, batch_len: Option<usize>) {
         // Get next peer (skipping bad peers) and update the index
         while let Some(peer_id) = self.next_known_peer(dht) {
             let affinity = get_affinity(&self.key_id, peer_id.as_slice());
@@ -66,7 +66,7 @@ impl PeersIter {
         }
     }
 
-    fn next_known_peer(&mut self, dht: &DhtNode) -> Option<AdnlNodeIdShort> {
+    fn next_known_peer(&mut self, dht: &Node) -> Option<adnl::NodeIdShort> {
         loop {
             let peer_id = dht.known_peers().get(self.index);
             self.index += 1;

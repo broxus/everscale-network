@@ -12,18 +12,17 @@ use smallvec::SmallVec;
 use tl_proto::{HashWrapper, TlWrite};
 use tokio::sync::mpsc;
 
+use super::overlay_id::IdShort;
 use super::{broadcast_receiver::*, MAX_OVERLAY_PEERS};
-use crate::adnl::{AdnlNode, NewPeerContext};
+use crate::adnl;
 use crate::proto;
-use crate::rldp::decoder::RaptorQDecoder;
-use crate::rldp::encoder::RaptorQEncoder;
-use crate::rldp::RldpNode;
+use crate::rldp::{self, compression, RaptorQDecoder, RaptorQEncoder};
 use crate::utils::*;
 
 /// Overlay shard configuration
 #[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
-pub struct OverlayShardOptions {
+pub struct ShardOptions {
     /// Instant random peers list length. Used to select neighbours.
     ///
     /// Default: `20`
@@ -50,7 +49,7 @@ pub struct OverlayShardOptions {
     pub overlay_peers_timeout_ms: u64,
 
     /// Packets with length bigger than this will be sent using FEC broadcast.
-    /// See [`OverlayShard::broadcast`]
+    /// See [`Shard::broadcast`]
     ///
     /// Default: `768` bytes
     pub max_ordinary_broadcast_len: usize,
@@ -91,7 +90,7 @@ pub struct OverlayShardOptions {
     pub force_compression: bool,
 }
 
-impl Default for OverlayShardOptions {
+impl Default for ShardOptions {
     fn default() -> Self {
         Self {
             max_shard_peers: 20,
@@ -112,13 +111,13 @@ impl Default for OverlayShardOptions {
 }
 
 /// P2P messages distribution layer
-pub struct OverlayShard {
+pub struct Shard {
     /// Unique overlay id
-    overlay_id: OverlayIdShort,
+    overlay_id: IdShort,
     /// Local ADNL key
-    node_key: Arc<StoredAdnlNodeKey>,
+    node_key: Arc<adnl::Key>,
     // Configuration
-    options: OverlayShardOptions,
+    options: ShardOptions,
 
     /// Broadcasts in progress
     owned_broadcasts: FxDashMap<BroadcastId, Arc<OwnedBroadcast>>,
@@ -133,15 +132,15 @@ pub struct OverlayShard {
     received_broadcasts: Arc<BroadcastReceiver<IncomingBroadcastInfo>>,
 
     /// Raw overlay nodes
-    nodes: FxDashMap<AdnlNodeIdShort, proto::overlay::NodeOwned>,
+    nodes: FxDashMap<adnl::NodeIdShort, proto::overlay::NodeOwned>,
     /// Peers to exclude from random selection
-    ignored_peers: FxDashSet<AdnlNodeIdShort>,
+    ignored_peers: FxDashSet<adnl::NodeIdShort>,
     /// All known peers
-    known_peers: PeersCache,
+    known_peers: adnl::PeersSet,
     /// Known peers subset
-    random_peers: PeersCache,
+    random_peers: adnl::PeersSet,
     /// Random peers subset
-    neighbours: PeersCache,
+    neighbours: adnl::PeersSet,
 
     /// Serialized [`proto::rpc::OverlayQuery`] with own overlay id
     query_prefix: Vec<u8>,
@@ -149,12 +148,12 @@ pub struct OverlayShard {
     message_prefix: Vec<u8>,
 }
 
-impl OverlayShard {
+impl Shard {
     /// Create new overlay node on top of the given ADNL node
     pub(super) fn new(
-        node_key: Arc<StoredAdnlNodeKey>,
-        overlay_id: OverlayIdShort,
-        options: OverlayShardOptions,
+        node_key: Arc<adnl::Key>,
+        overlay_id: IdShort,
+        options: ShardOptions,
     ) -> Arc<Self> {
         let query_prefix = tl_proto::serialize(proto::rpc::OverlayQuery {
             overlay: overlay_id.as_slice(),
@@ -174,9 +173,9 @@ impl OverlayShard {
             received_broadcasts: Arc::new(BroadcastReceiver::default()),
             nodes: FxDashMap::default(),
             ignored_peers: FxDashSet::default(),
-            known_peers: PeersCache::with_capacity(MAX_OVERLAY_PEERS),
-            random_peers: PeersCache::with_capacity(options.max_shard_peers),
-            neighbours: PeersCache::with_capacity(options.max_shard_neighbours),
+            known_peers: adnl::PeersSet::with_capacity(MAX_OVERLAY_PEERS),
+            random_peers: adnl::PeersSet::with_capacity(options.max_shard_peers),
+            neighbours: adnl::PeersSet::with_capacity(options.max_shard_neighbours),
             query_prefix,
             message_prefix,
         });
@@ -212,7 +211,7 @@ impl OverlayShard {
 
     /// Configuration
     #[inline(always)]
-    pub fn options(&self) -> &OverlayShardOptions {
+    pub fn options(&self) -> &ShardOptions {
         &self.options
     }
 
@@ -231,35 +230,35 @@ impl OverlayShard {
     }
 
     /// Short overlay id
-    pub fn id(&self) -> &OverlayIdShort {
+    pub fn id(&self) -> &IdShort {
         &self.overlay_id
     }
 
     /// Returns local ADNL key for public overlay
-    pub fn overlay_key(&self) -> &Arc<StoredAdnlNodeKey> {
+    pub fn overlay_key(&self) -> &Arc<adnl::Key> {
         &self.node_key
     }
 
     /// Verifies and adds new peer to the overlay. Returns `Some` short peer id
     /// if new peer was successfully added and `None` if peer already existed.
     ///
-    /// See [`OverlayShard::add_public_peers`] for multiple peers.
+    /// See [`Shard::add_public_peers`] for multiple peers.
     pub fn add_public_peer(
         &self,
-        adnl: &AdnlNode,
+        adnl: &adnl::Node,
         ip_address: PackedSocketAddr,
         node: proto::overlay::Node<'_>,
-    ) -> Result<Option<AdnlNodeIdShort>> {
-        if let Err(e) = verify_overlay_node(&self.overlay_id, &node) {
+    ) -> Result<Option<adnl::NodeIdShort>> {
+        if let Err(e) = self.overlay_id.verify_overlay_node(&node) {
             tracing::warn!("Error during overlay peer verification: {e:?}");
             return Ok(None);
         }
 
-        let peer_id_full = AdnlNodeIdFull::try_from(node.id)?;
+        let peer_id_full = adnl::NodeIdFull::try_from(node.id)?;
         let peer_id = peer_id_full.compute_short_id();
 
         let is_new_peer = adnl.add_peer(
-            NewPeerContext::PublicOverlay,
+            adnl::NewPeerContext::PublicOverlay,
             self.node_key.id(),
             &peer_id,
             ip_address,
@@ -275,23 +274,27 @@ impl OverlayShard {
 
     /// Verifies and adds new peers to the overlay. Returns a list of successfully added peers.
     ///
-    /// See [`OverlayShard::add_public_peer`] for single peer.
-    pub fn add_public_peers<'a, I>(&self, adnl: &AdnlNode, nodes: I) -> Result<Vec<AdnlNodeIdShort>>
+    /// See [`Shard::add_public_peer`] for single peer.
+    pub fn add_public_peers<'a, I>(
+        &self,
+        adnl: &adnl::Node,
+        nodes: I,
+    ) -> Result<Vec<adnl::NodeIdShort>>
     where
         I: IntoIterator<Item = (PackedSocketAddr, proto::overlay::Node<'a>)>,
     {
         let mut result = Vec::new();
         for (ip_address, node) in nodes {
-            if let Err(e) = verify_overlay_node(&self.overlay_id, &node) {
+            if let Err(e) = self.overlay_id.verify_overlay_node(&node) {
                 tracing::debug!("Error during overlay peer verification: {e:?}");
                 continue;
             }
 
-            let peer_id_full = AdnlNodeIdFull::try_from(node.id)?;
+            let peer_id_full = adnl::NodeIdFull::try_from(node.id)?;
             let peer_id = peer_id_full.compute_short_id();
 
             let is_new_peer = adnl.add_peer(
-                NewPeerContext::PublicOverlay,
+                adnl::NewPeerContext::PublicOverlay,
                 self.node_key.id(),
                 &peer_id,
                 ip_address,
@@ -308,7 +311,7 @@ impl OverlayShard {
     }
 
     /// Removes peer from random peers and adds it to ignored peers
-    pub fn delete_public_peer(&self, peer_id: &AdnlNodeIdShort) -> bool {
+    pub fn delete_public_peer(&self, peer_id: &adnl::NodeIdShort) -> bool {
         if !self.ignored_peers.insert(*peer_id) {
             return false;
         }
@@ -319,7 +322,7 @@ impl OverlayShard {
     }
 
     /// Fill `dst` with `amount` peers from known peers
-    pub fn write_cached_peers(&self, amount: usize, dst: &PeersCache) {
+    pub fn write_cached_peers(&self, amount: usize, dst: &adnl::PeersSet) {
         dst.randomly_fill_from(&self.known_peers, amount, Some(&self.ignored_peers));
     }
 
@@ -337,11 +340,11 @@ impl OverlayShard {
 
     /// Sends direct ADNL message ([`proto::adnl::Message::Custom`]) to the given peer.
     ///
-    /// NOTE: Local id ([`OverlayShard::overlay_key`]) will be used as sender
+    /// NOTE: Local id ([`Shard::overlay_key`]) will be used as sender
     pub fn send_message(
         &self,
-        adnl: &AdnlNode,
-        peer_id: &AdnlNodeIdShort,
+        adnl: &adnl::Node,
+        peer_id: &adnl::NodeIdShort,
         data: &[u8],
     ) -> Result<()> {
         let local_id = self.overlay_key().id();
@@ -354,11 +357,11 @@ impl OverlayShard {
 
     /// Sends ADNL query directly to the given peer. In case of timeout returns `Ok(None)`
     ///
-    /// NOTE: Local id ([`OverlayShard::overlay_key`]) will be used as sender
+    /// NOTE: Local id ([`Shard::overlay_key`]) will be used as sender
     pub async fn adnl_query<Q>(
         &self,
-        adnl: &AdnlNode,
-        peer_id: &AdnlNodeIdShort,
+        adnl: &adnl::Node,
+        peer_id: &adnl::NodeIdShort,
         query: Q,
         timeout: Option<u64>,
     ) -> Result<Option<Vec<u8>>>
@@ -378,11 +381,11 @@ impl OverlayShard {
 
     /// Sends RLDP query directly to the given peer. In case of timeout returns `Ok((None, max_timeout))`
     ///
-    /// NOTE: Local id ([`OverlayShard::overlay_key`]) will be used as sender
+    /// NOTE: Local id ([`Shard::overlay_key`]) will be used as sender
     pub async fn rldp_query(
         &self,
-        rldp: &RldpNode,
-        peer_id: &AdnlNodeIdShort,
+        rldp: &rldp::Node,
+        peer_id: &adnl::NodeIdShort,
         data: Vec<u8>,
         roundtrip: Option<u64>,
     ) -> Result<(Option<Vec<u8>>, u64)> {
@@ -392,14 +395,14 @@ impl OverlayShard {
 
     /// Distributes provided message to the neighbours subset.
     ///
-    /// See `broadcast_target_count` in [`OverlayShardOptions`]
+    /// See `broadcast_target_count` in [`ShardOptions`]
     ///
     /// NOTE: If `data` len is greater than
     pub fn broadcast(
         self: &Arc<Self>,
-        adnl: &Arc<AdnlNode>,
+        adnl: &Arc<adnl::Node>,
         data: Vec<u8>,
-        source: Option<&Arc<StoredAdnlNodeKey>>,
+        source: Option<&Arc<adnl::Key>>,
     ) -> OutgoingBroadcastInfo {
         let local_id = self.overlay_key().id();
 
@@ -452,11 +455,11 @@ impl OverlayShard {
     /// Exchanges random peers with the specified peer. Returns `Ok(None)` in case of timeout
     pub async fn exchange_random_peers(
         &self,
-        adnl: &AdnlNode,
-        peer_id: &AdnlNodeIdShort,
-        existing_peers: &FxDashSet<AdnlNodeIdShort>,
+        adnl: &adnl::Node,
+        peer_id: &adnl::NodeIdShort,
+        existing_peers: &FxDashSet<adnl::NodeIdShort>,
         timeout: Option<u64>,
-    ) -> Result<Option<Vec<AdnlNodeIdShort>>> {
+    ) -> Result<Option<Vec<adnl::NodeIdShort>>> {
         let query = proto::rpc::OverlayGetRandomPeersOwned {
             peers: self.prepare_random_peers(),
         };
@@ -474,7 +477,7 @@ impl OverlayShard {
 
         let nodes = nodes
             .into_iter()
-            .filter_map(|node| match AdnlNodeIdFull::try_from(node.id) {
+            .filter_map(|node| match adnl::NodeIdFull::try_from(node.id) {
                 Ok(full_id) => {
                     let peer_id = full_id.compute_short_id();
                     if !existing_peers.contains(&peer_id) {
@@ -495,9 +498,9 @@ impl OverlayShard {
     /// Process ordinary broadcast
     pub(super) async fn receive_broadcast(
         self: &Arc<Self>,
-        adnl: &AdnlNode,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
+        adnl: &adnl::Node,
+        local_id: &adnl::NodeIdShort,
+        peer_id: &adnl::NodeIdShort,
         broadcast: proto::overlay::OverlayBroadcast<'_>,
         raw_data: &[u8],
     ) -> Result<()> {
@@ -505,7 +508,7 @@ impl OverlayShard {
             return Ok(());
         }
 
-        let node_id = AdnlNodeIdFull::try_from(broadcast.src)?;
+        let node_id = adnl::NodeIdFull::try_from(broadcast.src)?;
         let node_peer_id = node_id.compute_short_id();
         let source = match broadcast.flags {
             flags if flags & BROADCAST_FLAG_ANY_SENDER == 0 => Some(node_peer_id),
@@ -563,9 +566,9 @@ impl OverlayShard {
     /// Process FEC broadcast
     pub(super) async fn receive_fec_broadcast(
         self: &Arc<Self>,
-        adnl: &AdnlNode,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
+        adnl: &adnl::Node,
+        local_id: &adnl::NodeIdShort,
+        peer_id: &adnl::NodeIdShort,
         broadcast: proto::overlay::OverlayBroadcastFec<'_>,
         raw_data: &[u8],
     ) -> Result<()> {
@@ -576,7 +579,7 @@ impl OverlayShard {
         }
 
         let broadcast_id = *broadcast.data_hash;
-        let node_id = AdnlNodeIdFull::try_from(broadcast.src)?;
+        let node_id = adnl::NodeIdFull::try_from(broadcast.src)?;
         let source = node_id.compute_short_id();
 
         let signature = match broadcast.signature.len() {
@@ -668,10 +671,10 @@ impl OverlayShard {
     /// Send ordinary broadcast
     fn send_broadcast(
         self: &Arc<Self>,
-        adnl: &AdnlNode,
-        local_id: &AdnlNodeIdShort,
+        adnl: &adnl::Node,
+        local_id: &adnl::NodeIdShort,
         mut data: Vec<u8>,
-        key: &Arc<StoredAdnlNodeKey>,
+        key: &Arc<adnl::Key>,
     ) -> OutgoingBroadcastInfo {
         let date = now();
         let broadcast_to_sign = make_broadcast_to_sign(&data, date, None);
@@ -717,10 +720,10 @@ impl OverlayShard {
     /// Send FEC broadcast
     fn send_fec_broadcast(
         self: &Arc<Self>,
-        adnl: &Arc<AdnlNode>,
-        local_id: &AdnlNodeIdShort,
+        adnl: &Arc<adnl::Node>,
+        local_id: &adnl::NodeIdShort,
         mut data: Vec<u8>,
-        key: &Arc<StoredAdnlNodeKey>,
+        key: &Arc<adnl::Key>,
     ) -> OutgoingBroadcastInfo {
         let broadcast_id = sha2::Sha256::digest(&data).into();
         if !self.create_broadcast(broadcast_id) {
@@ -806,7 +809,7 @@ impl OverlayShard {
             }
 
             tracing::trace!("{node:?}");
-            if let Err(e) = verify_overlay_node(&self.overlay_id, node) {
+            if let Err(e) = self.overlay_id.verify_overlay_node(node) {
                 tracing::warn!("Error during overlay peer verification: {e:?}");
                 return false;
             }
@@ -824,7 +827,7 @@ impl OverlayShard {
         let mut nodes = SmallVec::with_capacity(MAX_PEERS_IN_RESPONSE + 1);
         nodes.push(self.sign_local_node());
 
-        let peers = PeersCache::with_capacity(MAX_PEERS_IN_RESPONSE);
+        let peers = adnl::PeersSet::with_capacity(MAX_PEERS_IN_RESPONSE);
         peers.randomly_fill_from(&self.random_peers, MAX_PEERS_IN_RESPONSE, None);
         for peer_id in &peers {
             if let Some(node) = self.nodes.get(peer_id) {
@@ -844,18 +847,18 @@ impl OverlayShard {
     }
 
     /// Adds public peer info
-    fn insert_public_peer(&self, peer_id: &AdnlNodeIdShort, node: proto::overlay::Node<'_>) {
+    fn insert_public_peer(&self, peer_id: &adnl::NodeIdShort, node: proto::overlay::Node<'_>) {
         use dashmap::mapref::entry::Entry;
 
         self.ignored_peers.remove(peer_id);
-        self.known_peers.put(*peer_id);
+        self.known_peers.insert(*peer_id);
 
         if self.random_peers.len() < self.options.max_shard_peers {
-            self.random_peers.put(*peer_id);
+            self.random_peers.insert(*peer_id);
         }
 
         if self.neighbours.len() < self.options.max_shard_neighbours {
-            self.neighbours.put(*peer_id);
+            self.neighbours.insert(*peer_id);
         }
 
         match self.nodes.entry(*peer_id) {
@@ -888,7 +891,7 @@ impl OverlayShard {
         self: &Arc<Self>,
         fec_type: proto::rldp::RaptorQFecType,
         broadcast_id: BroadcastId,
-        peer_id: AdnlNodeIdShort,
+        peer_id: adnl::NodeIdShort,
         entry: VacantBroadcastEntry<'_>,
     ) -> Result<Arc<OwnedBroadcast>> {
         let (broadcast_tx, mut broadcast_rx) = mpsc::unbounded_channel();
@@ -985,7 +988,7 @@ impl OverlayShard {
     fn prepare_fec_broadcast(
         &self,
         transfer: &mut OutgoingFecTransfer,
-        key: &Arc<StoredAdnlNodeKey>,
+        key: &Arc<adnl::Key>,
     ) -> Result<Vec<u8>> {
         let chunk = transfer.encoder.encode(&mut transfer.seqno)?;
         let date = now();
@@ -1028,9 +1031,9 @@ impl OverlayShard {
     /// Sends ADNL messages to neighbours
     fn distribute_broadcast(
         &self,
-        adnl: &AdnlNode,
-        local_id: &AdnlNodeIdShort,
-        neighbours: &[AdnlNodeIdShort],
+        adnl: &adnl::Node,
+        local_id: &adnl::NodeIdShort,
+        neighbours: &[adnl::NodeIdShort],
         data: &[u8],
     ) {
         for peer_id in neighbours {
@@ -1135,13 +1138,13 @@ impl OverlayBroadcastToSign {
 fn make_broadcast_to_sign(
     data: &[u8],
     date: u32,
-    source: Option<&AdnlNodeIdShort>,
+    source: Option<&adnl::NodeIdShort>,
 ) -> OverlayBroadcastToSign {
     const BROADCAST_ID: u32 = 0x51fd789a;
 
     let mut broadcast_hash = sha2::Sha256::new();
     broadcast_hash.update(BROADCAST_ID.to_le_bytes());
-    broadcast_hash.update(source.map(AdnlNodeIdShort::as_slice).unwrap_or(&[0; 32]));
+    broadcast_hash.update(source.map(adnl::NodeIdShort::as_slice).unwrap_or(&[0; 32]));
     broadcast_hash.update(sha2::Sha256::digest(data).as_slice());
     broadcast_hash.update(BROADCAST_FLAG_ANY_SENDER.to_le_bytes());
     let broadcast_hash = broadcast_hash.finalize();
@@ -1160,7 +1163,7 @@ fn make_fec_part_to_sign(
     params: &proto::rldp::RaptorQFecType,
     part: &[u8],
     seqno: u32,
-    source: Option<AdnlNodeIdShort>,
+    source: Option<adnl::NodeIdShort>,
 ) -> OverlayBroadcastToSign {
     const BROADCAST_FEC_ID: u32 = 0xfb3155a6;
     const BROADCAST_FEC_PART_ID: u32 = 0xa46962d0;
@@ -1170,7 +1173,7 @@ fn make_fec_part_to_sign(
     broadcast_hash.update(
         source
             .as_ref()
-            .map(AdnlNodeIdShort::as_slice)
+            .map(adnl::NodeIdShort::as_slice)
             .unwrap_or(&[0; 32]),
     );
     broadcast_hash.update(&tl_proto::hash(params));
@@ -1196,7 +1199,7 @@ fn make_fec_part_to_sign(
 pub struct IncomingBroadcastInfo {
     pub packets: u32,
     pub data: Vec<u8>,
-    pub from: AdnlNodeIdShort,
+    pub from: adnl::NodeIdShort,
 }
 
 /// Sent overlay broadcast info
@@ -1210,7 +1213,7 @@ struct IncomingFecTransfer {
     completed: AtomicBool,
     history: PacketsHistory,
     broadcast_tx: BroadcastFecTx,
-    source: AdnlNodeIdShort,
+    source: adnl::NodeIdShort,
     updated_at: UpdatedAt,
 }
 
@@ -1227,7 +1230,7 @@ enum OwnedBroadcast {
 
 #[derive(Debug)]
 struct BroadcastFec {
-    node_id: AdnlNodeIdFull,
+    node_id: adnl::NodeIdFull,
     data_hash: BroadcastId,
     data_size: u32,
     flags: u32,

@@ -9,13 +9,15 @@ use tokio::sync::mpsc;
 
 use crate::adnl::channel::*;
 use crate::adnl::handshake::*;
+use crate::adnl::keystore::Key;
+use crate::adnl::node_id::NodeIdShort;
 use crate::adnl::peer::*;
-use crate::adnl::AdnlNode;
+use crate::adnl::Node;
 
 use crate::proto;
 use crate::utils::*;
 
-impl AdnlNode {
+impl Node {
     /// Starts a process that forwards packets from the sender queue to the UDP socket
     pub(super) fn start_sender(
         self: &Arc<Self>,
@@ -45,8 +47,8 @@ impl AdnlNode {
 
     pub(super) fn send_message(
         &self,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
+        local_id: &NodeIdShort,
+        peer_id: &NodeIdShort,
         message: proto::adnl::Message,
         priority: bool,
     ) -> Result<()> {
@@ -201,8 +203,8 @@ impl AdnlNode {
     /// Encodes and sends packet to the peer
     fn send_packet(
         &self,
-        peer_id: &AdnlNodeIdShort,
-        peer: &AdnlPeer,
+        peer_id: &NodeIdShort,
+        peer: &Peer,
         mut signer: MessageSigner,
         messages: proto::adnl::OutgoingMessages,
     ) -> Result<()> {
@@ -287,10 +289,10 @@ impl AdnlNode {
 #[derive(Copy, Clone)]
 enum MessageSigner<'a> {
     Channel {
-        channel: &'a Arc<AdnlChannel>,
+        channel: &'a Arc<Channel>,
         priority: bool,
     },
-    Random(&'a Arc<StoredAdnlNodeKey>),
+    Random(&'a Arc<Key>),
 }
 
 pub struct PacketToSend {

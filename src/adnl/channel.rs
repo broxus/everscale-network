@@ -5,11 +5,11 @@ use aes::cipher::{StreamCipher, StreamCipherSeek};
 use everscale_crypto::ed25519;
 
 use super::encryption::*;
+use super::node_id::NodeIdShort;
 use super::packet_view::*;
-use crate::utils::*;
 
 /// ADNL channel state
-pub struct AdnlChannel {
+pub struct Channel {
     /// Whether channel was confirmed by both sides
     ready: AtomicBool,
     /// Id and secret, used to encrypt outgoing messages
@@ -17,9 +17,9 @@ pub struct AdnlChannel {
     /// Id and secret, used to decrypt incoming messages
     channel_in: ChannelSide,
     /// Short id of the local peer for which this channel is established
-    local_id: AdnlNodeIdShort,
+    local_id: NodeIdShort,
     /// Short id of the remote peer for which this channel is established
-    peer_id: AdnlNodeIdShort,
+    peer_id: NodeIdShort,
     /// Public key of the keypair from the peer's side
     peer_channel_public_key: ed25519::PublicKey,
     /// Channel creation time
@@ -28,11 +28,11 @@ pub struct AdnlChannel {
     drop: AtomicU32,
 }
 
-impl AdnlChannel {
+impl Channel {
     /// Creates new channel state between `local_id` and `peer_id`
     pub fn new(
-        local_id: AdnlNodeIdShort,
-        peer_id: AdnlNodeIdShort,
+        local_id: NodeIdShort,
+        peer_id: NodeIdShort,
         channel_key: &ed25519::KeyPair,
         peer_channel_public_key: ed25519::PublicKey,
         peer_channel_date: u32,
@@ -109,13 +109,13 @@ impl AdnlChannel {
 
     /// Short id of the local peer for which this channel is established
     #[inline(always)]
-    pub fn local_id(&self) -> &AdnlNodeIdShort {
+    pub fn local_id(&self) -> &NodeIdShort {
         &self.local_id
     }
 
     /// Short id of the remote peer for which this channel is established
     #[inline(always)]
-    pub fn peer_id(&self) -> &AdnlNodeIdShort {
+    pub fn peer_id(&self) -> &NodeIdShort {
         &self.peer_id
     }
 
@@ -346,6 +346,8 @@ pub enum AdnlChannelError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adnl::ComputeNodeIds;
+    use crate::utils::now;
 
     #[test]
     fn test_encrypt_decrypt() {
@@ -357,7 +359,7 @@ mod tests {
         let (_, peer2_id) = peer2_key.compute_node_ids();
         let peer2_channel_key = ed25519::KeyPair::generate(&mut rand::thread_rng());
 
-        let channel12 = AdnlChannel::new(
+        let channel12 = Channel::new(
             peer1_id,
             peer2_id,
             &peer1_channel_key,
@@ -366,7 +368,7 @@ mod tests {
             ChannelCreationContext::CreateChannel,
         );
 
-        let channel21 = AdnlChannel::new(
+        let channel21 = Channel::new(
             peer2_id,
             peer1_id,
             &peer2_channel_key,

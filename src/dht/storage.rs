@@ -6,6 +6,8 @@ use smallvec::SmallVec;
 use tl_proto::{BoxedConstructor, HashWrapper, TlWrite};
 
 use super::DHT_KEY_NODES;
+use crate::adnl;
+use crate::overlay;
 use crate::proto;
 use crate::utils::*;
 
@@ -84,7 +86,7 @@ impl Storage {
     fn insert_signed_value(&self, mut value: proto::dht::Value<'_>) -> Result<bool> {
         use dashmap::mapref::entry::Entry;
 
-        let full_id = AdnlNodeIdFull::try_from(value.key.id)?;
+        let full_id = adnl::NodeIdFull::try_from(value.key.id)?;
 
         let key_signature = std::mem::take(&mut value.key.signature);
         full_id.verify(value.key.as_boxed(), key_signature)?;
@@ -120,7 +122,7 @@ impl Storage {
 
         let overlay_id = match value.key.id {
             everscale_crypto::tl::PublicKey::Overlay { .. } => {
-                OverlayIdShort::from(tl_proto::hash(value.key.id))
+                overlay::IdShort::from(tl_proto::hash(value.key.id))
             }
             _ => return Err(StorageError::InvalidKeyDescription.into()),
         };
@@ -136,7 +138,7 @@ impl Storage {
 
         let mut new_nodes = deserialize_overlay_nodes(value.value)?;
         new_nodes.retain(|node| {
-            if verify_overlay_node(&overlay_id, node).is_err() {
+            if overlay_id.verify_overlay_node(node).is_err() {
                 tracing::warn!("Bad overlay node: {node:?}");
                 false
             } else {

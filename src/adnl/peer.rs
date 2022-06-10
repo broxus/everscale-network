@@ -2,33 +2,34 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use everscale_crypto::ed25519;
 
+use super::node_id::{NodeIdFull, NodeIdShort};
 use crate::utils::*;
 
-pub type AdnlPeers = FxDashMap<AdnlNodeIdShort, AdnlPeer>;
+pub type Peers = FxDashMap<NodeIdShort, Peer>;
 
 /// Remote peer info
-pub struct AdnlPeer {
+pub struct Peer {
     /// Remove peer public key
-    id: AdnlNodeIdFull,
+    id: NodeIdFull,
     /// IPv4 address
     ip_address: AtomicU64,
     /// Adnl channel key pair to encrypt messages from our side
     channel_key: ed25519::KeyPair,
     /// Packets receiver state
-    receiver_state: AdnlPeerState,
+    receiver_state: PeerState,
     /// Packets sender state
-    sender_state: AdnlPeerState,
+    sender_state: PeerState,
 }
 
-impl AdnlPeer {
+impl Peer {
     /// Creates new peer with receiver state initialized with the local reinit date
-    pub fn new(local_reinit_date: u32, ip_address: PackedSocketAddr, id: AdnlNodeIdFull) -> Self {
+    pub fn new(local_reinit_date: u32, ip_address: PackedSocketAddr, id: NodeIdFull) -> Self {
         Self {
             id,
             ip_address: AtomicU64::new(ip_address.into()),
             channel_key: ed25519::KeyPair::generate(&mut rand::thread_rng()),
-            receiver_state: AdnlPeerState::for_receive_with_reinit_date(local_reinit_date),
-            sender_state: AdnlPeerState::for_send(),
+            receiver_state: PeerState::for_receive_with_reinit_date(local_reinit_date),
+            sender_state: PeerState::for_send(),
         }
     }
 
@@ -56,7 +57,7 @@ impl AdnlPeer {
 
     /// Returns peer full id (public key)
     #[inline(always)]
-    pub fn id(&self) -> &AdnlNodeIdFull {
+    pub fn id(&self) -> &NodeIdFull {
         &self.id
     }
 
@@ -78,13 +79,13 @@ impl AdnlPeer {
 
     /// Packets receiver state
     #[inline(always)]
-    pub fn receiver_state(&self) -> &AdnlPeerState {
+    pub fn receiver_state(&self) -> &PeerState {
         &self.receiver_state
     }
 
     /// Packets sender state
     #[inline(always)]
-    pub fn sender_state(&self) -> &AdnlPeerState {
+    pub fn sender_state(&self) -> &PeerState {
         &self.sender_state
     }
 
@@ -96,19 +97,19 @@ impl AdnlPeer {
         let reinit_date = self.receiver_state.reinit_date();
 
         self.channel_key = ed25519::KeyPair::generate(&mut rand::thread_rng());
-        self.receiver_state = AdnlPeerState::for_receive_with_reinit_date(reinit_date + 1);
-        self.sender_state = AdnlPeerState::for_send();
+        self.receiver_state = PeerState::for_receive_with_reinit_date(reinit_date + 1);
+        self.sender_state = PeerState::for_send();
     }
 }
 
 /// Connection side packets histories and reinit date
-pub struct AdnlPeerState {
+pub struct PeerState {
     ordinary_history: PacketsHistory,
     priority_history: PacketsHistory,
     reinit_date: AtomicU32,
 }
 
-impl AdnlPeerState {
+impl PeerState {
     fn for_receive_with_reinit_date(reinit_date: u32) -> Self {
         Self {
             ordinary_history: PacketsHistory::for_recv(),
@@ -152,6 +153,6 @@ pub enum NewPeerContext {
 }
 
 /// New peers filter
-pub trait AdnlPeerFilter: Send + Sync {
-    fn check(&self, ctx: NewPeerContext, ip: PackedSocketAddr, peer_id: &AdnlNodeIdShort) -> bool;
+pub trait PeerFilter: Send + Sync {
+    fn check(&self, ctx: NewPeerContext, ip: PackedSocketAddr, peer_id: &NodeIdShort) -> bool;
 }

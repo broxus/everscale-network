@@ -7,57 +7,70 @@
 //!
 //! TODO
 
-use std::sync::Arc;
+pub use overlay_id::{IdFull, IdShort};
 
-use anyhow::Result;
-use frunk_core::hlist::{HCons, HList, IntoTuple2, Selector};
-use frunk_core::indices::{Here, There};
+mod overlay_id;
 
-pub use node::OverlayNode;
-pub use overlay_shard::{
-    IncomingBroadcastInfo, OutgoingBroadcastInfo, OverlayShard, OverlayShardMetrics,
-    OverlayShardOptions, ReceivedPeersMap,
-};
-
-use crate::adnl::AdnlNode;
-use crate::rldp::DeferredRldpNode;
-use crate::utils::{DeferredInitialization, NetworkBuilder};
-
+#[cfg(feature = "overlay")]
 mod broadcast_receiver;
+#[cfg(feature = "overlay")]
 mod node;
+#[cfg(feature = "overlay")]
 mod overlay_shard;
 
-pub(crate) type DeferredOverlayNode = Result<Arc<OverlayNode>>;
+#[cfg(feature = "overlay")]
+mod node_impl {
+    use std::sync::Arc;
 
-impl DeferredInitialization for DeferredOverlayNode {
-    type Initialized = Arc<OverlayNode>;
+    use anyhow::Result;
+    use frunk_core::hlist::{HCons, HList, IntoTuple2, Selector};
+    use frunk_core::indices::{Here, There};
 
-    fn initialize(self) -> Result<Self::Initialized> {
-        self
-    }
-}
+    pub use super::node::Node;
+    pub use super::overlay_shard::{
+        IncomingBroadcastInfo, OutgoingBroadcastInfo, OverlayShardMetrics, ReceivedPeersMap, Shard,
+        ShardOptions,
+    };
 
-impl<L, I> NetworkBuilder<L, I>
-where
-    L: HList + Selector<DeferredRldpNode, Here> + Selector<Arc<AdnlNode>, I>,
-    HCons<DeferredOverlayNode, L>: IntoTuple2,
-{
-    #[allow(clippy::type_complexity)]
-    pub fn with_overlay(
-        mut self,
-        zero_state_file_hash: [u8; 32],
-        key_tag: usize,
-    ) -> NetworkBuilder<HCons<DeferredOverlayNode, L>, There<I>> {
-        let adnl: &Arc<AdnlNode> = self.0.get();
-        let overlay = OverlayNode::new(adnl.clone(), zero_state_file_hash, key_tag);
-        if let Ok(overlay) = &overlay {
-            let rldp: &mut DeferredRldpNode = self.0.get_mut();
-            rldp.1.push(overlay.query_subscriber());
+    use crate::adnl;
+    use crate::rldp;
+    use crate::utils::{DeferredInitialization, NetworkBuilder};
+
+    pub(crate) type Deferred = Result<Arc<Node>>;
+
+    impl DeferredInitialization for Deferred {
+        type Initialized = Arc<Node>;
+
+        fn initialize(self) -> Result<Self::Initialized> {
+            self
         }
-
-        NetworkBuilder(self.0.prepend(overlay), Default::default())
     }
+
+    impl<L, I> NetworkBuilder<L, I>
+    where
+        L: HList + Selector<rldp::Deferred, Here> + Selector<Arc<adnl::Node>, I>,
+        HCons<Deferred, L>: IntoTuple2,
+    {
+        #[allow(clippy::type_complexity)]
+        pub fn with_overlay(
+            mut self,
+            zero_state_file_hash: [u8; 32],
+            key_tag: usize,
+        ) -> NetworkBuilder<HCons<Deferred, L>, There<I>> {
+            let adnl: &Arc<adnl::Node> = self.0.get();
+            let overlay = Node::new(adnl.clone(), zero_state_file_hash, key_tag);
+            if let Ok(overlay) = &overlay {
+                let rldp: &mut rldp::Deferred = self.0.get_mut();
+                rldp.1.push(overlay.query_subscriber());
+            }
+
+            NetworkBuilder(self.0.prepend(overlay), Default::default())
+        }
+    }
+
+    /// Max allowed known peer count
+    pub const MAX_OVERLAY_PEERS: usize = 65536;
 }
 
-/// Max allowed known peer count
-pub const MAX_OVERLAY_PEERS: usize = 65536;
+#[cfg(feature = "overlay")]
+pub use node_impl::*;

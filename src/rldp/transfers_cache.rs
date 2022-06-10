@@ -7,10 +7,11 @@ use parking_lot::Mutex;
 use tl_proto::{TlRead, TlWrite};
 use tokio::sync::mpsc;
 
+use super::compression;
 use super::incoming_transfer::*;
 use super::outgoing_transfer::*;
-use super::RldpNodeOptions;
-use crate::adnl::AdnlNode;
+use super::NodeOptions;
+use crate::adnl;
 use crate::proto;
 use crate::subscriber::*;
 use crate::utils::*;
@@ -24,7 +25,7 @@ pub struct TransfersCache {
 }
 
 impl TransfersCache {
-    pub fn new(subscribers: Vec<Arc<dyn QuerySubscriber>>, options: RldpNodeOptions) -> Self {
+    pub fn new(subscribers: Vec<Arc<dyn QuerySubscriber>>, options: NodeOptions) -> Self {
         Self {
             transfers: Arc::new(Default::default()),
             subscribers: Arc::new(subscribers),
@@ -42,9 +43,9 @@ impl TransfersCache {
     /// Sends serialized query and waits answer
     pub async fn query(
         &self,
-        adnl: &Arc<AdnlNode>,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
+        adnl: &Arc<adnl::Node>,
+        local_id: &adnl::NodeIdShort,
+        peer_id: &adnl::NodeIdShort,
         data: Vec<u8>,
         roundtrip: Option<u64>,
     ) -> Result<(Option<Vec<u8>>, u64)> {
@@ -165,9 +166,9 @@ impl TransfersCache {
     /// Handles incoming message
     pub async fn handle_message(
         &self,
-        adnl: &Arc<AdnlNode>,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
+        adnl: &Arc<adnl::Node>,
+        local_id: &adnl::NodeIdShort,
+        peer_id: &adnl::NodeIdShort,
         message: proto::rldp::MessagePart<'_>,
     ) -> Result<()> {
         match message {
@@ -268,9 +269,9 @@ impl TransfersCache {
     /// Receives incoming query and sends answer
     async fn create_answer_handler(
         &self,
-        adnl: &Arc<AdnlNode>,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
+        adnl: &Arc<adnl::Node>,
+        local_id: &adnl::NodeIdShort,
+        peer_id: &adnl::NodeIdShort,
         transfer_id: TransferId,
     ) -> Result<Option<MessagePartsTx>> {
         use dashmap::mapref::entry::Entry;
@@ -345,9 +346,9 @@ enum RldpTransfer {
 }
 
 struct IncomingContext {
-    adnl: Arc<AdnlNode>,
-    local_id: AdnlNodeIdShort,
-    peer_id: AdnlNodeIdShort,
+    adnl: Arc<adnl::Node>,
+    local_id: adnl::NodeIdShort,
+    peer_id: adnl::NodeIdShort,
     parts_rx: MessagePartsRx,
     transfer: IncomingTransfer,
     transfer_id: TransferId,
@@ -452,9 +453,9 @@ impl IncomingContext {
 }
 
 struct OutgoingContext {
-    adnl: Arc<AdnlNode>,
-    local_id: AdnlNodeIdShort,
-    peer_id: AdnlNodeIdShort,
+    adnl: Arc<adnl::Node>,
+    local_id: adnl::NodeIdShort,
+    peer_id: adnl::NodeIdShort,
     transfer: OutgoingTransfer,
 }
 

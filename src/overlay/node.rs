@@ -4,27 +4,28 @@ use std::sync::Arc;
 use anyhow::Result;
 use tl_proto::{BoxedConstructor, TlRead};
 
-use super::overlay_shard::{OverlayShard, OverlayShardMetrics, OverlayShardOptions};
-use crate::adnl::AdnlNode;
+use super::overlay_id::{IdFull, IdShort};
+use super::overlay_shard::{OverlayShardMetrics, Shard, ShardOptions};
+use crate::adnl;
 use crate::proto;
 use crate::subscriber::*;
 use crate::utils::*;
 
 /// P2P messages distribution layer group
-pub struct OverlayNode {
+pub struct Node {
     /// Underlying ADNL node
-    adnl: Arc<AdnlNode>,
+    adnl: Arc<adnl::Node>,
     /// Local ADNL key
-    node_key: Arc<StoredAdnlNodeKey>,
+    node_key: Arc<adnl::Key>,
     /// Shared state
     state: Arc<OverlayNodeState>,
     /// Overlay group "seed"
     zero_state_file_hash: [u8; 32],
 }
 
-impl OverlayNode {
+impl Node {
     pub fn new(
-        adnl: Arc<AdnlNode>,
+        adnl: Arc<adnl::Node>,
         zero_state_file_hash: [u8; 32],
         key_tag: usize,
     ) -> Result<Arc<Self>> {
@@ -46,7 +47,7 @@ impl OverlayNode {
         self.state.clone()
     }
 
-    pub fn metrics(&self) -> impl Iterator<Item = (OverlayIdShort, OverlayShardMetrics)> + '_ {
+    pub fn metrics(&self) -> impl Iterator<Item = (IdShort, OverlayShardMetrics)> + '_ {
         self.state
             .shards
             .iter()
@@ -54,14 +55,14 @@ impl OverlayNode {
     }
 
     /// Underlying ADNL node
-    pub fn adnl(&self) -> &Arc<AdnlNode> {
+    pub fn adnl(&self) -> &Arc<adnl::Node> {
         &self.adnl
     }
 
     /// Add overlay queries subscriber
     pub fn add_overlay_subscriber(
         &self,
-        overlay_id: OverlayIdShort,
+        overlay_id: IdShort,
         subscriber: Arc<dyn QuerySubscriber>,
     ) -> bool {
         use dashmap::mapref::entry::Entry;
@@ -78,14 +79,14 @@ impl OverlayNode {
     /// Creates new overlay shard
     pub fn add_public_overlay(
         &self,
-        overlay_id: &OverlayIdShort,
-        options: OverlayShardOptions,
-    ) -> (Arc<OverlayShard>, bool) {
+        overlay_id: &IdShort,
+        options: ShardOptions,
+    ) -> (Arc<Shard>, bool) {
         use dashmap::mapref::entry::Entry;
 
         match self.state.shards.entry(*overlay_id) {
             Entry::Vacant(entry) => {
-                let overlay_shard = OverlayShard::new(self.node_key.clone(), *overlay_id, options);
+                let overlay_shard = Shard::new(self.node_key.clone(), *overlay_id, options);
                 entry.insert(overlay_shard.clone());
                 (overlay_shard, true)
             }
@@ -95,17 +96,17 @@ impl OverlayNode {
 
     /// Returns overlay by specified id
     #[inline(always)]
-    pub fn get_overlay(&self, overlay_id: &OverlayIdShort) -> Result<Arc<OverlayShard>> {
+    pub fn get_overlay(&self, overlay_id: &IdShort) -> Result<Arc<Shard>> {
         self.state.get_overlay(overlay_id)
     }
 
     /// Computes full overlay id using zero state file hash
-    pub fn compute_overlay_id(&self, workchain: i32) -> OverlayIdFull {
-        compute_overlay_id(workchain, self.zero_state_file_hash)
+    pub fn compute_overlay_id(&self, workchain: i32) -> IdFull {
+        IdFull::for_shard_overlay(workchain, &self.zero_state_file_hash)
     }
 
     /// Computes short overlay id using zero state file hash
-    pub fn compute_overlay_short_id(&self, workchain: i32) -> OverlayIdShort {
+    pub fn compute_overlay_short_id(&self, workchain: i32) -> IdShort {
         self.compute_overlay_id(workchain).compute_short_id()
     }
 }
@@ -113,13 +114,13 @@ impl OverlayNode {
 #[derive(Default)]
 struct OverlayNodeState {
     /// Overlay shards
-    shards: FxDashMap<OverlayIdShort, Arc<OverlayShard>>,
+    shards: FxDashMap<IdShort, Arc<Shard>>,
     /// Overlay query subscribers
-    subscribers: FxDashMap<OverlayIdShort, Arc<dyn QuerySubscriber>>,
+    subscribers: FxDashMap<IdShort, Arc<dyn QuerySubscriber>>,
 }
 
 impl OverlayNodeState {
-    fn get_overlay(&self, overlay_id: &OverlayIdShort) -> Result<Arc<OverlayShard>> {
+    fn get_overlay(&self, overlay_id: &IdShort) -> Result<Arc<Shard>> {
         match self.shards.get(overlay_id) {
             Some(shard) => Ok(shard.clone()),
             None => Err(OverlayNodeError::UnknownOverlay.into()),
@@ -140,7 +141,7 @@ impl MessageSubscriber for OverlayNodeState {
         }
 
         let mut offset = 4; // skip `overlay::Message` constructor
-        let overlay_id = OverlayIdShort::from(<[u8; 32]>::read_from(data, &mut offset)?);
+        let overlay_id = IdShort::from(<[u8; 32]>::read_from(data, &mut offset)?);
         let broadcast = proto::overlay::Broadcast::read_from(data, &mut offset)?;
 
         // TODO: check that offset == data.len()
@@ -177,7 +178,7 @@ impl QuerySubscriber for OverlayNodeState {
         }
 
         let mut offset = 4; // skip `rpc::OverlayQuery` constructor
-        let overlay_id = OverlayIdShort::from(<[u8; 32]>::read_from(&query, &mut offset)?);
+        let overlay_id = IdShort::from(<[u8; 32]>::read_from(&query, &mut offset)?);
 
         let constructor = u32::read_from(&query, &mut std::convert::identity(offset))?;
         if constructor == proto::rpc::OverlayGetRandomPeers::TL_ID {

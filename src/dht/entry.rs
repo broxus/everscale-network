@@ -4,23 +4,24 @@ use std::sync::Arc;
 use anyhow::Result;
 use tl_proto::BoxedConstructor;
 
-use super::futures::DhtStoreValue;
-use super::node::DhtNode;
+use super::futures::StoreValue;
+use super::node::Node;
 use super::streams::DhtValuesStream;
+use crate::adnl;
 use crate::proto;
-use crate::utils::{now, AdnlNodeIdShort, StoredAdnlNodeKey};
+use crate::utils::now;
 
 #[must_use]
 #[derive(Copy, Clone)]
-pub struct DhtEntry<'a> {
-    dht: &'a Arc<DhtNode>,
+pub struct Entry<'a> {
+    dht: &'a Arc<Node>,
     id: &'a [u8; 32],
     name: &'a str,
     key_index: u32,
 }
 
-impl<'a> DhtEntry<'a> {
-    pub(super) fn new<T>(dht: &'a Arc<DhtNode>, id: &'a T, name: &'a str) -> Self
+impl<'a> Entry<'a> {
+    pub(super) fn new<T>(dht: &'a Arc<Node>, id: &'a T, name: &'a str) -> Self
     where
         T: Borrow<[u8; 32]>,
     {
@@ -40,12 +41,12 @@ impl<'a> DhtEntry<'a> {
 
     /// Creates a new builder which can store the value in the DHT.
     ///
-    /// See [`DhtEntry::with_data_raw`] for raw API
-    pub fn with_data<T>(self, data: T) -> DhtEntryWithData<'a>
+    /// See [`Entry::with_data_raw`] for raw API
+    pub fn with_data<T>(self, data: T) -> EntryWithData<'a>
     where
         T: tl_proto::TlWrite<Repr = tl_proto::Boxed>,
     {
-        DhtEntryWithData {
+        EntryWithData {
             inner: self,
             data: Cow::Owned(tl_proto::serialize(data)),
             expire_at: None,
@@ -54,9 +55,9 @@ impl<'a> DhtEntry<'a> {
 
     /// Creates a new builder which can store the value in the DHT.
     ///
-    /// See [`DhtEntry::with_data`] for more convenient API
-    pub fn with_data_raw(self, data: &'a [u8]) -> DhtEntryWithData<'a> {
-        DhtEntryWithData {
+    /// See [`Entry::with_data`] for more convenient API
+    pub fn with_data_raw(self, data: &'a [u8]) -> EntryWithData<'a> {
+        EntryWithData {
             inner: self,
             data: Cow::Borrowed(data),
             expire_at: None,
@@ -74,7 +75,7 @@ impl<'a> DhtEntry<'a> {
     /// Queries a value from the given peer.
     pub async fn value_from<T>(
         self,
-        peer_id: &AdnlNodeIdShort,
+        peer_id: &adnl::NodeIdShort,
     ) -> Result<Option<(proto::dht::KeyDescriptionOwned, T)>>
     where
         for<'tl> T: tl_proto::TlRead<'tl, Repr = tl_proto::Boxed> + Send + 'static,
@@ -98,13 +99,13 @@ impl<'a> DhtEntry<'a> {
     }
 }
 
-pub struct DhtEntryWithData<'a> {
-    inner: DhtEntry<'a>,
+pub struct EntryWithData<'a> {
+    inner: Entry<'a>,
     data: Cow<'a, [u8]>,
     expire_at: Option<u32>,
 }
 
-impl<'a> DhtEntryWithData<'a> {
+impl<'a> EntryWithData<'a> {
     /// Sets the expiration time for the value.
     pub fn expire_at(mut self, timestamp: u32) -> Self {
         self.expire_at = Some(timestamp);
@@ -118,7 +119,7 @@ impl<'a> DhtEntryWithData<'a> {
     }
 
     /// Creates signed TL representation of the entry.
-    pub fn sign(self, key: &StoredAdnlNodeKey) -> proto::dht::ValueOwned {
+    pub fn sign(self, key: &adnl::Key) -> proto::dht::ValueOwned {
         let mut value = self.make_value(key);
 
         let key_signature = key.sign(value.key.as_boxed());
@@ -133,7 +134,7 @@ impl<'a> DhtEntryWithData<'a> {
     /// Creates signed TL representation of the entry and stores it in the DHT.
     ///
     /// See [`DhtStoreValue`]
-    pub fn sign_and_store(self, key: &StoredAdnlNodeKey) -> Result<DhtStoreValue> {
+    pub fn sign_and_store(self, key: &adnl::Key) -> Result<StoreValue> {
         let mut value = self.make_value(key);
 
         let key_signature = key.sign(value.key.as_boxed());
@@ -142,10 +143,10 @@ impl<'a> DhtEntryWithData<'a> {
         let value_signature = key.sign(value.as_boxed());
         value.signature = &value_signature;
 
-        DhtStoreValue::new(self.inner.dht.clone(), value)
+        StoreValue::new(self.inner.dht.clone(), value)
     }
 
-    fn make_value<'b>(&'b self, key: &'b StoredAdnlNodeKey) -> proto::dht::Value<'b>
+    fn make_value<'b>(&'b self, key: &'b adnl::Key) -> proto::dht::Value<'b>
     where
         'a: 'b,
     {

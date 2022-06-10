@@ -4,8 +4,9 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 
+use super::compression;
 use super::transfers_cache::*;
-use crate::adnl::AdnlNode;
+use crate::adnl;
 use crate::proto;
 use crate::subscriber::*;
 use crate::utils::*;
@@ -13,7 +14,7 @@ use crate::utils::*;
 /// RLDP node configuration
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct RldpNodeOptions {
+pub struct NodeOptions {
     /// Max allowed RLDP answer size in bytes. Query will be rejected
     /// if answer is bigger.
     ///
@@ -51,7 +52,7 @@ pub struct RldpNodeOptions {
     pub force_compression: bool,
 }
 
-impl Default for RldpNodeOptions {
+impl Default for NodeOptions {
     fn default() -> Self {
         Self {
             max_answer_size: 10 * 1024 * 1024,
@@ -66,23 +67,23 @@ impl Default for RldpNodeOptions {
 }
 
 /// Reliable UDP transport layer
-pub struct RldpNode {
+pub struct Node {
     /// Underlying ADNL node
-    adnl: Arc<AdnlNode>,
+    adnl: Arc<adnl::Node>,
     /// Parallel requests limiter
-    semaphores: FxDashMap<AdnlNodeIdShort, Arc<Semaphore>>,
+    semaphores: FxDashMap<adnl::NodeIdShort, Arc<Semaphore>>,
     /// Transfers handler
     transfers: Arc<TransfersCache>,
     /// Configuration
-    options: RldpNodeOptions,
+    options: NodeOptions,
 }
 
-impl RldpNode {
+impl Node {
     /// Create new RLDP node on top of the given ADNL node
     pub fn new(
-        adnl: Arc<AdnlNode>,
+        adnl: Arc<adnl::Node>,
         subscribers: Vec<Arc<dyn QuerySubscriber>>,
-        options: RldpNodeOptions,
+        options: NodeOptions,
     ) -> Result<Arc<Self>> {
         let transfers = Arc::new(TransfersCache::new(subscribers, options));
 
@@ -98,17 +99,17 @@ impl RldpNode {
 
     /// Underlying ADNL node
     #[inline(always)]
-    pub fn adnl(&self) -> &Arc<AdnlNode> {
+    pub fn adnl(&self) -> &Arc<adnl::Node> {
         &self.adnl
     }
 
     #[inline(always)]
-    pub fn options(&self) -> &RldpNodeOptions {
+    pub fn options(&self) -> &NodeOptions {
         &self.options
     }
 
-    pub fn metrics(&self) -> RldpNodeMetrics {
-        RldpNodeMetrics {
+    pub fn metrics(&self) -> NodeMetrics {
+        NodeMetrics {
             peer_count: self.semaphores.len(),
             transfers_cache_len: self.transfers.len(),
         }
@@ -124,8 +125,8 @@ impl RldpNode {
     #[tracing::instrument(level = "debug", name = "rldp_query", skip(self, data))]
     pub async fn query(
         &self,
-        local_id: &AdnlNodeIdShort,
-        peer_id: &AdnlNodeIdShort,
+        local_id: &adnl::NodeIdShort,
+        peer_id: &adnl::NodeIdShort,
         data: Vec<u8>,
         roundtrip: Option<u64>,
     ) -> Result<(Option<Vec<u8>>, u64)> {
@@ -154,16 +155,14 @@ impl RldpNode {
                     Some(compression::decompress(data).unwrap_or_else(|| data.to_vec())),
                     roundtrip,
                 )),
-                Ok(proto::rldp::Message::Answer { .. }) => {
-                    Err(RldpNodeError::QueryIdMismatch.into())
-                }
+                Ok(proto::rldp::Message::Answer { .. }) => Err(NodeError::QueryIdMismatch.into()),
                 Ok(proto::rldp::Message::Message { .. }) => {
-                    Err(RldpNodeError::UnexpectedAnswer("RldpMessageView::Message").into())
+                    Err(NodeError::UnexpectedAnswer("RldpMessageView::Message").into())
                 }
                 Ok(proto::rldp::Message::Query { .. }) => {
-                    Err(RldpNodeError::UnexpectedAnswer("RldpMessageView::Query").into())
+                    Err(NodeError::UnexpectedAnswer("RldpMessageView::Query").into())
                 }
-                Err(e) => Err(RldpNodeError::InvalidPacketContent(e).into()),
+                Err(e) => Err(NodeError::InvalidPacketContent(e).into()),
             },
             (None, roundtrip) => Ok((None, roundtrip)),
         }
@@ -216,13 +215,13 @@ impl MessageSubscriber for TransfersCache {
 
 /// Instant RLDP node metrics
 #[derive(Debug, Copy, Clone)]
-pub struct RldpNodeMetrics {
+pub struct NodeMetrics {
     pub peer_count: usize,
     pub transfers_cache_len: usize,
 }
 
 #[derive(thiserror::Error, Debug)]
-enum RldpNodeError {
+enum NodeError {
     #[error("Unexpected answer: {0}")]
     UnexpectedAnswer(&'static str),
     #[error("Invalid packet content: {0:?}")]

@@ -8,14 +8,14 @@ use futures_util::stream::FuturesUnordered;
 use futures_util::{Stream, StreamExt};
 use tl_proto::TlRead;
 
-use super::node::DhtNode;
+use super::node::Node;
 use super::peers_iter::PeersIter;
 use crate::proto;
 
 /// Stream for the `DhtNode::values` method.
 #[must_use = "streams do nothing unless polled"]
 pub struct DhtValuesStream<T> {
-    dht: Arc<DhtNode>,
+    dht: Arc<Node>,
     query: Bytes,
     batch_len: Option<usize>,
     known_peers_version: u64,
@@ -32,7 +32,7 @@ impl<T> DhtValuesStream<T>
 where
     for<'a> T: TlRead<'a, Repr = tl_proto::Boxed> + Send + 'static,
 {
-    pub(super) fn new(dht: Arc<DhtNode>, key: proto::dht::Key<'_>) -> Self {
+    pub(super) fn new(dht: Arc<Node>, key: proto::dht::Key<'_>) -> Self {
         let key_id = tl_proto::hash_as_boxed(key);
         let peers_iter = PeersIter::with_key_id(key_id);
 

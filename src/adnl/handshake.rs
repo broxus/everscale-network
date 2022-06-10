@@ -5,13 +5,15 @@ use aes::cipher::{StreamCipher, StreamCipherSeek};
 use everscale_crypto::ed25519;
 
 use super::encryption::*;
+use super::keystore::Key;
+use super::node_id::{NodeIdFull, NodeIdShort};
 use super::packet_view::*;
 use crate::utils::*;
 
 /// Modifies `buffer` in-place to contain the handshake packet
 pub fn build_handshake_packet(
-    peer_id: &AdnlNodeIdShort,
-    peer_id_full: &AdnlNodeIdFull,
+    peer_id: &NodeIdShort,
+    peer_id_full: &NodeIdFull,
     buffer: &mut Vec<u8>,
     version: Option<u16>,
 ) {
@@ -76,9 +78,9 @@ pub fn build_handshake_packet(
 ///
 /// **NOTE: even on failure buffer can be modified**
 pub fn parse_handshake_packet(
-    keys: &FxHashMap<AdnlNodeIdShort, Arc<StoredAdnlNodeKey>>,
+    keys: &FxHashMap<NodeIdShort, Arc<Key>>,
     buffer: &mut PacketView<'_>,
-) -> Result<Option<(AdnlNodeIdShort, Option<u16>)>, HandshakeError> {
+) -> Result<Option<(NodeIdShort, Option<u16>)>, HandshakeError> {
     const PUBLIC_KEY_RANGE: std::ops::Range<usize> = 32..64;
 
     // Ordinary data ranges
@@ -97,17 +99,17 @@ pub fn parse_handshake_packet(
 
     // SAFETY: AdnlNodeIdShort is 32 (<= 96) bytes and has the same layout as `[u8; 32]`
     // due to `#[repr(transparent)]`
-    let local_id = unsafe { &*(buffer.as_ptr() as *const AdnlNodeIdShort) };
+    let local_id = unsafe { &*(buffer.as_ptr() as *const NodeIdShort) };
 
     // Get local id
-    let value = match keys.get(local_id) {
-        Some(value) => value,
+    let local_key = match keys.get(local_id) {
+        Some(key) => key,
         // No local keys found
         None => return Ok(None),
     };
 
     // Compute shared secret
-    let shared_secret = value.private_key().compute_shared_secret(
+    let shared_secret = local_key.secret_key().compute_shared_secret(
         &ed25519::PublicKey::from_bytes(buffer[PUBLIC_KEY_RANGE].try_into().unwrap())
             .ok_or(HandshakeError::InvalidPublicKey)?,
     );

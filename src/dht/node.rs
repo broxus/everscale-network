@@ -12,11 +12,12 @@ use smallvec::smallvec;
 use tl_proto::{BoxedConstructor, BoxedWrapper, TlRead, TlWrite};
 
 use super::buckets::Buckets;
-use super::futures::DhtStoreValue;
+use super::entry::Entry;
+use super::futures::StoreValue;
 use super::storage::{Storage, StorageOptions};
 use super::{DHT_KEY_ADDRESS, DHT_KEY_NODES, MAX_DHT_PEERS};
-use crate::adnl::{AdnlNode, NewPeerContext};
-use crate::dht::entry::DhtEntry;
+use crate::adnl;
+use crate::overlay;
 use crate::proto;
 use crate::subscriber::*;
 use crate::utils::*;
@@ -24,9 +25,9 @@ use crate::utils::*;
 /// DHT node configuration
 #[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
-pub struct DhtNodeOptions {
-    /// Default stored value timeout used for [`DhtNode::store_overlay_node`] and
-    /// [`DhtNode::store_ip_address`]
+pub struct NodeOptions {
+    /// Default stored value timeout used for [`Node::store_overlay_node`] and
+    /// [`Node::store_ip_address`]
     ///
     /// Default: `3600` seconds
     pub value_ttl_sec: u32,
@@ -72,7 +73,7 @@ pub struct DhtNodeOptions {
     pub storage_gc_interval_ms: u64,
 }
 
-impl Default for DhtNodeOptions {
+impl Default for NodeOptions {
     fn default() -> Self {
         Self {
             value_ttl_sec: 3600,
@@ -88,26 +89,26 @@ impl Default for DhtNodeOptions {
 }
 
 /// Kademlia-like DHT node
-pub struct DhtNode {
+pub struct Node {
     /// Underlying ADNL node
-    adnl: Arc<AdnlNode>,
+    adnl: Arc<adnl::Node>,
 
     /// Local ADNL peer id
-    local_id: AdnlNodeIdShort,
+    local_id: adnl::NodeIdShort,
 
     /// Serialized [`proto::rpc::DhtQuery`] with own DHT node info
     query_prefix: Vec<u8>,
 
     /// Configuration
-    options: DhtNodeOptions,
+    options: NodeOptions,
 
     /// State
-    state: Arc<DhtNodeState>,
+    state: Arc<NodeState>,
 }
 
-impl DhtNode {
+impl Node {
     /// Create new DHT node on top of ADNL node
-    pub fn new(adnl: Arc<AdnlNode>, key_tag: usize, options: DhtNodeOptions) -> Result<Arc<Self>> {
+    pub fn new(adnl: Arc<adnl::Node>, key_tag: usize, options: NodeOptions) -> Result<Arc<Self>> {
         let key = adnl.key_by_tag(key_tag)?.clone();
 
         let buckets = Buckets::new(key.id());
@@ -116,9 +117,9 @@ impl DhtNode {
             max_key_index: options.max_key_index,
         });
 
-        let state = Arc::new(DhtNodeState {
+        let state = Arc::new(NodeState {
             key: key.clone(),
-            known_peers: PeersCache::with_capacity(MAX_DHT_PEERS),
+            known_peers: adnl::PeersSet::with_capacity(MAX_DHT_PEERS),
             penalties: Default::default(),
             buckets,
             storage,
@@ -157,38 +158,38 @@ impl DhtNode {
 
     /// Configuration
     #[inline(always)]
-    pub fn options(&self) -> &DhtNodeOptions {
+    pub fn options(&self) -> &NodeOptions {
         &self.options
     }
 
     /// Instant metrics
     #[inline(always)]
-    pub fn metrics(&self) -> DhtNodeMetrics {
+    pub fn metrics(&self) -> NodeMetrics {
         self.state.metrics()
     }
 
     /// Underlying ADNL node
     #[inline(always)]
-    pub fn adnl(&self) -> &Arc<AdnlNode> {
+    pub fn adnl(&self) -> &Arc<adnl::Node> {
         &self.adnl
     }
 
     #[inline(always)]
-    pub fn key(&self) -> &Arc<StoredAdnlNodeKey> {
+    pub fn key(&self) -> &Arc<adnl::Key> {
         &self.state.key
     }
 
-    pub fn iter_known_peers(&self) -> impl Iterator<Item = &AdnlNodeIdShort> {
+    pub fn iter_known_peers(&self) -> impl Iterator<Item = &adnl::NodeIdShort> {
         self.state.known_peers.iter()
     }
 
     /// Adds new peer to DHT or explicitly marks existing as good. Returns new peer short id
-    pub fn add_dht_peer(&self, peer: proto::dht::NodeOwned) -> Result<Option<AdnlNodeIdShort>> {
+    pub fn add_dht_peer(&self, peer: proto::dht::NodeOwned) -> Result<Option<adnl::NodeIdShort>> {
         self.state.add_dht_peer(&self.adnl, peer)
     }
 
     /// Checks whether the specified peer was marked as bad
-    pub fn is_bad_peer(&self, peer: &AdnlNodeIdShort) -> bool {
+    pub fn is_bad_peer(&self, peer: &adnl::NodeIdShort) -> bool {
         matches!(
             self.state.penalties.get(peer),
             Some(penalty) if *penalty > self.options.bad_peer_threshold
@@ -196,7 +197,7 @@ impl DhtNode {
     }
 
     /// Sends ping query to the given peer
-    pub async fn ping(&self, peer_id: &AdnlNodeIdShort) -> Result<bool> {
+    pub async fn ping(&self, peer_id: &adnl::NodeIdShort) -> Result<bool> {
         let random_id = rand::thread_rng().gen();
         match self
             .query(peer_id, proto::rpc::DhtPing { random_id })
@@ -208,18 +209,18 @@ impl DhtNode {
     }
 
     /// Returns an entry interface for manipulating DHT values
-    pub fn entry<'a, T>(self: &'a Arc<Self>, id: &'a T, name: &'a str) -> DhtEntry<'a>
+    pub fn entry<'a, T>(self: &'a Arc<Self>, id: &'a T, name: &'a str) -> Entry<'a>
     where
         T: Borrow<[u8; 32]>,
     {
-        DhtEntry::new(self, id, name)
+        Entry::new(self, id, name)
     }
 
     /// Queries given peer for at most `k` DHT nodes with
     /// the same affinity as `local_id <-> peer_id`
     pub async fn query_dht_nodes(
         &self,
-        peer_id: &AdnlNodeIdShort,
+        peer_id: &adnl::NodeIdShort,
         k: u32,
     ) -> Result<Vec<proto::dht::NodeOwned>> {
         let query = proto::rpc::DhtFindNode {
@@ -238,7 +239,7 @@ impl DhtNode {
     /// results may vary between calls.
     pub async fn find_overlay_nodes(
         self: &Arc<Self>,
-        overlay_id: &OverlayIdShort,
+        overlay_id: &overlay::IdShort,
     ) -> Result<Vec<(PackedSocketAddr, proto::overlay::NodeOwned)>> {
         let mut result = Vec::new();
         let mut nodes = Vec::new();
@@ -265,7 +266,7 @@ impl DhtNode {
                 .flatten()
                 .chain(std::mem::take(&mut nodes).into_iter())
             {
-                let peer_id = match AdnlNodeIdFull::try_from(node.id.as_equivalent_ref())
+                let peer_id = match adnl::NodeIdFull::try_from(node.id.as_equivalent_ref())
                     .map(|full_id| full_id.compute_short_id())
                 {
                     // Only resolve address for new peers with valid id
@@ -304,13 +305,13 @@ impl DhtNode {
     /// Searches for the first stored IP address for the given peer id
     pub async fn find_address(
         self: &Arc<Self>,
-        peer_id: &AdnlNodeIdShort,
-    ) -> Result<(PackedSocketAddr, AdnlNodeIdFull)> {
+        peer_id: &adnl::NodeIdShort,
+    ) -> Result<(PackedSocketAddr, adnl::NodeIdFull)> {
         let mut values = self.entry(peer_id, DHT_KEY_ADDRESS).values();
         while let Some((key, BoxedWrapper(value))) = values.next().await {
             match (
                 parse_address_list(&value, self.adnl.options().clock_tolerance_sec),
-                AdnlNodeIdFull::try_from(key.id.as_equivalent_ref()),
+                adnl::NodeIdFull::try_from(key.id.as_equivalent_ref()),
             ) {
                 (Ok(ip_address), Ok(full_id)) => return Ok((ip_address, full_id)),
                 _ => continue,
@@ -322,9 +323,9 @@ impl DhtNode {
 
     /// Returns a future which stores value into multiple DHT nodes.
     ///
-    /// See [`DhtNode::entry`] for more convenient API
-    pub fn store_value(self: &Arc<Self>, value: proto::dht::Value<'_>) -> Result<DhtStoreValue> {
-        DhtStoreValue::new(self.clone(), value)
+    /// See [`Node::entry`] for more convenient API
+    pub fn store_value(self: &Arc<Self>, value: proto::dht::Value<'_>) -> Result<StoreValue> {
+        StoreValue::new(self.clone(), value)
     }
 
     /// Stores given overlay node into multiple DHT nodes
@@ -332,11 +333,11 @@ impl DhtNode {
     /// Returns and error if stored value is incorrect
     pub async fn store_overlay_node(
         self: &Arc<Self>,
-        overlay_full_id: &OverlayIdFull,
+        overlay_full_id: &overlay::IdFull,
         node: proto::overlay::Node<'_>,
     ) -> Result<bool> {
         let overlay_id = overlay_full_id.compute_short_id();
-        verify_overlay_node(&overlay_id, &node)?;
+        overlay_id.verify_overlay_node(&node)?;
 
         let value = tl_proto::serialize_as_boxed(proto::overlay::Nodes {
             nodes: smallvec![node],
@@ -378,7 +379,7 @@ impl DhtNode {
     /// Stores given ip into multiple DHT nodes
     pub async fn store_ip_address(
         self: &Arc<Self>,
-        key: &StoredAdnlNodeKey,
+        key: &adnl::Key,
         ip: PackedSocketAddr,
     ) -> Result<bool> {
         let clock_tolerance_sec = self.adnl.options().clock_tolerance_sec;
@@ -406,7 +407,7 @@ impl DhtNode {
             .await
     }
 
-    async fn query<Q, A>(&self, peer_id: &AdnlNodeIdShort, query: Q) -> Result<Option<A>>
+    async fn query<Q, A>(&self, peer_id: &adnl::NodeIdShort, query: Q) -> Result<Option<A>>
     where
         Q: TlWrite,
         for<'a> A: TlRead<'a, Repr = tl_proto::Boxed> + 'static,
@@ -418,7 +419,7 @@ impl DhtNode {
 
     pub(super) async fn query_raw(
         &self,
-        peer_id: &AdnlNodeIdShort,
+        peer_id: &adnl::NodeIdShort,
         query: Bytes,
     ) -> Result<Option<Vec<u8>>> {
         let result = self
@@ -436,7 +437,7 @@ impl DhtNode {
 
     async fn query_with_prefix<Q, A>(
         &self,
-        peer_id: &AdnlNodeIdShort,
+        peer_id: &adnl::NodeIdShort,
         query: Q,
     ) -> Result<Option<A>>
     where
@@ -475,7 +476,7 @@ impl DhtNode {
     }
 
     #[inline(always)]
-    pub(super) fn known_peers(&self) -> &PeersCache {
+    pub(super) fn known_peers(&self) -> &adnl::PeersSet {
         &self.state.known_peers
     }
 
@@ -485,12 +486,12 @@ impl DhtNode {
     }
 }
 
-struct DhtNodeState {
+struct NodeState {
     /// Local ADNL key
-    key: Arc<StoredAdnlNodeKey>,
+    key: Arc<adnl::Key>,
 
     /// Known DHT nodes
-    known_peers: PeersCache,
+    known_peers: adnl::PeersSet,
     /// DHT nodes penalty scores table
     penalties: Penalties,
 
@@ -503,10 +504,10 @@ struct DhtNodeState {
     max_allowed_k: u32,
 }
 
-impl DhtNodeState {
-    fn metrics(&self) -> DhtNodeMetrics {
-        DhtNodeMetrics {
-            peers_cache_len: self.known_peers.len(),
+impl NodeState {
+    fn metrics(&self) -> NodeMetrics {
+        NodeMetrics {
+            known_peers_len: self.known_peers.len(),
             bucket_peer_count: self.buckets.iter().map(|bucket| bucket.len()).sum(),
             storage_len: self.storage.len(),
             storage_total_size: self.storage.total_size(),
@@ -526,10 +527,10 @@ impl DhtNodeState {
 
     fn add_dht_peer(
         &self,
-        adnl: &AdnlNode,
+        adnl: &adnl::Node,
         mut peer: proto::dht::NodeOwned,
-    ) -> Result<Option<AdnlNodeIdShort>> {
-        let peer_full_id = AdnlNodeIdFull::try_from(peer.id.as_equivalent_ref())?;
+    ) -> Result<Option<adnl::NodeIdShort>> {
+        let peer_full_id = adnl::NodeIdFull::try_from(peer.id.as_equivalent_ref())?;
 
         // Verify signature
         let signature = std::mem::take(&mut peer.signature);
@@ -546,7 +547,7 @@ impl DhtNodeState {
 
         // Add new ADNL peer
         let is_new_peer = adnl.add_peer(
-            NewPeerContext::Dht,
+            adnl::NewPeerContext::Dht,
             self.key.id(),
             &peer_id,
             peer_ip_address,
@@ -557,7 +558,7 @@ impl DhtNodeState {
         }
 
         // Add new peer to the bucket
-        if self.known_peers.put(peer_id) {
+        if self.known_peers.insert(peer_id) {
             self.buckets.insert(&peer_id, peer);
         } else {
             self.set_good_peer(&peer_id);
@@ -566,7 +567,7 @@ impl DhtNodeState {
         Ok(Some(peer_id))
     }
 
-    fn update_peer_status(&self, peer: &AdnlNodeIdShort, is_good: bool) {
+    fn update_peer_status(&self, peer: &adnl::NodeIdShort, is_good: bool) {
         use dashmap::mapref::entry::Entry;
 
         if is_good {
@@ -583,7 +584,7 @@ impl DhtNodeState {
         }
     }
 
-    fn set_good_peer(&self, peer: &AdnlNodeIdShort) {
+    fn set_good_peer(&self, peer: &adnl::NodeIdShort) {
         if let Some(mut count) = self.penalties.get_mut(peer) {
             *count.value_mut() = count.saturating_sub(1);
         }
@@ -627,7 +628,7 @@ impl DhtNodeState {
 }
 
 #[async_trait::async_trait]
-impl QuerySubscriber for DhtNodeState {
+impl QuerySubscriber for NodeState {
     async fn try_consume_query<'a>(
         &self,
         ctx: SubscriberContext<'a>,
@@ -683,14 +684,14 @@ impl QuerySubscriber for DhtNodeState {
 
 /// Instant DHT node metrics
 #[derive(Debug, Copy, Clone)]
-pub struct DhtNodeMetrics {
-    pub peers_cache_len: usize,
+pub struct NodeMetrics {
+    pub known_peers_len: usize,
     pub bucket_peer_count: usize,
     pub storage_len: usize,
     pub storage_total_size: usize,
 }
 
-type Penalties = FxDashMap<AdnlNodeIdShort, usize>;
+type Penalties = FxDashMap<adnl::NodeIdShort, usize>;
 
 #[derive(thiserror::Error, Debug)]
 enum DhtNodeError {

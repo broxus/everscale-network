@@ -4,8 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use tl_proto::TlRead;
 
-use crate::adnl::AdnlNode;
-use crate::utils::*;
+use crate::adnl;
 
 /// ADNL custom messages subscriber
 #[async_trait::async_trait]
@@ -29,11 +28,14 @@ pub trait QuerySubscriber: Send + Sync {
     ) -> Result<QueryConsumingResult<'a>>;
 }
 
+/// Message or query context.
+///
+/// See [`MessageSubscriber::try_consume_custom`] and [`QuerySubscriber::try_consume_query`]
 #[derive(Copy, Clone)]
 pub struct SubscriberContext<'a> {
-    pub adnl: &'a Arc<AdnlNode>,
-    pub local_id: &'a AdnlNodeIdShort,
-    pub peer_id: &'a AdnlNodeIdShort,
+    pub adnl: &'a Arc<adnl::Node>,
+    pub local_id: &'a adnl::NodeIdShort,
+    pub peer_id: &'a adnl::NodeIdShort,
 }
 
 /// Subscriber response for consumed query
@@ -53,7 +55,7 @@ impl QueryConsumingResult<'_> {
     }
 }
 
-pub async fn process_query<'a>(
+pub(crate) async fn process_query<'a>(
     ctx: SubscriberContext<'a>,
     subscribers: &[Arc<dyn QuerySubscriber>],
     mut query: Cow<'_, [u8]>,
@@ -75,7 +77,7 @@ pub async fn process_query<'a>(
     Ok(QueryProcessingResult::Rejected)
 }
 
-pub enum QueryProcessingResult<T> {
+pub(crate) enum QueryProcessingResult<T> {
     Processed(Option<T>),
     Rejected,
 }
