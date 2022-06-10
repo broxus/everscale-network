@@ -61,7 +61,3 @@ pub struct DhtStore<'tl> {
 pub struct DhtQuery<'tl> {
     pub node: dht::Node<'tl>,
 }
-
-#[derive(TlWrite, TlRead)]
-#[tl(boxed, id = 0xdee618f8)]
-pub struct TonNodeGetCapabilities;
