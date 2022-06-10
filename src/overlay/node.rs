@@ -5,7 +5,7 @@ use anyhow::Result;
 use tl_proto::{BoxedConstructor, TlRead};
 
 use super::overlay_id::{IdFull, IdShort};
-use super::overlay_shard::{OverlayShardMetrics, Shard, ShardOptions};
+use super::overlay_shard::{Shard, ShardMetrics, ShardOptions};
 use crate::adnl;
 use crate::proto;
 use crate::subscriber::*;
@@ -18,7 +18,7 @@ pub struct Node {
     /// Local ADNL key
     node_key: Arc<adnl::Key>,
     /// Shared state
-    state: Arc<OverlayNodeState>,
+    state: Arc<NodeState>,
     /// Overlay group "seed"
     zero_state_file_hash: [u8; 32],
 }
@@ -30,7 +30,7 @@ impl Node {
         key_tag: usize,
     ) -> Result<Arc<Self>> {
         let node_key = adnl.key_by_tag(key_tag)?.clone();
-        let state = Arc::new(OverlayNodeState::default());
+        let state = Arc::new(NodeState::default());
 
         adnl.add_query_subscriber(state.clone())?;
         adnl.add_message_subscriber(state.clone())?;
@@ -47,7 +47,7 @@ impl Node {
         self.state.clone()
     }
 
-    pub fn metrics(&self) -> impl Iterator<Item = (IdShort, OverlayShardMetrics)> + '_ {
+    pub fn metrics(&self) -> impl Iterator<Item = (IdShort, ShardMetrics)> + '_ {
         self.state
             .shards
             .iter()
@@ -112,24 +112,24 @@ impl Node {
 }
 
 #[derive(Default)]
-struct OverlayNodeState {
+struct NodeState {
     /// Overlay shards
     shards: FxDashMap<IdShort, Arc<Shard>>,
     /// Overlay query subscribers
     subscribers: FxDashMap<IdShort, Arc<dyn QuerySubscriber>>,
 }
 
-impl OverlayNodeState {
+impl NodeState {
     fn get_overlay(&self, overlay_id: &IdShort) -> Result<Arc<Shard>> {
         match self.shards.get(overlay_id) {
             Some(shard) => Ok(shard.clone()),
-            None => Err(OverlayNodeError::UnknownOverlay.into()),
+            None => Err(NodeError::UnknownOverlay.into()),
         }
     }
 }
 
 #[async_trait::async_trait]
-impl MessageSubscriber for OverlayNodeState {
+impl MessageSubscriber for NodeState {
     async fn try_consume_custom<'a>(
         &self,
         ctx: SubscriberContext<'a>,
@@ -160,13 +160,13 @@ impl MessageSubscriber for OverlayNodeState {
                     .await?;
                 Ok(true)
             }
-            _ => Err(OverlayNodeError::UnsupportedOverlayBroadcastMessage.into()),
+            _ => Err(NodeError::UnsupportedOverlayBroadcastMessage.into()),
         }
     }
 }
 
 #[async_trait::async_trait]
-impl QuerySubscriber for OverlayNodeState {
+impl QuerySubscriber for NodeState {
     async fn try_consume_query<'a>(
         &self,
         ctx: SubscriberContext<'a>,
@@ -191,18 +191,18 @@ impl QuerySubscriber for OverlayNodeState {
 
         let consumer = match self.subscribers.get(&overlay_id) {
             Some(consumer) => consumer.clone(),
-            None => return Err(OverlayNodeError::NoConsumerFound.into()),
+            None => return Err(NodeError::NoConsumerFound.into()),
         };
 
         match consumer.try_consume_query(ctx, constructor, query).await? {
             QueryConsumingResult::Consumed(result) => Ok(QueryConsumingResult::Consumed(result)),
-            QueryConsumingResult::Rejected(_) => Err(OverlayNodeError::UnsupportedQuery.into()),
+            QueryConsumingResult::Rejected(_) => Err(NodeError::UnsupportedQuery.into()),
         }
     }
 }
 
 #[derive(thiserror::Error, Debug)]
-enum OverlayNodeError {
+enum NodeError {
     #[error("Unsupported overlay broadcast message")]
     UnsupportedOverlayBroadcastMessage,
     #[error("Unknown overlay")]

@@ -97,7 +97,7 @@ pub fn parse_handshake_packet(
         return Err(HandshakeError::BadHandshakePacketLength);
     }
 
-    // SAFETY: AdnlNodeIdShort is 32 (<= 96) bytes and has the same layout as `[u8; 32]`
+    // SAFETY: NodeIdShort is 32 (<= 96) bytes and has the same layout as `[u8; 32]`
     // due to `#[repr(transparent)]`
     let local_id = unsafe { &*(buffer.as_ptr() as *const NodeIdShort) };
 

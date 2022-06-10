@@ -216,8 +216,8 @@ impl Shard {
     }
 
     /// Instant metrics
-    pub fn metrics(&self) -> OverlayShardMetrics {
-        OverlayShardMetrics {
+    pub fn metrics(&self) -> ShardMetrics {
+        ShardMetrics {
             owned_broadcasts_len: self.owned_broadcasts.len(),
             finished_broadcasts_len: self.finished_broadcast_count.load(Ordering::Acquire),
             node_count: self.nodes.len(),
@@ -584,7 +584,7 @@ impl Shard {
 
         let signature = match broadcast.signature.len() {
             64 => broadcast.signature.try_into().unwrap(),
-            _ => return Err(OverlayShardError::UnsupportedSignature.into()),
+            _ => return Err(ShardError::UnsupportedSignature.into()),
         };
 
         let transfer = match self.owned_broadcasts.entry(broadcast_id) {
@@ -1064,7 +1064,7 @@ impl Shard {
 
 /// Instant overlay shard metrics
 #[derive(Debug, Copy, Clone)]
-pub struct OverlayShardMetrics {
+pub struct ShardMetrics {
     pub owned_broadcasts_len: usize,
     pub finished_broadcasts_len: u32,
     pub node_count: usize,
@@ -1101,7 +1101,7 @@ fn process_fec_broadcast(
 
     match decoder.decode(broadcast.seqno as u32, broadcast.data) {
         Some(result) if result.len() != broadcast.data_size as usize => {
-            Err(OverlayShardError::DataSizeMismatch.into())
+            Err(ShardError::DataSizeMismatch.into())
         }
         Some(result) => match compression::decompress(&result) {
             Some(decompressed)
@@ -1114,7 +1114,7 @@ fn process_fec_broadcast(
                 if data_hash.as_slice() == broadcast_id {
                     Ok(Some(result))
                 } else {
-                    Err(OverlayShardError::DataHashMismatch.into())
+                    Err(ShardError::DataHashMismatch.into())
                 }
             }
         },
@@ -1256,7 +1256,7 @@ type BroadcastFecTx = mpsc::UnboundedSender<BroadcastFec>;
 type BroadcastId = [u8; 32];
 
 #[derive(thiserror::Error, Debug)]
-enum OverlayShardError {
+enum ShardError {
     #[error("Unsupported signature")]
     UnsupportedSignature,
     #[error("Data size mismatch")]

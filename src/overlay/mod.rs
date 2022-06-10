@@ -28,7 +28,7 @@ mod node_impl {
 
     pub use super::node::Node;
     pub use super::overlay_shard::{
-        IncomingBroadcastInfo, OutgoingBroadcastInfo, OverlayShardMetrics, ReceivedPeersMap, Shard,
+        IncomingBroadcastInfo, OutgoingBroadcastInfo, ReceivedPeersMap, Shard, ShardMetrics,
         ShardOptions,
     };
 
