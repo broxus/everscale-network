@@ -306,7 +306,7 @@ impl Node {
         use dashmap::mapref::entry::Entry;
 
         // Ignore ourself
-        if peer_id == local_id && peer_ip_address == self.socket_addr {
+        if peer_id == local_id || peer_ip_address == self.socket_addr {
             return Ok(false);
         }
 

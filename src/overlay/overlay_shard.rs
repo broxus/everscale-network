@@ -259,7 +259,7 @@ impl Shard {
 
         let is_new_peer = adnl.add_peer(
             adnl::NewPeerContext::PublicOverlay,
-            self.node_key.id(),
+            self.overlay_key().id(),
             &peer_id,
             ip_address,
             peer_id_full,
@@ -283,6 +283,8 @@ impl Shard {
     where
         I: IntoIterator<Item = (PackedSocketAddr, proto::overlay::Node<'a>)>,
     {
+        let local_id = self.overlay_key().id();
+
         let mut result = Vec::new();
         for (ip_address, node) in nodes {
             if let Err(e) = self.overlay_id.verify_overlay_node(&node) {
@@ -295,7 +297,7 @@ impl Shard {
 
             let is_new_peer = adnl.add_peer(
                 adnl::NewPeerContext::PublicOverlay,
-                self.node_key.id(),
+                local_id,
                 &peer_id,
                 ip_address,
                 peer_id_full,
