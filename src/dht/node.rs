@@ -222,12 +222,19 @@ impl Node {
         &self,
         peer_id: &adnl::NodeIdShort,
         k: u32,
+        store_self: bool,
     ) -> Result<Vec<proto::dht::NodeOwned>> {
         let query = proto::rpc::DhtFindNode {
             key: self.local_id.as_slice(),
             k,
         };
-        Ok(match self.query_with_prefix(peer_id, query).await? {
+
+        let answer = match store_self {
+            true => self.query_with_prefix(peer_id, query).await,
+            false => self.query(peer_id, query).await,
+        }?;
+
+        Ok(match answer {
             Some(BoxedWrapper(proto::dht::NodesOwned { nodes })) => nodes,
             None => Vec::new(),
         })
