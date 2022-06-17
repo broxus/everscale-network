@@ -5,20 +5,20 @@ use tl_proto::{BoxedConstructor, BoxedWrapper, TlRead, TlWrite};
 use super::{adnl, HashRef};
 
 #[derive(TlRead)]
-#[tl(boxed)]
+#[tl(boxed, scheme = "scheme.tl")]
 pub enum ValueResult<'tl> {
-    #[tl(id = 0xe40cf774)]
+    #[tl(id = "dht.valueFound")]
     ValueFound(BoxedWrapper<Value<'tl>>),
-    #[tl(id = 0xa2620568)]
+    #[tl(id = "dht.valueNotFound")]
     ValueNotFound(NodesOwned),
 }
 
 #[derive(TlWrite)]
-#[tl(boxed)]
+#[tl(boxed, scheme = "scheme.tl")]
 pub enum ValueResultOwned {
-    #[tl(id = 0xe40cf774)]
+    #[tl(id = "dht.valueFound")]
     ValueFound(BoxedWrapper<ValueOwned>),
-    #[tl(id = 0xa2620568)]
+    #[tl(id = "dht.valueNotFound")]
     ValueNotFound(NodesOwned),
 }
 
@@ -28,7 +28,7 @@ pub struct Nodes<'tl> {
 }
 
 impl BoxedConstructor for Nodes<'_> {
-    const TL_ID: u32 = 0x7974a0be;
+    const TL_ID: u32 = tl_proto::id!("dht.nodes", scheme = "scheme.tl");
 }
 
 #[derive(TlWrite, TlRead)]
@@ -49,7 +49,7 @@ pub struct Node<'tl> {
 }
 
 impl BoxedConstructor for Node<'_> {
-    const TL_ID: u32 = 0x84533248;
+    const TL_ID: u32 = tl_proto::id!("dht.node", scheme = "scheme.tl");
 }
 
 impl Node<'_> {
@@ -95,7 +95,7 @@ pub struct Value<'tl> {
 }
 
 impl BoxedConstructor for Value<'_> {
-    const TL_ID: u32 = 0x90ad27cb;
+    const TL_ID: u32 = tl_proto::id!("dht.value", scheme = "scheme.tl");
 }
 
 impl Value<'_> {
@@ -141,7 +141,7 @@ pub struct KeyDescription<'tl> {
 }
 
 impl BoxedConstructor for KeyDescription<'_> {
-    const TL_ID: u32 = 0x281d4e05;
+    const TL_ID: u32 = tl_proto::id!("dht.keyDescription", scheme = "scheme.tl");
 }
 
 impl KeyDescription<'_> {
@@ -187,7 +187,7 @@ pub struct Key<'tl> {
 }
 
 impl BoxedConstructor for Key<'_> {
-    const TL_ID: u32 = 0xf667de8f;
+    const TL_ID: u32 = tl_proto::id!("dht.key", scheme = "scheme.tl");
 }
 
 impl Key<'_> {
@@ -223,22 +223,22 @@ impl KeyOwned {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, TlWrite, TlRead)]
-#[tl(boxed)]
+#[tl(boxed, scheme = "scheme.tl")]
 pub enum UpdateRule {
-    #[tl(id = 0x61578e14, size_hint = 0)]
+    #[tl(id = "dht.updateRule.anybody", size_hint = 0)]
     Anybody,
-    #[tl(id = 0x26779383, size_hint = 0)]
+    #[tl(id = "dht.updateRule.overlayNodes", size_hint = 0)]
     OverlayNodes,
-    #[tl(id = 0xcc9f31f7, size_hint = 0)]
+    #[tl(id = "dht.updateRule.signature", size_hint = 0)]
     Signature,
 }
 
 #[derive(Copy, Clone, TlWrite, TlRead)]
-#[tl(boxed, id = 0x5a8aef81, size_hint = 8)]
+#[tl(boxed, id = "dht.pong", size_hint = 8, scheme = "scheme.tl")]
 pub struct Pong {
     pub random_id: u64,
 }
 
 #[derive(Copy, Clone, TlWrite, TlRead)]
-#[tl(boxed, id = 0x7026fb08, size_hint = 0)]
+#[tl(boxed, id = "dht.stored", size_hint = 0, scheme = "scheme.tl")]
 pub struct Stored;

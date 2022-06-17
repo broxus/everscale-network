@@ -10,7 +10,7 @@ pub struct Nodes<'tl> {
 }
 
 impl BoxedConstructor for Nodes<'_> {
-    const TL_ID: u32 = 0xe487290e;
+    const TL_ID: u32 = tl_proto::id!("overlay.nodes", scheme = "scheme.tl");
 }
 
 #[derive(Clone, TlWrite, TlRead)]
@@ -63,7 +63,7 @@ impl NodeOwned {
 }
 
 #[derive(TlWrite)]
-#[tl(boxed, id = 0x03d8a8e1)]
+#[tl(boxed, id = "overlay.node.toSign", scheme = "scheme.tl")]
 pub struct NodeToSign<'tl> {
     pub id: HashRef<'tl>,
     pub overlay: HashRef<'tl>,
@@ -71,7 +71,7 @@ pub struct NodeToSign<'tl> {
 }
 
 #[derive(TlWrite)]
-#[tl(boxed, id = 0x4d9ed329)]
+#[tl(boxed, id = "tonNode.shardPublicOverlayId", scheme = "scheme.tl")]
 pub struct ShardPublicOverlayId<'tl> {
     pub workchain: i32,
     pub shard: u64,
@@ -79,19 +79,19 @@ pub struct ShardPublicOverlayId<'tl> {
 }
 
 #[derive(Debug, Copy, Clone, TlWrite, TlRead)]
-#[tl(boxed, id = 0x75252420, size_hint = 32)]
+#[tl(boxed, id = "overlay.message", scheme = "scheme.tl", size_hint = 32)]
 pub struct Message<'tl> {
     pub overlay: HashRef<'tl>,
 }
 
 #[derive(Debug, Copy, Clone, TlWrite, TlRead)]
-#[tl(boxed)]
+#[tl(boxed, scheme = "scheme.tl")]
 pub enum Broadcast<'tl> {
-    #[tl(id = 0xb15a2b6b)]
+    #[tl(id = "overlay.broadcast")]
     Broadcast(OverlayBroadcast<'tl>),
-    #[tl(id = 0xbad7c36a)]
+    #[tl(id = "overlay.broadcastFec")]
     BroadcastFec(OverlayBroadcastFec<'tl>),
-    #[tl(id = 0xf1881342)]
+    #[tl(id = "overlay.broadcastFecShort")]
     BroadcastFecShort {
         src: everscale_crypto::tl::PublicKey<'tl>,
         certificate: Certificate<'tl>,
@@ -102,13 +102,13 @@ pub enum Broadcast<'tl> {
         seqno: u32,
         signature: &'tl [u8],
     },
-    #[tl(id = 0x95863624, size_hint = 0)]
+    #[tl(id = "overlay.broadcastNotFound", size_hint = 0)]
     BroadcastNotFound,
-    #[tl(id = 0x09d76914, size_hint = 32)]
+    #[tl(id = "overlay.fec.completed", size_hint = 32)]
     FecCompleted { hash: HashRef<'tl> },
-    #[tl(id = 0xd55c14ec, size_hint = 32)]
+    #[tl(id = "overlay.fec.received", size_hint = 32)]
     FecReceived { hash: HashRef<'tl> },
-    #[tl(id = 0x33534e24)]
+    #[tl(id = "overlay.unicast")]
     Unicast { data: &'tl [u8] },
 }
 
@@ -138,15 +138,15 @@ pub struct OverlayBroadcastFec<'tl> {
 }
 
 #[derive(Debug, Copy, Clone, TlWrite, TlRead)]
-#[tl(boxed)]
+#[tl(boxed, scheme = "scheme.tl")]
 pub enum Certificate<'tl> {
-    #[tl(id = 0xe09ed731)]
+    #[tl(id = "overlay.certificate")]
     Certificate {
         issued_by: everscale_crypto::tl::PublicKey<'tl>,
         expire_at: u32,
         max_size: u32,
         signature: &'tl [u8],
     },
-    #[tl(id = 0x32dabccf, size_hint = 0)]
+    #[tl(id = "overlay.emptyCertificate", size_hint = 0)]
     EmptyCertificate,
 }

@@ -50,7 +50,7 @@ impl<'tl> TlWrite for OutgoingPacketContents<'tl> {
             | ((self.reinit_dates.is_some() as u32) << 10)
             | ((self.signature.is_some() as u32) << 11);
 
-        packet.write_u32(0xd142cd89); // constructor
+        packet.write_u32(IncomingPacketContents::TL_ID); // constructor
         self.rand1.write_to(packet);
         packet.write_u32(flags);
         self.from.write_to(packet);
@@ -119,6 +119,10 @@ pub struct IncomingPacketContents<'tl> {
     pub signature: Option<PacketContentsSignature>,
 }
 
+impl IncomingPacketContents<'_> {
+    const TL_ID: u32 = tl_proto::id!("adnl.packetContents", scheme = "scheme.tl");
+}
+
 impl<'tl> TlRead<'tl> for IncomingPacketContents<'tl> {
     type Repr = Boxed;
 
@@ -136,7 +140,7 @@ impl<'tl> TlRead<'tl> for IncomingPacketContents<'tl> {
             })
         }
 
-        if u32::read_from(packet, offset)? != 0xd142cd89 {
+        if u32::read_from(packet, offset)? != Self::TL_ID {
             return Err(TlError::UnknownConstructor);
         }
 
@@ -272,26 +276,26 @@ pub struct ReinitDates {
 }
 
 #[derive(Debug, Copy, Clone, TlRead, TlWrite)]
-#[tl(boxed)]
+#[tl(boxed, scheme = "scheme.tl")]
 pub enum Message<'tl> {
-    #[tl(id = 0x0fac8416)]
+    #[tl(id = "adnl.message.answer")]
     Answer {
         #[tl(size_hint = 32)]
         query_id: HashRef<'tl>,
         answer: &'tl [u8],
     },
 
-    #[tl(id = 0x204818f5)]
+    #[tl(id = "adnl.message.custom")]
     Custom { data: &'tl [u8] },
 
-    #[tl(id = 0x60dd1d69, size_hint = 68)]
+    #[tl(id = "adnl.message.confirmChannel", size_hint = 68)]
     ConfirmChannel {
         key: HashRef<'tl>,
         peer_key: HashRef<'tl>,
         date: u32,
     },
 
-    #[tl(id = 0xfd452d39)]
+    #[tl(id = "adnl.message.part")]
     Part {
         #[tl(size_hint = 32)]
         hash: HashRef<'tl>,
@@ -300,20 +304,20 @@ pub enum Message<'tl> {
         data: &'tl [u8],
     },
 
-    #[tl(id = 0xe673c3bb, size_hint = 36)]
+    #[tl(id = "adnl.message.createChannel", size_hint = 36)]
     CreateChannel { key: HashRef<'tl>, date: u32 },
 
-    #[tl(id = 0xb48bf97a)]
+    #[tl(id = "adnl.message.query")]
     Query {
         #[tl(size_hint = 32)]
         query_id: HashRef<'tl>,
         query: &'tl [u8],
     },
 
-    #[tl(id = 0x17f8dfda, size_hint = 0)]
+    #[tl(id = "adnl.message.nop", size_hint = 0)]
     Nop,
 
-    #[tl(id = 0x10c20520, size_hint = 4)]
+    #[tl(id = "adnl.message.reinit", size_hint = 4)]
     Reinit { date: u32 },
 }
 
@@ -327,7 +331,7 @@ pub struct AddressList {
 }
 
 impl BoxedConstructor for AddressList {
-    const TL_ID: u32 = 0x2227e658;
+    const TL_ID: u32 = tl_proto::id!("adnl.addressList", scheme = "scheme.tl");
 }
 
 impl TlWrite for AddressList {
@@ -384,18 +388,18 @@ impl<'tl> TlRead<'tl> for AddressList {
 }
 
 #[derive(Debug, Copy, Clone, TlRead, TlWrite)]
-#[tl(boxed)]
+#[tl(boxed, scheme = "scheme.tl")]
 #[non_exhaustive]
 pub enum Address {
-    #[tl(id = 0x670da6e7, size_hint = 8)]
+    #[tl(id = "adnl.address.udp", size_hint = 8)]
     Udp { ip: u32, port: u32 },
     // Disabled until ipv6 is widely supported
-    // #[tl(id = 0xe31d63fa, size_hint = 20)]
+    // #[tl(id = "adnl.address.udp6", size_hint = 20)]
     // Udp6 { ip: [u8; 16], port: u32 },
 }
 
 #[derive(Copy, Clone, TlRead, TlWrite)]
-#[tl(boxed, id = 0x20747c0e, size_hint = 8)]
+#[tl(boxed, id = "adnl.pong", size_hint = 8, scheme = "scheme.tl")]
 pub struct Pong {
     pub value: u64,
 }

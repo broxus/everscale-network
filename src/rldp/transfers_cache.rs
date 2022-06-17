@@ -606,7 +606,7 @@ struct OwnedRldpMessageQuery {
 impl OwnedRldpMessageQuery {
     fn from_data(mut data: Vec<u8>) -> Option<Self> {
         #[derive(TlRead, TlWrite)]
-        #[tl(boxed, id = 0x8a794d69)]
+        #[tl(boxed, id = "rldp.query", scheme = "scheme.tl")]
         struct Query {
             #[tl(size_hint = 32)]
             query_id: [u8; 32],

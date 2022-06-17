@@ -1125,7 +1125,7 @@ fn process_fec_broadcast(
 }
 
 #[derive(TlWrite)]
-#[tl(boxed, id = 0xfa374e7c)]
+#[tl(boxed, id = "overlay.broadcast.toSign", scheme = "scheme.tl")]
 struct OverlayBroadcastToSign {
     hash: [u8; 32],
     date: u32,
@@ -1142,7 +1142,7 @@ fn make_broadcast_to_sign(
     date: u32,
     source: Option<&adnl::NodeIdShort>,
 ) -> OverlayBroadcastToSign {
-    const BROADCAST_ID: u32 = 0x51fd789a;
+    const BROADCAST_ID: u32 = tl_proto::id!("overlay.broadcast.id", scheme = "scheme.tl");
 
     let mut broadcast_hash = sha2::Sha256::new();
     broadcast_hash.update(BROADCAST_ID.to_le_bytes());
@@ -1167,8 +1167,9 @@ fn make_fec_part_to_sign(
     seqno: u32,
     source: Option<adnl::NodeIdShort>,
 ) -> OverlayBroadcastToSign {
-    const BROADCAST_FEC_ID: u32 = 0xfb3155a6;
-    const BROADCAST_FEC_PART_ID: u32 = 0xa46962d0;
+    const BROADCAST_FEC_ID: u32 = tl_proto::id!("overlay.broadcastFec.id", scheme = "scheme.tl");
+    const BROADCAST_FEC_PART_ID: u32 =
+        tl_proto::id!("overlay.broadcastFec.partId", scheme = "scheme.tl");
 
     let mut broadcast_hash = sha2::Sha256::new();
     broadcast_hash.update(BROADCAST_FEC_ID.to_le_bytes());
