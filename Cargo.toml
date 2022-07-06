@@ -31,12 +31,13 @@ futures-util = "0.3.21"
 generic-array = "0.14.5"
 hex = "0.4"
 libc = "0.2"
+once_cell = "1.13.0"
 parking_lot = { version = "0.12.0", features = ["hardware-lock-elision"] }
 rand = "0.8"
 rustc-hash = "1.1.0"
 serde = { version = "1.0", features = ["derive"] }
 sha2 = "0.9"
-smallvec = { version = "1.8.0", features = ["union", "const_generics"] }
+smallvec = { version = "1.9.0", features = ["union", "const_generics"] }
 thiserror = "1.0"
 tl-proto = { version = "0.3", features = ["derive", "bytes"] }
 tokio = { version = "1", features = ["sync", "net", "rt", "time", "io-util", "macros"] }

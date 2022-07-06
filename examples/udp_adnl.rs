@@ -16,22 +16,22 @@ async fn main() -> Result<()> {
 
     let adnl_node_options = adnl::NodeOptions::default();
 
-    let first_key = ed25519::SecretKey::generate(&mut rand::thread_rng());
-
+    let left_key = ed25519::SecretKey::generate(&mut rand::thread_rng());
     let left_node = adnl::Node::new(
         PackedSocketAddr::localhost(20000),
         adnl::Keystore::builder()
-            .with_tagged_keys([(first_key.to_bytes(), 0)])?
+            .with_tagged_keys([(left_key.to_bytes(), 0)])?
             .build(),
         adnl_node_options,
         None,
     );
     let left_node_id = *left_node.key_by_tag(0)?.id();
 
+    let right_key = ed25519::SecretKey::generate(&mut rand::thread_rng());
     let right_node = adnl::Node::new(
         PackedSocketAddr::localhost(20001),
         adnl::Keystore::builder()
-            .with_tagged_keys([(first_key.to_bytes(), 0)])?
+            .with_tagged_keys([(right_key.to_bytes(), 0)])?
             .build(),
         adnl_node_options,
         None,
@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
     left_node.add_peer(
         adnl::NewPeerContext::AdnlPacket,
         &left_node_id,
-        &left_node_id,
+        &right_node_id,
         right_node.socket_addr(),
         right_node_full_id,
     )?;

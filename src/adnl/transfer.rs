@@ -1,5 +1,7 @@
+use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use once_cell::race::OnceNonZeroUsize;
 use sha2::Digest;
 
 use crate::utils::*;
@@ -25,8 +27,20 @@ pub struct Transfer {
 impl Transfer {
     /// Creates new multipart transfer with target length in bytes
     pub fn new(total_len: usize) -> Self {
+        // SAFETY: expression is always nonzero
+        let shard_count = DEFAULT_SHARD_COUNT.get_or_init(|| unsafe {
+            NonZeroUsize::new_unchecked(
+                (std::thread::available_parallelism().map_or(1, usize::from) * 4)
+                    .next_power_of_two(),
+            )
+        });
+
         Self {
-            parts: Default::default(),
+            parts: FxDashMap::with_capacity_and_hasher_and_shard_amount(
+                0,
+                Default::default(),
+                shard_count.get(),
+            ),
             received_len: Default::default(),
             total_len,
             timings: Default::default(),
@@ -117,3 +131,5 @@ pub enum TransferError {
     #[error("Invalid transfer data hash")]
     InvalidHash,
 }
+
+static DEFAULT_SHARD_COUNT: OnceNonZeroUsize = OnceNonZeroUsize::new();
