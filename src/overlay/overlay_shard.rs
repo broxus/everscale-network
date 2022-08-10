@@ -405,6 +405,7 @@ impl Shard {
         adnl: &Arc<adnl::Node>,
         data: Vec<u8>,
         source: Option<&Arc<adnl::Key>>,
+        target: BroadcastTarget,
     ) -> OutgoingBroadcastInfo {
         let local_id = self.overlay_key().id();
 
@@ -414,9 +415,9 @@ impl Shard {
         };
 
         if data.len() <= self.options.max_ordinary_broadcast_len {
-            self.send_broadcast(adnl, local_id, data, key)
+            self.send_broadcast(adnl, local_id, data, key, target)
         } else {
-            self.send_fec_broadcast(adnl, local_id, data, key)
+            self.send_fec_broadcast(adnl, local_id, data, key, target)
         }
     }
 
@@ -677,6 +678,7 @@ impl Shard {
         local_id: &adnl::NodeIdShort,
         mut data: Vec<u8>,
         key: &Arc<adnl::Key>,
+        target: BroadcastTarget,
     ) -> OutgoingBroadcastInfo {
         let date = now();
         let broadcast_to_sign = make_broadcast_to_sign(&data, date, None);
@@ -707,15 +709,20 @@ impl Shard {
         broadcast.write_to(&mut buffer);
         drop(data);
 
-        let neighbours = self
-            .neighbours
-            .get_random_peers(self.options.broadcast_target_count, None);
-        self.distribute_broadcast(adnl, local_id, &neighbours, &buffer);
+        let neighbours = match target {
+            BroadcastTarget::RandomNeighbours => OwnedBroadcastTarget::Neighbours(
+                self.neighbours
+                    .get_random_peers(self.options.broadcast_target_count, None),
+            ),
+            BroadcastTarget::Explicit(neighbours) => OwnedBroadcastTarget::Explicit(neighbours),
+        };
+
+        self.distribute_broadcast(adnl, local_id, neighbours.as_ref(), &buffer);
         self.spawn_broadcast_gc_task(broadcast_id);
 
         OutgoingBroadcastInfo {
             packets: 1,
-            recipient_count: neighbours.len(),
+            recipient_count: neighbours.as_ref().len(),
         }
     }
 
@@ -726,6 +733,7 @@ impl Shard {
         local_id: &adnl::NodeIdShort,
         mut data: Vec<u8>,
         key: &Arc<adnl::Key>,
+        target: BroadcastTarget,
     ) -> OutgoingBroadcastInfo {
         let broadcast_id = sha2::Sha256::digest(&data).into();
         if !self.create_broadcast(broadcast_id) {
@@ -749,13 +757,17 @@ impl Shard {
         // NOTE: Data is already in encoder and not needed anymore
         drop(data);
 
-        let neighbours = self
-            .neighbours
-            .get_random_peers(self.options.max_shard_neighbours, None);
+        let neighbours = match target {
+            BroadcastTarget::RandomNeighbours => OwnedBroadcastTarget::Neighbours(
+                self.neighbours
+                    .get_random_peers(self.options.max_shard_neighbours, None),
+            ),
+            BroadcastTarget::Explicit(neighbours) => OwnedBroadcastTarget::Explicit(neighbours),
+        };
 
         let info = OutgoingBroadcastInfo {
             packets: (data_size / outgoing_transfer.encoder.params().packet_len + 1) * 3 / 2,
-            recipient_count: neighbours.len(),
+            recipient_count: neighbours.as_ref().len(),
         };
 
         // Spawn sender
@@ -779,7 +791,12 @@ impl Shard {
                             }
                         };
 
-                    overlay_shard.distribute_broadcast(&adnl, &local_id, &neighbours, &data);
+                    overlay_shard.distribute_broadcast(
+                        &adnl,
+                        &local_id,
+                        neighbours.as_ref(),
+                        &data,
+                    );
                     if outgoing_transfer.seqno > info.packets {
                         break 'outer;
                     }
@@ -1061,6 +1078,34 @@ impl Shard {
                 .fetch_add(1, Ordering::Release);
             overlay_shard.finished_broadcasts.push(broadcast_id);
         });
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum BroadcastTarget {
+    /// Select N random peers from current neighbours
+    RandomNeighbours,
+    /// Explicit neighbour ids
+    Explicit(Arc<Vec<adnl::NodeIdShort>>),
+}
+
+impl Default for BroadcastTarget {
+    fn default() -> Self {
+        Self::RandomNeighbours
+    }
+}
+
+enum OwnedBroadcastTarget {
+    Neighbours(Vec<adnl::NodeIdShort>),
+    Explicit(Arc<Vec<adnl::NodeIdShort>>),
+}
+
+impl AsRef<[adnl::NodeIdShort]> for OwnedBroadcastTarget {
+    fn as_ref(&self) -> &[adnl::NodeIdShort] {
+        match self {
+            OwnedBroadcastTarget::Neighbours(neighbours) => neighbours.as_ref(),
+            OwnedBroadcastTarget::Explicit(neighbours) => neighbours.as_ref(),
+        }
     }
 }
 
