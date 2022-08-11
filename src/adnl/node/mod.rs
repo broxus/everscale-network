@@ -364,6 +364,31 @@ impl Node {
         Some(peer.ip_address())
     }
 
+    /// Matches entries with peer id by ip
+    ///
+    /// NOTE: It is a quite expensive method that iterates over all peers
+    /// and may block new peers from being added during the execution time.
+    /// Use it with caution.
+    pub fn match_peer_ips<T>(
+        &self,
+        local_id: &NodeIdShort,
+        mut entries: FxHashMap<PackedSocketAddr, T>,
+    ) -> Option<FxHashMap<T, NodeIdShort>>
+    where
+        T: std::hash::Hash + Eq,
+    {
+        let peers = self.get_peers(local_id).ok()?;
+
+        let mut result = FxHashMap::with_capacity_and_hasher(entries.len(), Default::default());
+        for peer in peers.iter() {
+            if let Some(key) = entries.remove(&peer.ip_address()) {
+                result.insert(key, *peer.key());
+            }
+        }
+
+        Some(result)
+    }
+
     /// ADNL query without prefix to the remote peer.
     ///
     /// NOTE: In case of timeout returns `Ok(None)`
