@@ -558,8 +558,8 @@ impl QueryOptions {
     }
 }
 
-async fn process_rldp_query<'a>(
-    ctx: SubscriberContext<'a>,
+async fn process_rldp_query(
+    ctx: SubscriberContext<'_>,
     subscribers: &[Arc<dyn QuerySubscriber>],
     mut query: OwnedRldpMessageQuery,
     force_compression: bool,
@@ -616,10 +616,17 @@ impl OwnedRldpMessageQuery {
 
         let mut offset = 0;
         let params = Query::read_from(&data, &mut offset).ok()?;
+        let data_meta = tl_proto::BytesMeta::read_from(&data, &mut offset).ok()?;
+
+        // SAFETY: parsed `BytesMeta` ensures that remaining packet data contains
+        // `data_meta.prefix_len + data_meta.len + data_meta.padding` bytes
         unsafe {
-            let remaining = data.len() - offset;
-            std::ptr::copy(data.as_ptr().add(offset), data.as_mut_ptr(), remaining);
-            data.set_len(remaining);
+            std::ptr::copy(
+                data.as_ptr().add(offset + data_meta.prefix_len),
+                data.as_mut_ptr(),
+                data_meta.len,
+            );
+            data.set_len(data_meta.len);
         };
 
         Some(Self {

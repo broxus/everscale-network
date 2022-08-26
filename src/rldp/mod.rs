@@ -45,7 +45,16 @@ where
 {
     #[allow(clippy::type_complexity)]
     pub fn with_rldp(self, options: NodeOptions) -> NetworkBuilder<HCons<Deferred, L>, There<I>> {
-        let rldp = (self.0.get().clone(), Vec::new(), options);
+        self.with_rldp_ext(options, Vec::new())
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub fn with_rldp_ext(
+        self,
+        options: NodeOptions,
+        subscribers: Vec<Arc<dyn QuerySubscriber>>,
+    ) -> NetworkBuilder<HCons<Deferred, L>, There<I>> {
+        let rldp = (self.0.get().clone(), subscribers, options);
         NetworkBuilder(self.0.prepend(rldp), Default::default())
     }
 }

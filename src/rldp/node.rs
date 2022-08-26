@@ -38,7 +38,7 @@ pub struct NodeOptions {
 
     /// Number of FEC messages to send in group. There will be a short delay between them.
     ///
-    /// Default: `20`
+    /// Default: `10`
     pub query_wave_len: u32,
 
     /// Interval between FEC broadcast waves.
@@ -59,7 +59,7 @@ impl Default for NodeOptions {
             max_peer_queries: 16,
             query_min_timeout_ms: 500,
             query_max_timeout_ms: 10000,
-            query_wave_len: 20,
+            query_wave_len: 10,
             query_wave_interval_ms: 10,
             force_compression: false,
         }
@@ -176,8 +176,6 @@ impl Node {
                 tracing::warn!("Failed to compress RLDP query: {e:?}");
             }
         }
-
-        // TODO: compress data inplace
 
         let query_id = rand::thread_rng().gen();
         let data = proto::rldp::Message::Query {

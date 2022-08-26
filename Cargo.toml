@@ -1,6 +1,6 @@
 [package]
 name = "everscale-network"
-version = "0.3.9"
+version = "0.3.10"
 description = "Implementation of the network part of the Everscale blockchain"
 repository = "https://github.com/broxus/everscale-network"
 authors = ["Ivan Kalinin <i.kalinin@dexpa.io>"]
@@ -10,8 +10,12 @@ include = ["src/**/*.rs", "src/**/*.tl", "README.md"]
 license = "Apache-2.0"
 
 [[example]]
-name = "udp_adnl"
-path = "examples/udp_adnl.rs"
+name = "adnl"
+path = "examples/adnl.rs"
+
+[[example]]
+name = "rldp"
+path = "examples/rldp.rs"
 
 [profile.release]
 debug = true

@@ -76,11 +76,13 @@ impl OutgoingTransfer {
         let data = encoder.encode(&mut seqno_out)?;
 
         let seqno_in = self.state.seqno_in();
+
+        let mut next_seqno_out = seqno_out;
         if seqno_out - seqno_in <= WINDOW {
             if previous_seqno_out == seqno_out {
-                seqno_out += 1;
+                next_seqno_out += 1;
             }
-            self.state.set_seqno_out(seqno_out);
+            self.state.set_seqno_out(next_seqno_out);
         }
 
         tl_proto::serialize_into(
