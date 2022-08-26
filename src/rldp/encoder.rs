@@ -44,9 +44,10 @@ impl RaptorQEncoder {
             packet
         };
 
-        *seqno = packet.payload_id().encoding_symbol_id();
+        let (payload_id, data) = packet.split();
+        *seqno = payload_id.encoding_symbol_id();
 
-        Ok(packet.data().to_vec())
+        Ok(data)
     }
 
     #[inline(always)]

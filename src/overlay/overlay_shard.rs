@@ -313,7 +313,7 @@ impl Shard {
     }
 
     /// Removes peer from random peers and adds it to ignored peers
-    pub fn delete_public_peer(&self, peer_id: &adnl::NodeIdShort) -> bool {
+    pub fn remove_public_peer(&self, peer_id: &adnl::NodeIdShort) -> bool {
         if !self.ignored_peers.insert(*peer_id) {
             return false;
         }
@@ -321,6 +321,19 @@ impl Shard {
             self.update_random_peers(self.options.max_shard_peers);
         }
         true
+    }
+
+    /// Checks whether the specified peer has ever been in this public overlay
+    ///
+    /// NOTE: Peer might have been excluded. If you need to check whether the
+    /// specified peer is still in this overlay use [`Shard::is_active_public_peer`]
+    pub fn is_public_peer(&self, peer_id: &adnl::NodeIdShort) -> bool {
+        self.random_peers.contains(peer_id)
+    }
+
+    /// Checks whether the specified peer is in the current public overlay
+    pub fn is_active_public_peer(&self, peer_id: &adnl::NodeIdShort) -> bool {
+        self.random_peers.contains(peer_id) && !self.ignored_peers.contains(peer_id)
     }
 
     /// Fill `dst` with `amount` peers from known peers
