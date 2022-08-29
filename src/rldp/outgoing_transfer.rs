@@ -152,15 +152,7 @@ impl OutgoingTransferState {
     }
 
     pub fn set_seqno_out(&self, seqno: u32) {
-        let seqno_out = self.seqno_out();
-        if seqno > seqno_out {
-            let _ = self.seqno_out.compare_exchange(
-                seqno_out,
-                seqno,
-                Ordering::Release,
-                Ordering::Relaxed,
-            );
-        }
+        self.seqno_out.fetch_max(seqno, Ordering::Release);
     }
 
     pub fn seqno_in(&self) -> u32 {
@@ -171,16 +163,7 @@ impl OutgoingTransferState {
         if seqno > self.seqno_out() {
             return;
         }
-
-        let seqno_in = self.seqno_in();
-        if seqno > seqno_in {
-            let _ = self.seqno_in.compare_exchange(
-                seqno_in,
-                seqno,
-                Ordering::Release,
-                Ordering::Relaxed,
-            );
-        }
+        self.seqno_in.fetch_max(seqno, Ordering::Release);
     }
 }
 
