@@ -5,7 +5,7 @@ use anyhow::Result;
 use smallvec::SmallVec;
 use tl_proto::{BoxedConstructor, HashWrapper, TlWrite};
 
-use super::DHT_KEY_NODES;
+use super::KEY_NODES;
 use crate::adnl;
 use crate::overlay;
 use crate::proto;
@@ -129,7 +129,7 @@ impl Storage {
 
         let required_key = proto::dht::Key {
             id: overlay_id.as_slice(),
-            name: DHT_KEY_NODES.as_ref(),
+            name: KEY_NODES.as_ref(),
             idx: 0,
         };
         if value.key.key != required_key {

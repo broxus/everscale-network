@@ -1,6 +1,6 @@
 [package]
 name = "everscale-network"
-version = "0.3.10"
+version = "0.3.11"
 description = "Implementation of the network part of the Everscale blockchain"
 repository = "https://github.com/broxus/everscale-network"
 authors = ["Ivan Kalinin <i.kalinin@dexpa.io>"]

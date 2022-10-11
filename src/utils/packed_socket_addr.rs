@@ -53,6 +53,13 @@ impl From<SocketAddrV4> for PackedSocketAddr {
     }
 }
 
+impl From<(Ipv4Addr, u16)> for PackedSocketAddr {
+    fn from((ip, port): (Ipv4Addr, u16)) -> Self {
+        let ip = u32::from_be_bytes(ip.octets());
+        Self((ip as u64) << 16 | port as u64)
+    }
+}
+
 impl From<PackedSocketAddr> for SocketAddrV4 {
     fn from(address: PackedSocketAddr) -> Self {
         let addr = Ipv4Addr::from(((address.0 >> 16) as u32).to_be_bytes());

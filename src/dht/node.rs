@@ -15,7 +15,7 @@ use super::buckets::Buckets;
 use super::entry::Entry;
 use super::futures::StoreValue;
 use super::storage::{Storage, StorageOptions};
-use super::{DHT_KEY_ADDRESS, DHT_KEY_NODES, MAX_DHT_PEERS};
+use super::{KEY_ADDRESS, KEY_NODES, MAX_DHT_PEERS};
 use crate::adnl;
 use crate::overlay;
 use crate::proto;
@@ -254,7 +254,7 @@ impl Node {
         loop {
             // Receive several nodes records
             let received = self
-                .entry(overlay_id, DHT_KEY_NODES)
+                .entry(overlay_id, KEY_NODES)
                 .values()
                 .use_new_peers(true)
                 .map(|(_, BoxedWrapper(proto::overlay::NodesOwned { nodes }))| nodes)
@@ -314,7 +314,7 @@ impl Node {
         self: &Arc<Self>,
         peer_id: &adnl::NodeIdShort,
     ) -> Result<(PackedSocketAddr, adnl::NodeIdFull)> {
-        let mut values = self.entry(peer_id, DHT_KEY_ADDRESS).values();
+        let mut values = self.entry(peer_id, KEY_ADDRESS).values();
         while let Some((key, BoxedWrapper(value))) = values.next().await {
             match (
                 parse_address_list(&value, self.adnl.options().clock_tolerance_sec),
@@ -354,7 +354,7 @@ impl Node {
             key: proto::dht::KeyDescription {
                 key: proto::dht::Key {
                     id: overlay_id.as_slice(),
-                    name: DHT_KEY_NODES.as_bytes(),
+                    name: KEY_NODES.as_bytes(),
                     idx: 0,
                 },
                 id: everscale_crypto::tl::PublicKey::Overlay {
@@ -391,7 +391,7 @@ impl Node {
     ) -> Result<bool> {
         let clock_tolerance_sec = self.adnl.options().clock_tolerance_sec;
 
-        self.entry(key.id(), DHT_KEY_ADDRESS)
+        self.entry(key.id(), KEY_ADDRESS)
             .with_data(
                 proto::adnl::AddressList {
                     address: Some(ip.as_tl()),
@@ -467,7 +467,11 @@ impl Node {
         for<'a> T: TlRead<'a, Repr = tl_proto::Boxed> + 'static,
     {
         match tl_proto::deserialize::<proto::dht::ValueResult>(result)? {
-            proto::dht::ValueResult::ValueFound(BoxedWrapper(value)) => {
+            proto::dht::ValueResult::ValueFound(BoxedWrapper(mut value)) => {
+                if value.key.update_rule == proto::dht::UpdateRule::Signature {
+                    verify_signed_dht_value(&mut value)?;
+                }
+
                 let parsed = tl_proto::deserialize(value.value)?;
                 Ok(Some((value.key.as_equivalent_owned(), parsed)))
             }
@@ -689,6 +693,24 @@ impl QuerySubscriber for NodeState {
     }
 }
 
+fn verify_signed_dht_value(value: &mut proto::dht::Value<'_>) -> Result<()> {
+    if value.key.key.id != &tl_proto::hash(value.key.id) {
+        return Err(DhtNodeError::InvalidValueKey.into());
+    }
+
+    let full_id = adnl::NodeIdFull::try_from(value.key.id)?;
+
+    let key_signature = std::mem::take(&mut value.key.signature);
+    full_id.verify(value.key.as_boxed(), key_signature)?;
+    value.key.signature = key_signature;
+
+    let value_signature = std::mem::take(&mut value.signature);
+    full_id.verify(value.as_boxed(), value_signature)?;
+    value.signature = value_signature;
+
+    Ok(())
+}
+
 /// Instant DHT node metrics
 #[derive(Debug, Copy, Clone)]
 pub struct NodeMetrics {
@@ -708,4 +730,6 @@ enum DhtNodeError {
     UnexpectedQuery,
     #[error("Invalid node count limit")]
     InvalidNodeCountLimit,
+    #[error("Invalid value key")]
+    InvalidValueKey,
 }
