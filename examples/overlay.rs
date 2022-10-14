@@ -18,14 +18,14 @@ async fn main() -> Result<()> {
     let global_config =
         serde_json::from_str::<util::global_config::GlobalConfig>(include_str!("mainnet.json"))?;
 
-    // Build network
+    // Resolve public ip
     let my_ip = public_ip::addr_v4()
         .await
         .context("failed to resolve public ip address")?;
 
     // Create and fill keystore
     let keystore = adnl::Keystore::builder()
-        .with_tagged_key(rand::thread_rng().gen(), 0)?
+        .with_tagged_key(rand::thread_rng().gen(), KEY_TAG)?
         .build();
 
     // Create basic network parts

@@ -22,7 +22,7 @@ async fn main() -> Result<()> {
     let global_config =
         serde_json::from_str::<util::global_config::GlobalConfig>(include_str!("mainnet.json"))?;
 
-    // Build network
+    // Resolve public ip
     let my_ip = public_ip::addr_v4()
         .await
         .context("failed to resolve public ip address")?;
