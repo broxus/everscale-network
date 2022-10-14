@@ -240,6 +240,33 @@ impl Node {
         })
     }
 
+    /// Asks each known DHT node for other nodes, extending current nodes set
+    pub async fn find_more_dht_nodes(&self) -> Result<usize> {
+        let known_nodes = self.known_peers().clone_inner();
+
+        let mut tasks = futures_util::stream::FuturesUnordered::new();
+        for peer_id in known_nodes {
+            tasks.push(async move {
+                let res = self.query_dht_nodes(&peer_id, 10, false).await;
+                (peer_id, res)
+            });
+        }
+
+        let mut node_count = 0;
+        while let Some((peer_id, res)) = tasks.next().await {
+            match res {
+                Ok(nodes) => {
+                    for node in nodes {
+                        node_count += self.add_dht_peer(node)?.is_some() as usize;
+                    }
+                }
+                Err(e) => tracing::warn!("Failed to get DHT nodes from {peer_id}: {e:?}"),
+            }
+        }
+
+        Ok(node_count)
+    }
+
     /// Searches overlay nodes and their ip addresses.
     ///
     /// NOTE: For the sake of speed it uses only a subset of nodes, so

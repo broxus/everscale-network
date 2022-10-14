@@ -121,6 +121,11 @@ impl PeersSet {
             state.insert(peer_id);
         }
     }
+
+    /// Clones internal node ids storage
+    pub fn clone_inner(&self) -> Vec<NodeIdShort> {
+        self.state.read().index.clone()
+    }
 }
 
 pub struct PeersCacheIter<'a> {

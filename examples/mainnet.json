@@ -1,0 +1,271 @@
+{
+    "zero_state": {
+        "file_hash": "0nC4eylStbp9qnCq8KjDYb789NjS25L5ZA1UQwcIOOQ="
+    },
+    "dht_nodes": [
+        {
+            "addr_list": {
+                "address": "51.210.99.131:30303",
+                "expire_at": 0,
+                "reinit_date": 1643142875,
+                "version": 1643142875
+            },
+            "pubkey": "ca86421e09fe1f09d4c36608ebb5012af181aea30e5dac4b353d5b364af03ac5",
+            "signature": "gpLPupTxag2TmYOGlu/LugTsQPa8+67jZNF9vH5EcXlCvgRVODC98fsVDO72TthtuPAxTXF+UuCpKrLr2zBJAg==",
+            "version": 1643142875
+        },
+        {
+            "addr_list": {
+                "address": "146.59.54.116:30303",
+                "expire_at": 0,
+                "reinit_date": 1643142880,
+                "version": 1643142880
+            },
+            "pubkey": "74f5222ec9db27d3b956077fa288df774f7e5f92b6eea014a6d896ed3b29f7fb",
+            "signature": "nlV4gBis2qhw47OR4rgx2VlFu0YNHT2GLf4PVM/Nnl5Ss7Nzy2ermRhGLkLkTNIa+xbmZzJitusZQ6UBxfGgAQ==",
+            "version": 1643142880
+        },
+        {
+            "addr_list": {
+                "address": "141.95.47.232:30303",
+                "expire_at": 0,
+                "reinit_date": 1643142884,
+                "version": 1643142884
+            },
+            "pubkey": "1e7c0c5bd8e39e54c70c29e7cff40f4d170b9be113cfb12ca6cebf06c42e9863",
+            "signature": "qYsnLXB8qQfFFafOynpc91DgdjIDljRU0yuXkSPHkywzYXWkX0I6OZCHfMGgg8LdnFaER6r1nmLVkb9PeSXtAw==",
+            "version": 1643142884
+        },
+        {
+            "addr_list": {
+                "address": "141.94.170.131:30303",
+                "expire_at": 0,
+                "reinit_date": 1643142888,
+                "version": 1643142888
+            },
+            "pubkey": "f6905c14a6b5bfcaf9df9a69598522914387c24a811a844569f22ad56918da78",
+            "signature": "up+SFzbCJa8VGY9Meknms0dfTdQeNO63no9Rb1TYScNvromu2BJM87YBKfIqhvQTVv5aDOu0a7EucK9lR7cZAQ==",
+            "version": 1643142888
+        },
+        {
+            "addr_list": {
+                "address": "198.244.202.87:30303",
+                "expire_at": 0,
+                "reinit_date": 1643142893,
+                "version": 1643142893
+            },
+            "pubkey": "4721a6fc4b67cfa9640ec3fab38426049aed9b992d1afd32eba2c6eb3a527c70",
+            "signature": "HZOqgQL9uEwwwR0AgHmuBLyWkkHXqjSVljG7lLoCIzG9MK276KBtfs73JrGKYg1NjepAqeEOeeexqmoqfuqMDQ==",
+            "version": 1643142893
+        },
+        {
+            "addr_list": {
+                "address": "141.94.170.130:30303",
+                "expire_at": 0,
+                "reinit_date": 1643142897,
+                "version": 1643142897
+            },
+            "pubkey": "61c7df97bacdf2ff933324dfab5853c2951f9966009df6f9e7f3bba22fec03a7",
+            "signature": "mKKfEsfKrsVBtw28pSa8Jm8I1My4Zy4tJSYbS2aMyNJ8xfSUszwSlojlu9xmTfePWVagK1cgTlD8R6gj5FLRBw==",
+            "version": 1643142897
+        },
+        {
+            "addr_list": {
+                "address": "198.244.202.173:30303",
+                "expire_at": 0,
+                "reinit_date": 1643142901,
+                "version": 1643142901
+            },
+            "pubkey": "5dff550062c1c383e55322cddd71626d87d243b901a9c7e4647cc944ada4ea1b",
+            "signature": "vr4kx21lMEzSww7vds2v7FNyq0sbY+K2bUQsGzQzsCHCnIBZhVEGKAFk6pYIlx0yoDjqZGEgvZ5lTSby/Xw9AQ==",
+            "version": 1643142901
+        },
+        {
+            "addr_list": {
+                "address": "141.94.219.93:30303",
+                "expire_at": 0,
+                "reinit_date": 1643142906,
+                "version": 1643142906
+            },
+            "pubkey": "d398c274a97415b657881a4cfc2b95ee919d3a3eecbc6f135af01eb8c32030a2",
+            "signature": "1auAFFWpcaiiyOzZdiMmlMnvM72nw6Cl33+CKrmoxRumQ947GSYn1lTJSFvnHIM93/tRq+MqkRDZJvrb7Bx+Cg==",
+            "version": 1643142906
+        },
+        {
+            "addr_list": {
+                "address": "198.244.202.86:30303",
+                "expire_at": 0,
+                "reinit_date": 1643142911,
+                "version": 1643142911
+            },
+            "pubkey": "55092c7350aee4cedee0e7a4765e518a4a3a7f6239654cbb2bd9eaf1950f4a26",
+            "signature": "oxWBQWuLQqMBkj76y6eOrY5v3M2QHvrRPVHjKaLZX5191wo8D6fTkjGHNG1QV/ZTLEVxeObCtthamWOB6XPTCQ==",
+            "version": 1643142911
+        },
+        {
+            "addr_list": {
+                "address": "141.95.47.230:30303",
+                "expire_at": 0,
+                "reinit_date": 1643142915,
+                "version": 1643142915
+            },
+            "pubkey": "879458de31c608b7052f10bced8a4d38985f165dddf7da8f0d06388b8f7244d5",
+            "signature": "gbVVvCyy+bVLAWWfiIUpJwVHEv89Q5xQSqFELEmS8mRt8QozvUaOXWNyBfVJ+yRc1zLNNcmvks7gQY5lMQyJDQ==",
+            "version": 1643142915
+        },
+        {
+            "addr_list": {
+                "address": "141.94.219.92:30303",
+                "expire_at": 0,
+                "reinit_date": 1643142919,
+                "version": 1643142919
+            },
+            "pubkey": "a9c93acfa9f1e7105c6bf218690541b0e9081b172c782a11810e213bd88bf127",
+            "signature": "oACrpCmQ1tCCNbH0FcsxoWVwsAU5N2h474+sNsTUFDqUGBLSQAoQP9LwmfbZW4phYI5VWCutUR4dYejgefqsBQ==",
+            "version": 1643142919
+        },
+        {
+            "addr_list": {
+                "address": "141.95.47.234:30303",
+                "expire_at": 0,
+                "reinit_date": 1643142924,
+                "version": 1643142924
+            },
+            "pubkey": "237c24c72076cc4d6bd5bce733ed5d58752f8d21dc18d91ba1485a2f96bff8c8",
+            "signature": "enfSwHe1mGLSX/Xc9Nx2kNG6HqrE9kZUbMiBOD8fzyh1nqo9UVxlI8ZOdfCcUpdravPtCQERADchk46eGHusCw==",
+            "version": 1643142924
+        },
+        {
+            "addr_list": {
+                "address": "146.59.54.125:30303",
+                "expire_at": 0,
+                "reinit_date": 1643142928,
+                "version": 1643142928
+            },
+            "pubkey": "3b879059ecfa638d7c96a08dae32d0f85fcc1043ba8397cf341484c62504291a",
+            "signature": "VNFgnRLJs6FAOZ8Qx8dfjWgllbqxJzwQ9B4joY8d2D9XMvUy5L8WoElq9qkqfs2zxWEMpUe6nS71NcD/svpXBg==",
+            "version": 1643142928
+        },
+        {
+            "addr_list": {
+                "address": "141.94.170.134:30303",
+                "expire_at": 0,
+                "reinit_date": 1643142932,
+                "version": 1643142932
+            },
+            "pubkey": "5013ce3bafa4a29d6cfebe32038437666d9470bbcf0cda1252d80dd3ab82d6fb",
+            "signature": "S/NRZAeyUdXTAZJTm0E3hv7hPRmAV+dYBTMxmvrrkly0rlOz2ZoWO0yAYCtLG8hBEaiEUEUflmN12pz5hfpMCA==",
+            "version": 1643142932
+        },
+        {
+            "addr_list": {
+                "address": "141.94.170.133:30303",
+                "expire_at": 0,
+                "reinit_date": 1643142936,
+                "version": 1643142936
+            },
+            "pubkey": "f1566ca227b48a05971f7ecc018295bcbb8ca769ad61c29fea9155df827b1bac",
+            "signature": "gs/BE0tKDFChjh6DyYt2c7gM07hFlx2e/lCuf1GFHfUwTcO5JkS2t5KoQVbTQ/bqhsxtVWQnnVAHuMM60pnDAA==",
+            "version": 1643142936
+        },
+        {
+            "addr_list": {
+                "address": "198.244.202.174:30303",
+                "expire_at": 0,
+                "reinit_date": 1643142941,
+                "version": 1643142941
+            },
+            "pubkey": "5b9bf4cb020157c0e85f18dd3f4e0bb6a778f215b5f7a9f6f1329e16b98980c5",
+            "signature": "3AKBy9ufaJXSraNF8dGXRqake1p1RqRkUHCQM/LUnA1/ZogiC+2KFuaROCs4nOdYcqFbgGzyy6W4kHXsfaWTBw==",
+            "version": 1643142941
+        },
+        {
+            "addr_list": {
+                "address": "141.95.47.231:30303",
+                "expire_at": 0,
+                "reinit_date": 1643142945,
+                "version": 1643142945
+            },
+            "pubkey": "227e5ed21dade169aa2a98b6d960386c8394cadd4eb1fd24f73e9c23387b14ea",
+            "signature": "rE6Q6OO+8Oas+ySpVlfk9Ve1C0rm8WQb8DIZQ+Nw+iher7ysc3xlC2iLrbDZze55ArKnCoL7kxhs6cx93C4dBQ==",
+            "version": 1643142945
+        },
+        {
+            "addr_list": {
+                "address": "146.59.54.124:30303",
+                "expire_at": 0,
+                "reinit_date": 1643142950,
+                "version": 1643142950
+            },
+            "pubkey": "afd5503b4beb119b1d00a448d2efd57bd4ed200ed8a71b4d73a7f5be0b3af091",
+            "signature": "COfg4XoFDBPER/uf56xtz+3GTMjZbI3aKCpaf41z8WunVdyL6Mvmy7/jXB72/gvdiKUwqse6MLR0aXKefA/gAA==",
+            "version": 1643142950
+        },
+        {
+            "addr_list": {
+                "address": "146.59.54.126:30303",
+                "expire_at": 0,
+                "reinit_date": 1643142955,
+                "version": 1643142955
+            },
+            "pubkey": "4e286c04d10eba97f48bcc2afa2276047b457284ae18b22c9258e6a611ca510b",
+            "signature": "Y2JVXcCKXEMqp+KWHF5yWLZNJSwhKZMY9UfznGVgJ8M7gRLQosatIk12YWwH82NvLv6vYNxMKdACeQlmx2RPCA==",
+            "version": 1643142955
+        },
+        {
+            "addr_list": {
+                "address": "141.94.170.132:30303",
+                "expire_at": 0,
+                "reinit_date": 1643142959,
+                "version": 1643142959
+            },
+            "pubkey": "c602fc4910cd610007aac91c3e04a542e38cfd0e5e56e7be98f37af8bffb3bfa",
+            "signature": "VpkxeG89CjnhIVsw3JS3/wDb9ZhjuYyCWRS0aHn0KTYgvVgNQvK2jiICHEyhe1VqAtgDBUiDvsokf3WImmmgDA==",
+            "version": 1643142959
+        },
+        {
+            "addr_list": {
+                "address": "141.94.219.91:30303",
+                "expire_at": 0,
+                "reinit_date": 1643142963,
+                "version": 1643142963
+            },
+            "pubkey": "6da5df9cd60a6001ef0db4b56f2c09b9f4f3cccf5c369312287d009d6d8d5dfa",
+            "signature": "3hFbuRlbQ3JB3deSh+uqrRUmhvWvTZJheXddrT+GcGXnk6KOZcRQOWG3suScrNXq8XaQPd9pqPRxVOQAR98gDw==",
+            "version": 1643142963
+        },
+        {
+            "addr_list": {
+                "address": "51.89.219.191:30303",
+                "expire_at": 0,
+                "reinit_date": 1643142968,
+                "version": 1643142968
+            },
+            "pubkey": "5821653e5fe21aa4f9b0e0a2134d5ec183f05d0fe6e190c39a51552f2158f40c",
+            "signature": "QJVPStDhScf66ZJg6/VfC6xWhvqvalLAHVa6hrKUQyTC8GDV/cLXTCfk9Phy6xBlhwbtDoZhJokdDJrkXcZADg==",
+            "version": 1643142968
+        },
+        {
+            "addr_list": {
+                "address": "135.125.8.129:30303",
+                "expire_at": 0,
+                "reinit_date": 1643142974,
+                "version": 1643142974
+            },
+            "pubkey": "6040a1180f3825c6bfb3f8cb5982108c9786566626baa1326ed6c8f59934bb67",
+            "signature": "6MVl8vhaa2vG4pVE6FVd8Nu56Q+s0ZHdGHz/fvsy8hzSTM3FMIXPGDhvvjhT7DvPIOutSCpBojALPJMoQuvfDw==",
+            "version": 1643142974
+        },
+        {
+            "addr_list": {
+                "address": "51.210.117.4:30303",
+                "expire_at": 0,
+                "reinit_date": 1643142979,
+                "version": 1643142979
+            },
+            "pubkey": "48669f88a816697bb221b726edf9d15615c5c9f19adb812bdcb117317719a750",
+            "signature": "QGdMo8Qxuo3TMuzI+9fewGhUEBTkGB3299rSO+P7F1SDqd5E4c9lsG6zFTEwSGyIcj+p9F3jRpd83fX/Wg8TCg==",
+            "version": 1643142979
+        }
+    ]
+}

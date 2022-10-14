@@ -23,7 +23,7 @@ use std::net::SocketAddrV4;
 
 use anyhow::Result;
 use everscale_network::{adnl, NetworkBuilder};
-use tl_proto::TlWrite;
+use tl_proto::{TlRead, TlWrite};
 
 #[derive(TlWrite, TlRead)]
 #[tl(boxed, id = 0x11223344)]
@@ -49,7 +49,7 @@ async fn example() -> Result<()> {
 
     // Store some data in DHT
     let stored = dht
-        .entry(&[0u8; 32], "some_value")
+        .entry(dht.key().id(), "some_value")
         .with_data(MyCustomData { counter: 0 })
         .with_ttl(3600)
         .sign_and_store(dht.key())?

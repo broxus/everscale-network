@@ -36,6 +36,11 @@ impl IdFull {
 pub struct IdShort([u8; 32]);
 
 impl IdShort {
+    #[inline(always)]
+    pub const fn new(id: [u8; 32]) -> Self {
+        Self(id)
+    }
+
     pub fn verify_overlay_node(&self, node: &proto::overlay::Node) -> Result<()> {
         if node.overlay != &self.0 {
             return Err(OverlayIdError::OverlayIdMismatch.into());
@@ -55,7 +60,8 @@ impl IdShort {
         Ok(())
     }
 
-    pub fn as_slice(&self) -> &[u8; 32] {
+    #[inline(always)]
+    pub const fn as_slice(&self) -> &[u8; 32] {
         &self.0
     }
 }

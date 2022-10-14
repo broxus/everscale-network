@@ -82,6 +82,7 @@ pub enum NodeIdFullError {
 pub struct NodeIdShort([u8; 32]);
 
 impl NodeIdShort {
+    #[inline(always)]
     pub const fn new(hash: [u8; 32]) -> Self {
         Self(hash)
     }
@@ -90,10 +91,12 @@ impl NodeIdShort {
         Self(rand::thread_rng().gen())
     }
 
+    #[inline(always)]
     pub const fn as_slice(&self) -> &[u8; 32] {
         &self.0
     }
 
+    #[inline(always)]
     pub fn is_zero(&self) -> bool {
         self == &[0; 32]
     }
@@ -118,30 +121,49 @@ impl std::fmt::Debug for NodeIdShort {
 }
 
 impl PartialEq<[u8]> for NodeIdShort {
+    #[inline(always)]
     fn eq(&self, other: &[u8]) -> bool {
         self.0.eq(other)
     }
 }
 
 impl PartialEq<[u8; 32]> for NodeIdShort {
+    #[inline(always)]
     fn eq(&self, other: &[u8; 32]) -> bool {
         self.0.eq(other)
     }
 }
 
 impl From<NodeIdShort> for [u8; 32] {
+    #[inline(always)]
     fn from(id: NodeIdShort) -> Self {
         id.0
     }
 }
 
+impl From<&NodeIdShort> for [u8; 32] {
+    #[inline(always)]
+    fn from(id: &NodeIdShort) -> Self {
+        id.0
+    }
+}
+
+impl From<[u8; 32]> for NodeIdShort {
+    #[inline(always)]
+    fn from(id: [u8; 32]) -> Self {
+        Self(id)
+    }
+}
+
 impl Borrow<[u8; 32]> for NodeIdShort {
+    #[inline(always)]
     fn borrow(&self) -> &[u8; 32] {
         &self.0
     }
 }
 
 impl<'a> Borrow<[u8; 32]> for &'a NodeIdShort {
+    #[inline(always)]
     fn borrow(&self) -> &[u8; 32] {
         &self.0
     }

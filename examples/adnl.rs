@@ -12,7 +12,7 @@ use tl_proto::{TlRead, TlWrite};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // env_logger::init();
+    // tracing_subscriber::fmt::init();
 
     let adnl_node_options = adnl::NodeOptions::default();
 
