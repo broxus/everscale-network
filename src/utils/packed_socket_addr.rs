@@ -32,6 +32,10 @@ impl PackedSocketAddr {
         self.0 as u16
     }
 
+    pub fn set_port(&mut self, port: u16) {
+        self.0 = (self.0 & !(u16::MAX as u64)) | (port as u64)
+    }
+
     /// TL representation
     pub fn as_tl(&self) -> proto::adnl::Address {
         proto::adnl::Address::Udp {
@@ -117,4 +121,18 @@ pub enum AdnlAddressListError {
     TooNewVersion,
     #[error("Address list is expired")]
     Expired,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn correct_port_update() {
+        let mut ip = PackedSocketAddr::from_ip_and_port(0x12345678, 123);
+        assert_eq!(ip.port(), 123);
+
+        ip.set_port(4560);
+        assert_eq!(ip.port(), 4560);
+    }
 }

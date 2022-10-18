@@ -77,6 +77,7 @@
 
 use std::sync::Arc;
 
+use anyhow::Result;
 use frunk_core::hlist::{HCons, HNil};
 use frunk_core::indices::Here;
 
@@ -86,7 +87,7 @@ pub use self::node_id::{ComputeNodeIds, NodeIdFull, NodeIdShort};
 pub use self::peer::{NewPeerContext, PeerFilter};
 pub use self::peers_set::PeersSet;
 
-use crate::utils::{NetworkBuilder, PackedSocketAddr};
+use crate::utils::{DeferredInitialization, NetworkBuilder, PackedSocketAddr};
 
 mod channel;
 mod encryption;
@@ -102,18 +103,42 @@ mod queries_cache;
 mod socket;
 mod transfer;
 
-impl NetworkBuilder<HNil, Here> {
+pub(crate) type Deferred = Result<Arc<Node>>;
+
+impl DeferredInitialization for Deferred {
+    type Initialized = Arc<Node>;
+
+    fn initialize(self) -> Result<Self::Initialized> {
+        let adnl = self?;
+        adnl.start()?;
+        Ok(adnl)
+    }
+}
+
+impl NetworkBuilder<HNil, (Here, Here)> {
     pub fn with_adnl<T>(
         socket_addr: T,
         keystore: Keystore,
         options: NodeOptions,
-    ) -> NetworkBuilder<HCons<Arc<Node>, HNil>, Here>
+    ) -> NetworkBuilder<HCons<Deferred, HNil>, (Here, Here)>
+    where
+        T: Into<PackedSocketAddr>,
+    {
+        Self::with_adnl_ext(socket_addr, keystore, options, None)
+    }
+
+    pub fn with_adnl_ext<T>(
+        socket_addr: T,
+        keystore: Keystore,
+        options: NodeOptions,
+        peer_filter: Option<Arc<dyn PeerFilter>>,
+    ) -> NetworkBuilder<HCons<Deferred, HNil>, (Here, Here)>
     where
         T: Into<PackedSocketAddr>,
     {
         NetworkBuilder(
             HCons {
-                head: Node::new(socket_addr, keystore, options, None),
+                head: Node::new(socket_addr.into(), keystore, options, peer_filter),
                 tail: HNil,
             },
             Default::default(),
@@ -121,8 +146,8 @@ impl NetworkBuilder<HNil, Here> {
     }
 }
 
-impl<I> NetworkBuilder<HCons<Arc<Node>, HNil>, I> {
-    pub fn build(self) -> Arc<Node> {
-        self.0.head
+impl<I> NetworkBuilder<HCons<Deferred, HNil>, I> {
+    pub fn build(self) -> Result<Arc<Node>> {
+        self.0.head.initialize()
     }
 }

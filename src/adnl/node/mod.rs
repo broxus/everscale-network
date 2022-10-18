@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bytes::Bytes;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -143,15 +143,21 @@ pub struct Node {
 
 impl Node {
     /// Create new ADNL node on the specified address
-    pub fn new<T>(
-        socket_addr: T,
+    pub fn new(
+        mut socket_addr: PackedSocketAddr,
         keystore: Keystore,
         options: NodeOptions,
         peer_filter: Option<Arc<dyn PeerFilter>>,
-    ) -> Arc<Self>
-    where
-        T: Into<PackedSocketAddr>,
-    {
+    ) -> Result<Arc<Self>> {
+        // Bind node socket
+        let socket = make_udp_socket(socket_addr.port())?;
+
+        // Update socket addr with auto assigned port (in case of 0)
+        if socket_addr.port() == 0 {
+            let local_addr = socket.local_addr().context("Failed to select UDP port")?;
+            socket_addr.set_port(local_addr.port());
+        }
+
         let (sender_queue_tx, sender_queue_rx) = mpsc::unbounded_channel();
 
         // Add empty peers map for each local peer
@@ -161,8 +167,8 @@ impl Node {
             peers.insert(*key, Default::default());
         }
 
-        Arc::new(Self {
-            socket_addr: socket_addr.into(),
+        Ok(Arc::new(Self {
+            socket_addr,
             keystore,
             options,
             peer_filter,
@@ -173,13 +179,14 @@ impl Node {
             queries: Default::default(),
             sender_queue_tx,
             init_state: Mutex::new(Some(InitializationState {
+                socket,
                 sender_queue_rx,
                 message_subscribers: Default::default(),
                 query_subscribers: Default::default(),
             })),
             start_time: now(),
             cancellation_token: Default::default(),
-        })
+        }))
     }
 
     /// ADNL node options
@@ -232,14 +239,15 @@ impl Node {
             None => return Err(NodeError::AlreadyRunning.into()),
         };
 
-        // Bind node socket
-        let socket = make_udp_socket(self.socket_addr.port())?;
-
         init.query_subscribers.push(Arc::new(PingSubscriber));
 
         // Start background logic
-        self.start_sender(socket.clone(), init.sender_queue_rx);
-        self.start_receiver(socket, init.message_subscribers, init.query_subscribers);
+        self.start_sender(init.socket.clone(), init.sender_queue_rx);
+        self.start_receiver(
+            init.socket,
+            init.message_subscribers,
+            init.query_subscribers,
+        );
 
         // Done
         Ok(())
@@ -558,6 +566,7 @@ pub struct NodeMetrics {
 }
 
 struct InitializationState {
+    socket: Arc<tokio::net::UdpSocket>,
     /// Receiver end of the outgoing packets queue
     sender_queue_rx: SenderQueueRx,
     message_subscribers: Vec<Arc<dyn MessageSubscriber>>,

@@ -22,19 +22,20 @@ mod peers_iter;
 mod storage;
 pub mod streams;
 
-pub(crate) type Deferred = (Arc<adnl::Node>, usize, NodeOptions);
+pub(crate) type Deferred = Result<(Arc<adnl::Node>, usize, NodeOptions)>;
 
 impl DeferredInitialization for Deferred {
     type Initialized = Arc<Node>;
 
     fn initialize(self) -> Result<Self::Initialized> {
-        Node::new(self.0, self.1, self.2)
+        let (adnl, key_tag, options) = self?;
+        Node::new(adnl, key_tag, options)
     }
 }
 
-impl<L, I> NetworkBuilder<L, I>
+impl<L, A, R> NetworkBuilder<L, (A, R)>
 where
-    L: HList + Selector<Arc<adnl::Node>, I>,
+    L: HList + Selector<adnl::Deferred, A>,
     HCons<Deferred, L>: IntoTuple2,
 {
     #[allow(clippy::type_complexity)]
@@ -42,9 +43,12 @@ where
         self,
         key_tag: usize,
         options: NodeOptions,
-    ) -> NetworkBuilder<HCons<Deferred, L>, There<I>> {
-        let deferred_dht = (self.0.get().clone(), key_tag, options);
-        NetworkBuilder(self.0.prepend(deferred_dht), Default::default())
+    ) -> NetworkBuilder<HCons<Deferred, L>, (There<A>, There<R>)> {
+        let deferred = match self.0.get() {
+            Ok(adnl) => Ok((adnl.clone(), key_tag, options)),
+            Err(_) => Err(anyhow::anyhow!("ADNL was not initialized")),
+        };
+        NetworkBuilder(self.0.prepend(deferred), Default::default())
     }
 }
 

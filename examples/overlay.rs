@@ -41,9 +41,6 @@ async fn main() -> Result<()> {
         dht.add_dht_peer(peer)?;
     }
 
-    // Initialize network
-    adnl.start()?;
-
     let new_dht_nodes = dht.find_more_dht_nodes().await?;
     tracing::info!("found {new_dht_nodes} DHT nodes");
 

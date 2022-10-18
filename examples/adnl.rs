@@ -18,24 +18,24 @@ async fn main() -> Result<()> {
 
     let left_key = ed25519::SecretKey::generate(&mut rand::thread_rng());
     let left_node = adnl::Node::new(
-        PackedSocketAddr::localhost(20000),
+        PackedSocketAddr::localhost(0),
         adnl::Keystore::builder()
             .with_tagged_keys([(left_key.to_bytes(), 0)])?
             .build(),
         adnl_node_options,
         None,
-    );
+    )?;
     let left_node_id = *left_node.key_by_tag(0)?.id();
 
     let right_key = ed25519::SecretKey::generate(&mut rand::thread_rng());
     let right_node = adnl::Node::new(
-        PackedSocketAddr::localhost(20001),
+        PackedSocketAddr::localhost(0),
         adnl::Keystore::builder()
             .with_tagged_keys([(right_key.to_bytes(), 0)])?
             .build(),
         adnl_node_options,
         None,
-    );
+    )?;
     right_node.add_query_subscriber(Arc::new(Service))?;
 
     let right_node_id_full = *right_node.key_by_tag(0)?.full_id();

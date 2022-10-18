@@ -33,7 +33,7 @@ async fn main() -> Result<()> {
         .build();
 
     // Create basic network parts
-    let (adnl, dht) = NetworkBuilder::with_adnl((my_ip, 30000), keystore, Default::default())
+    let (_adnl, dht) = NetworkBuilder::with_adnl((my_ip, 30000), keystore, Default::default())
         .with_dht(KEY_TAG, Default::default())
         .build()?;
 
@@ -41,9 +41,6 @@ async fn main() -> Result<()> {
     for global_config::DhtNode(peer) in global_config.dht_nodes {
         dht.add_dht_peer(peer)?;
     }
-
-    // Initialize network
-    adnl.start()?;
 
     let new_dht_nodes = dht.find_more_dht_nodes().await?;
     tracing::info!("found {new_dht_nodes} DHT nodes");

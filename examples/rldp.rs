@@ -51,9 +51,6 @@ async fn main() -> Result<()> {
         right_node_id_full,
     )?;
 
-    left_adnl.start()?;
-    right_adnl.start()?;
-
     let iterations = Arc::new(AtomicUsize::new(0));
     let mut handles = Vec::new();
 

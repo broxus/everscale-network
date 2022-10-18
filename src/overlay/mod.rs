@@ -25,7 +25,7 @@ mod node_impl {
 
     use anyhow::Result;
     use frunk_core::hlist::{HCons, HList, IntoTuple2, Selector};
-    use frunk_core::indices::{Here, There};
+    use frunk_core::indices::There;
 
     pub use super::node::Node;
     pub use super::overlay::{
@@ -33,7 +33,6 @@ mod node_impl {
         OverlayOptions, ReceivedPeersMap,
     };
 
-    use crate::adnl;
     use crate::rldp;
     use crate::utils::{DeferredInitialization, NetworkBuilder};
 
@@ -47,24 +46,28 @@ mod node_impl {
         }
     }
 
-    impl<L, I> NetworkBuilder<L, I>
+    impl<L, A, R> NetworkBuilder<L, (A, R)>
     where
-        L: HList + Selector<rldp::Deferred, Here> + Selector<Arc<adnl::Node>, I>,
+        L: HList + Selector<rldp::Deferred, R>,
         HCons<Deferred, L>: IntoTuple2,
     {
         #[allow(clippy::type_complexity)]
         pub fn with_overlay(
             mut self,
             key_tag: usize,
-        ) -> NetworkBuilder<HCons<Deferred, L>, There<I>> {
-            let adnl: &Arc<adnl::Node> = self.0.get();
-            let overlay = Node::new(adnl.clone(), key_tag);
-            if let Ok(overlay) = &overlay {
-                let rldp: &mut rldp::Deferred = self.0.get_mut();
-                rldp.1.push(overlay.query_subscriber());
-            }
+        ) -> NetworkBuilder<HCons<Deferred, L>, (There<A>, There<R>)> {
+            let deferred = match self.0.get_mut() {
+                Ok((adnl, subscribers, _)) => {
+                    let overlay = Node::new(adnl.clone(), key_tag);
+                    if let Ok(overlay) = &overlay {
+                        subscribers.push(overlay.query_subscriber());
+                    }
+                    overlay
+                }
+                Err(_) => Err(anyhow::anyhow!("ADNL was not initialized")),
+            };
 
-            NetworkBuilder(self.0.prepend(overlay), Default::default())
+            NetworkBuilder(self.0.prepend(deferred), Default::default())
         }
     }
 

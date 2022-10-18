@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use frunk_core::hlist::{HCons, HList, IntoTuple2, Selector};
-use frunk_core::indices::There;
+use frunk_core::indices::{There, Here};
 
 pub(crate) use decoder::RaptorQDecoder;
 pub(crate) use encoder::RaptorQEncoder;
@@ -28,23 +28,27 @@ mod node;
 mod outgoing_transfer;
 mod transfers_cache;
 
-pub(crate) type Deferred = (Arc<adnl::Node>, Vec<Arc<dyn QuerySubscriber>>, NodeOptions);
+pub(crate) type Deferred = Result<(Arc<adnl::Node>, Vec<Arc<dyn QuerySubscriber>>, NodeOptions)>;
 
 impl DeferredInitialization for Deferred {
     type Initialized = Arc<Node>;
 
     fn initialize(self) -> Result<Self::Initialized> {
-        Node::new(self.0, self.1, self.2)
+        let (adnl, subscripts, options) = self?;
+        Node::new(adnl, subscripts, options)
     }
 }
 
-impl<L, I> NetworkBuilder<L, I>
+impl<L, A, R> NetworkBuilder<L, (A, R)>
 where
-    L: HList + Selector<Arc<adnl::Node>, I>,
+    L: HList + Selector<adnl::Deferred, A>,
     HCons<Deferred, L>: IntoTuple2,
 {
     #[allow(clippy::type_complexity)]
-    pub fn with_rldp(self, options: NodeOptions) -> NetworkBuilder<HCons<Deferred, L>, There<I>> {
+    pub fn with_rldp(
+        self,
+        options: NodeOptions,
+    ) -> NetworkBuilder<HCons<Deferred, L>, (There<A>, Here)> {
         self.with_rldp_ext(options, Vec::new())
     }
 
@@ -53,8 +57,11 @@ where
         self,
         options: NodeOptions,
         subscribers: Vec<Arc<dyn QuerySubscriber>>,
-    ) -> NetworkBuilder<HCons<Deferred, L>, There<I>> {
-        let rldp = (self.0.get().clone(), subscribers, options);
-        NetworkBuilder(self.0.prepend(rldp), Default::default())
+    ) -> NetworkBuilder<HCons<Deferred, L>, (There<A>, Here)> {
+        let deferred = match self.0.get() {
+            Ok(adnl) => Ok((adnl.clone(), subscribers, options)),
+            Err(_) => Err(anyhow::anyhow!("ADNL was not initialized")),
+        };
+        NetworkBuilder(self.0.prepend(deferred), Default::default())
     }
 }
