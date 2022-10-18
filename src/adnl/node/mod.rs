@@ -301,7 +301,7 @@ impl Node {
         local_id: &NodeIdShort,
         peer_id: &NodeIdShort,
         peer_ip_address: PackedSocketAddr,
-        peer_full_id: NodeIdFull,
+        peer_id_full: NodeIdFull,
     ) -> Result<bool> {
         use dashmap::mapref::entry::Entry;
 
@@ -323,7 +323,7 @@ impl Node {
             Entry::Occupied(entry) => entry.get().set_ip_address(peer_ip_address),
             // Create new peer state otherwise
             Entry::Vacant(entry) => {
-                entry.insert(Peer::new(self.start_time, peer_ip_address, peer_full_id));
+                entry.insert(Peer::new(self.start_time, peer_ip_address, peer_id_full));
 
                 tracing::trace!(
                     "Added ADNL peer {peer_ip_address}. PEER ID {peer_id} -> LOCAL ID {local_id}"

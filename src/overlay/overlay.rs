@@ -19,19 +19,19 @@ use crate::proto;
 use crate::rldp::{self, compression, RaptorQDecoder, RaptorQEncoder};
 use crate::utils::*;
 
-/// Overlay shard configuration
+/// Overlay configuration
 #[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
-pub struct ShardOptions {
+pub struct OverlayOptions {
     /// Instant random peers list length. Used to select neighbours.
     ///
     /// Default: `20`
-    pub max_shard_peers: usize,
+    pub max_random_peers: usize,
 
     /// More persistent list of peers. Used to distribute broadcasts.
     ///
     /// Default: `5`
-    pub max_shard_neighbours: usize,
+    pub max_neighbours: usize,
 
     /// Max simultaneous broadcasts.
     ///
@@ -49,7 +49,7 @@ pub struct ShardOptions {
     pub overlay_peers_timeout_ms: u64,
 
     /// Packets with length bigger than this will be sent using FEC broadcast.
-    /// See [`Shard::broadcast`]
+    /// See [`Overlay::broadcast`]
     ///
     /// Default: `768` bytes
     pub max_ordinary_broadcast_len: usize,
@@ -90,11 +90,11 @@ pub struct ShardOptions {
     pub force_compression: bool,
 }
 
-impl Default for ShardOptions {
+impl Default for OverlayOptions {
     fn default() -> Self {
         Self {
-            max_shard_peers: 20,
-            max_shard_neighbours: 5,
+            max_random_peers: 20,
+            max_neighbours: 5,
             max_broadcast_log: 1000,
             broadcast_gc_interval_ms: 1000,
             overlay_peers_timeout_ms: 60000,
@@ -111,13 +111,13 @@ impl Default for ShardOptions {
 }
 
 /// P2P messages distribution layer
-pub struct Shard {
+pub struct Overlay {
     /// Unique overlay id
-    overlay_id: IdShort,
+    id: IdShort,
     /// Local ADNL key
     node_key: Arc<adnl::Key>,
     // Configuration
-    options: ShardOptions,
+    options: OverlayOptions,
 
     /// Broadcasts in progress
     owned_broadcasts: FxDashMap<BroadcastId, Arc<OwnedBroadcast>>,
@@ -148,22 +148,18 @@ pub struct Shard {
     message_prefix: Vec<u8>,
 }
 
-impl Shard {
+impl Overlay {
     /// Create new overlay node on top of the given ADNL node
-    pub(super) fn new(
-        node_key: Arc<adnl::Key>,
-        overlay_id: IdShort,
-        options: ShardOptions,
-    ) -> Arc<Self> {
+    pub(super) fn new(node_key: Arc<adnl::Key>, id: IdShort, options: OverlayOptions) -> Arc<Self> {
         let query_prefix = tl_proto::serialize(proto::rpc::OverlayQuery {
-            overlay: overlay_id.as_slice(),
+            overlay: id.as_slice(),
         });
         let message_prefix = tl_proto::serialize(proto::overlay::Message {
-            overlay: overlay_id.as_slice(),
+            overlay: id.as_slice(),
         });
 
         let overlay = Arc::new(Self {
-            overlay_id,
+            id,
             node_key,
             options,
             owned_broadcasts: FxDashMap::default(),
@@ -174,8 +170,8 @@ impl Shard {
             nodes: FxDashMap::default(),
             ignored_peers: FxDashSet::default(),
             known_peers: adnl::PeersSet::with_capacity(MAX_OVERLAY_PEERS),
-            random_peers: adnl::PeersSet::with_capacity(options.max_shard_peers),
-            neighbours: adnl::PeersSet::with_capacity(options.max_shard_neighbours),
+            random_peers: adnl::PeersSet::with_capacity(options.max_random_peers),
+            neighbours: adnl::PeersSet::with_capacity(options.max_neighbours),
             query_prefix,
             message_prefix,
         });
@@ -211,13 +207,13 @@ impl Shard {
 
     /// Configuration
     #[inline(always)]
-    pub fn options(&self) -> &ShardOptions {
+    pub fn options(&self) -> &OverlayOptions {
         &self.options
     }
 
     /// Instant metrics
-    pub fn metrics(&self) -> ShardMetrics {
-        ShardMetrics {
+    pub fn metrics(&self) -> OverlayMetrics {
+        OverlayMetrics {
             owned_broadcasts_len: self.owned_broadcasts.len(),
             finished_broadcasts_len: self.finished_broadcast_count.load(Ordering::Acquire),
             node_count: self.nodes.len(),
@@ -231,7 +227,7 @@ impl Shard {
 
     /// Short overlay id
     pub fn id(&self) -> &IdShort {
-        &self.overlay_id
+        &self.id
     }
 
     /// Returns local ADNL key for public overlay
@@ -242,14 +238,14 @@ impl Shard {
     /// Verifies and adds new peer to the overlay. Returns `Some` short peer id
     /// if new peer was successfully added and `None` if peer already existed.
     ///
-    /// See [`Shard::add_public_peers`] for multiple peers.
+    /// See [`Overlay::add_public_peers`] for multiple peers.
     pub fn add_public_peer(
         &self,
         adnl: &adnl::Node,
         ip_address: PackedSocketAddr,
         node: proto::overlay::Node<'_>,
     ) -> Result<Option<adnl::NodeIdShort>> {
-        if let Err(e) = self.overlay_id.verify_overlay_node(&node) {
+        if let Err(e) = self.id.verify_overlay_node(&node) {
             tracing::warn!("Error during overlay peer verification: {e:?}");
             return Ok(None);
         }
@@ -274,7 +270,7 @@ impl Shard {
 
     /// Verifies and adds new peers to the overlay. Returns a list of successfully added peers.
     ///
-    /// See [`Shard::add_public_peer`] for single peer.
+    /// See [`Overlay::add_public_peer`] for single peer.
     pub fn add_public_peers<'a, I>(
         &self,
         adnl: &adnl::Node,
@@ -287,7 +283,7 @@ impl Shard {
 
         let mut result = Vec::new();
         for (ip_address, node) in nodes {
-            if let Err(e) = self.overlay_id.verify_overlay_node(&node) {
+            if let Err(e) = self.id.verify_overlay_node(&node) {
                 tracing::debug!("Error during overlay peer verification: {e:?}");
                 continue;
             }
@@ -318,7 +314,7 @@ impl Shard {
             return false;
         }
         if self.random_peers.contains(peer_id) {
-            self.update_random_peers(self.options.max_shard_peers);
+            self.update_random_peers(self.options.max_random_peers);
         }
         true
     }
@@ -326,7 +322,7 @@ impl Shard {
     /// Checks whether the specified peer has ever been in this public overlay
     ///
     /// NOTE: Peer might have been excluded. If you need to check whether the
-    /// specified peer is still in this overlay use [`Shard::is_active_public_peer`]
+    /// specified peer is still in this overlay use [`Overlay::is_active_public_peer`]
     pub fn is_public_peer(&self, peer_id: &adnl::NodeIdShort) -> bool {
         self.random_peers.contains(peer_id)
     }
@@ -355,7 +351,7 @@ impl Shard {
 
     /// Sends direct ADNL message ([`proto::adnl::Message::Custom`]) to the given peer.
     ///
-    /// NOTE: Local id ([`Shard::overlay_key`]) will be used as sender
+    /// NOTE: Local id ([`Overlay::overlay_key`]) will be used as sender
     pub fn send_message(
         &self,
         adnl: &adnl::Node,
@@ -372,7 +368,7 @@ impl Shard {
 
     /// Sends ADNL query directly to the given peer. In case of timeout returns `Ok(None)`
     ///
-    /// NOTE: Local id ([`Shard::overlay_key`]) will be used as sender
+    /// NOTE: Local id ([`Overlay::overlay_key`]) will be used as sender
     pub async fn adnl_query<Q>(
         &self,
         adnl: &adnl::Node,
@@ -396,7 +392,7 @@ impl Shard {
 
     /// Sends RLDP query directly to the given peer. In case of timeout returns `Ok((None, max_timeout))`
     ///
-    /// NOTE: Local id ([`Shard::overlay_key`]) will be used as sender
+    /// NOTE: Local id ([`Overlay::overlay_key`]) will be used as sender
     pub async fn rldp_query(
         &self,
         rldp: &rldp::Node,
@@ -410,7 +406,7 @@ impl Shard {
 
     /// Distributes provided message to the neighbours subset.
     ///
-    /// See `broadcast_target_count` in [`ShardOptions`]
+    /// See `broadcast_target_count` in [`OverlayOptions`]
     ///
     /// NOTE: If `data` len is greater than
     pub fn broadcast(
@@ -600,7 +596,7 @@ impl Shard {
 
         let signature = match broadcast.signature.len() {
             64 => broadcast.signature.try_into().unwrap(),
-            _ => return Err(ShardError::UnsupportedSignature.into()),
+            _ => return Err(OverlayError::UnsupportedSignature.into()),
         };
 
         let transfer = match self.owned_broadcasts.entry(broadcast_id) {
@@ -773,7 +769,7 @@ impl Shard {
         let neighbours = match target {
             BroadcastTarget::RandomNeighbours => OwnedBroadcastTarget::Neighbours(
                 self.neighbours
-                    .get_random_peers(self.options.max_shard_neighbours, None),
+                    .get_random_peers(self.options.max_neighbours, None),
             ),
             BroadcastTarget::Explicit(neighbours) => OwnedBroadcastTarget::Explicit(neighbours),
         };
@@ -786,7 +782,7 @@ impl Shard {
         // Spawn sender
         let wave_len = self.options.broadcast_wave_len;
         let waves_interval = Duration::from_millis(self.options.broadcast_wave_interval_ms);
-        let overlay_shard = self.clone();
+        let overlay = self.clone();
         let adnl = adnl.clone();
         let local_id = *local_id;
         let key = key.clone();
@@ -794,22 +790,16 @@ impl Shard {
             // Send broadcast in waves
             'outer: while outgoing_transfer.seqno <= info.packets {
                 for _ in 0..wave_len {
-                    let data =
-                        match overlay_shard.prepare_fec_broadcast(&mut outgoing_transfer, &key) {
-                            Ok(data) => data,
-                            // Rare case, it is easier to just ignore it
-                            Err(e) => {
-                                tracing::warn!("Failed to send overlay broadcast: {e}");
-                                break 'outer;
-                            }
-                        };
+                    let data = match overlay.prepare_fec_broadcast(&mut outgoing_transfer, &key) {
+                        Ok(data) => data,
+                        // Rare case, it is easier to just ignore it
+                        Err(e) => {
+                            tracing::warn!("Failed to send overlay broadcast: {e}");
+                            break 'outer;
+                        }
+                    };
 
-                    overlay_shard.distribute_broadcast(
-                        &adnl,
-                        &local_id,
-                        neighbours.as_ref(),
-                        &data,
-                    );
+                    overlay.distribute_broadcast(&adnl, &local_id, neighbours.as_ref(), &data);
                     if outgoing_transfer.seqno > info.packets {
                         break 'outer;
                     }
@@ -841,7 +831,7 @@ impl Shard {
             }
 
             tracing::trace!("{node:?}");
-            if let Err(e) = self.overlay_id.verify_overlay_node(node) {
+            if let Err(e) = self.id.verify_overlay_node(node) {
                 tracing::warn!("Error during overlay peer verification: {e:?}");
                 return false;
             }
@@ -885,11 +875,11 @@ impl Shard {
         self.ignored_peers.remove(peer_id);
         self.known_peers.insert(*peer_id);
 
-        if self.random_peers.len() < self.options.max_shard_peers {
+        if self.random_peers.len() < self.options.max_random_peers {
             self.random_peers.insert(*peer_id);
         }
 
-        if self.neighbours.len() < self.options.max_shard_neighbours {
+        if self.neighbours.len() < self.options.max_neighbours {
             self.neighbours.insert(*peer_id);
         }
 
@@ -939,7 +929,7 @@ impl Shard {
             .clone();
 
         // Spawn packets receiver
-        let overlay_shard = self.clone();
+        let overlay = self.clone();
         tokio::spawn(async move {
             let mut decoder = RaptorQDecoder::with_params(fec_type);
 
@@ -957,7 +947,7 @@ impl Shard {
                             data,
                             from: peer_id,
                         };
-                        overlay_shard.received_broadcasts.push(data);
+                        overlay.received_broadcasts.push(data);
                         break;
                     }
                     // Broadcast is not complete yet
@@ -971,7 +961,7 @@ impl Shard {
             }
 
             // Mark broadcast as completed
-            if let Some(broadcast) = overlay_shard.owned_broadcasts.get(&broadcast_id) {
+            if let Some(broadcast) = overlay.owned_broadcasts.get(&broadcast_id) {
                 match broadcast.value().as_ref() {
                     OwnedBroadcast::Incoming(transfer) => {
                         transfer.completed.store(true, Ordering::Release);
@@ -984,14 +974,14 @@ impl Shard {
         });
 
         // Spawn broadcast cleanup task
-        let overlay_shard = self.clone();
+        let overlay = self.clone();
         let broadcast_timeout_sec = self.options.broadcast_timeout_sec;
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_millis(broadcast_timeout_sec * 100)).await;
 
                 // Find incoming broadcast
-                if let Some(broadcast) = overlay_shard.owned_broadcasts.get(&broadcast_id) {
+                if let Some(broadcast) = overlay.owned_broadcasts.get(&broadcast_id) {
                     match broadcast.value().as_ref() {
                         // Keep waiting if broadcast is not expired or not complete
                         OwnedBroadcast::Incoming(transfer)
@@ -1010,7 +1000,7 @@ impl Shard {
                 break;
             }
 
-            overlay_shard.spawn_broadcast_gc_task(broadcast_id);
+            overlay.spawn_broadcast_gc_task(broadcast_id);
         });
 
         Ok(entry)
@@ -1080,16 +1070,13 @@ impl Shard {
     }
 
     fn spawn_broadcast_gc_task(self: &Arc<Self>, broadcast_id: BroadcastId) {
-        let overlay_shard = self.clone();
+        let overlay = self.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(
-                overlay_shard.options.broadcast_timeout_sec,
-            ))
-            .await;
-            overlay_shard
+            tokio::time::sleep(Duration::from_secs(overlay.options.broadcast_timeout_sec)).await;
+            overlay
                 .finished_broadcast_count
                 .fetch_add(1, Ordering::Release);
-            overlay_shard.finished_broadcasts.push(broadcast_id);
+            overlay.finished_broadcasts.push(broadcast_id);
         });
     }
 }
@@ -1122,9 +1109,9 @@ impl AsRef<[adnl::NodeIdShort]> for OwnedBroadcastTarget {
     }
 }
 
-/// Instant overlay shard metrics
+/// Instant overlay metrics
 #[derive(Debug, Copy, Clone)]
-pub struct ShardMetrics {
+pub struct OverlayMetrics {
     pub owned_broadcasts_len: usize,
     pub finished_broadcasts_len: u32,
     pub node_count: usize,
@@ -1161,7 +1148,7 @@ fn process_fec_broadcast(
 
     match decoder.decode(broadcast.seqno as u32, broadcast.data) {
         Some(result) if result.len() != broadcast.data_size as usize => {
-            Err(ShardError::DataSizeMismatch.into())
+            Err(OverlayError::DataSizeMismatch.into())
         }
         Some(result) => match compression::decompress(&result) {
             Some(decompressed)
@@ -1174,7 +1161,7 @@ fn process_fec_broadcast(
                 if data_hash.as_slice() == broadcast_id {
                     Ok(Some(result))
                 } else {
-                    Err(ShardError::DataHashMismatch.into())
+                    Err(OverlayError::DataHashMismatch.into())
                 }
             }
         },
@@ -1317,7 +1304,7 @@ type BroadcastFecTx = mpsc::UnboundedSender<BroadcastFec>;
 type BroadcastId = [u8; 32];
 
 #[derive(thiserror::Error, Debug)]
-enum ShardError {
+enum OverlayError {
     #[error("Unsupported signature")]
     UnsupportedSignature,
     #[error("Data size mismatch")]

@@ -173,3 +173,4 @@ overlay.query overlay:int256 = True;
 ---types---
 
 tonNode.shardPublicOverlayId workchain:int shard:long zero_state_file_hash:int256 = tonNode.ShardPublicOverlayId;
+catchain.firstblock unique_hash:int256 nodes:(vector int256) = catchain.FirstBlock;

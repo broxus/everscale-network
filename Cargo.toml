@@ -1,6 +1,6 @@
 [package]
 name = "everscale-network"
-version = "0.3.12"
+version = "0.4.0"
 description = "Implementation of the network part of the Everscale blockchain"
 repository = "https://github.com/broxus/everscale-network"
 authors = ["Ivan Kalinin <i.kalinin@dexpa.io>"]
@@ -44,14 +44,7 @@ sha2 = "0.9"
 smallvec = { version = "1.9.0", features = ["union", "const_generics"] }
 thiserror = "1.0"
 tl-proto = { version = "0.3", features = ["derive", "bytes"] }
-tokio = { version = "1", features = [
-    "sync",
-    "net",
-    "rt",
-    "time",
-    "io-util",
-    "macros",
-] }
+tokio = { version = "1", features = ["sync", "net", "rt", "time", "io-util", "macros"] }
 tokio-util = "0.7.0"
 tracing = "0.1"
 zstd = { version = "0.11", optional = true }

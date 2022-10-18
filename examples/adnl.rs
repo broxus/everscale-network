@@ -38,15 +38,15 @@ async fn main() -> Result<()> {
     );
     right_node.add_query_subscriber(Arc::new(Service))?;
 
-    let right_node_full_id = *right_node.key_by_tag(0)?.full_id();
-    let right_node_id = right_node_full_id.compute_short_id();
+    let right_node_id_full = *right_node.key_by_tag(0)?.full_id();
+    let right_node_id = right_node_id_full.compute_short_id();
 
     left_node.add_peer(
         adnl::NewPeerContext::AdnlPacket,
         &left_node_id,
         &right_node_id,
         right_node.socket_addr(),
-        right_node_full_id,
+        right_node_id_full,
     )?;
 
     left_node.start()?;

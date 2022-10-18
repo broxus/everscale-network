@@ -16,7 +16,8 @@ mod broadcast_receiver;
 #[cfg(feature = "overlay")]
 mod node;
 #[cfg(feature = "overlay")]
-mod overlay_shard;
+#[allow(clippy::module_inception)]
+mod overlay;
 
 #[cfg(feature = "overlay")]
 mod node_impl {
@@ -27,9 +28,9 @@ mod node_impl {
     use frunk_core::indices::{Here, There};
 
     pub use super::node::Node;
-    pub use super::overlay_shard::{
-        BroadcastTarget, IncomingBroadcastInfo, OutgoingBroadcastInfo, ReceivedPeersMap, Shard,
-        ShardMetrics, ShardOptions,
+    pub use super::overlay::{
+        BroadcastTarget, IncomingBroadcastInfo, OutgoingBroadcastInfo, Overlay, OverlayMetrics,
+        OverlayOptions, ReceivedPeersMap,
     };
 
     use crate::adnl;
@@ -54,11 +55,10 @@ mod node_impl {
         #[allow(clippy::type_complexity)]
         pub fn with_overlay(
             mut self,
-            zero_state_file_hash: [u8; 32],
             key_tag: usize,
         ) -> NetworkBuilder<HCons<Deferred, L>, There<I>> {
             let adnl: &Arc<adnl::Node> = self.0.get();
-            let overlay = Node::new(adnl.clone(), zero_state_file_hash, key_tag);
+            let overlay = Node::new(adnl.clone(), key_tag);
             if let Ok(overlay) = &overlay {
                 let rldp: &mut rldp::Deferred = self.0.get_mut();
                 rldp.1.push(overlay.query_subscriber());

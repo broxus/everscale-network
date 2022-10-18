@@ -33,7 +33,7 @@ async fn main() -> Result<()> {
         NetworkBuilder::with_adnl((my_ip, 30000), keystore, Default::default())
             .with_dht(KEY_TAG, Default::default())
             .with_rldp(Default::default())
-            .with_overlay(Default::default(), KEY_TAG)
+            .with_overlay(KEY_TAG)
             .build()?;
 
     // Fill static nodes
@@ -48,9 +48,10 @@ async fn main() -> Result<()> {
     tracing::info!("found {new_dht_nodes} DHT nodes");
 
     // Add masterchain overlay
-    let mc_overlay_id = overlay::IdFull::for_shard_overlay(-1, &global_config.zero_state.file_hash)
-        .compute_short_id();
-    let (shard_overlay, _) = overlay.add_public_overlay(&mc_overlay_id, Default::default());
+    let mc_overlay_id =
+        overlay::IdFull::for_workchain_overlay(-1, &global_config.zero_state.file_hash)
+            .compute_short_id();
+    let (workchain_overlay, _) = overlay.add_public_overlay(&mc_overlay_id, Default::default());
 
     // Populate overlay with nodes
     let overlay_nodes = dht
@@ -60,11 +61,11 @@ async fn main() -> Result<()> {
     tracing::info!("found {} overlay nodes", overlay_nodes.len());
 
     for (ip, node) in overlay_nodes {
-        shard_overlay.add_public_peer(&adnl, ip, node.as_equivalent_ref())?;
+        workchain_overlay.add_public_peer(&adnl, ip, node.as_equivalent_ref())?;
     }
 
     // Broadcast something
-    shard_overlay.broadcast(
+    workchain_overlay.broadcast(
         &adnl,
         vec![0; 10],
         None,

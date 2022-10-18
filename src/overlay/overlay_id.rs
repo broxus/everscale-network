@@ -13,7 +13,17 @@ use crate::proto;
 pub struct IdFull([u8; 32]);
 
 impl IdFull {
-    pub fn for_shard_overlay(workchain: i32, zero_state_file_hash: &[u8; 32]) -> Self {
+    pub fn for_catchain_overlay<'tl, I>(unique_hash: &'tl [u8; 32], nodes: I) -> Self
+    where
+        I: Iterator<Item = &'tl [u8; 32]> + ExactSizeIterator + Clone,
+    {
+        Self(tl_proto::hash(proto::overlay::CatchainFirstBlock {
+            unique_hash,
+            nodes: tl_proto::IterRef(&nodes),
+        }))
+    }
+
+    pub fn for_workchain_overlay(workchain: i32, zero_state_file_hash: &[u8; 32]) -> Self {
         Self(tl_proto::hash(proto::overlay::ShardPublicOverlayId {
             workchain,
             shard: 1u64 << 63,
@@ -46,8 +56,8 @@ impl IdShort {
             return Err(OverlayIdError::OverlayIdMismatch.into());
         }
 
-        let full_id = adnl::NodeIdFull::try_from(node.id)?;
-        let peer_id = full_id.compute_short_id();
+        let peer_id_full = adnl::NodeIdFull::try_from(node.id)?;
+        let peer_id = peer_id_full.compute_short_id();
 
         let node_to_sign = proto::overlay::NodeToSign {
             id: peer_id.as_slice(),
@@ -55,7 +65,7 @@ impl IdShort {
             version: node.version,
         };
 
-        full_id.verify(&node_to_sign, node.signature)?;
+        peer_id_full.verify(&node_to_sign, node.signature)?;
 
         Ok(())
     }

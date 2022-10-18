@@ -40,15 +40,15 @@ async fn main() -> Result<()> {
 
     let left_node_id = *left_adnl.key_by_tag(0)?.id();
 
-    let right_node_full_id = *right_adnl.key_by_tag(0)?.full_id();
-    let right_node_id = right_node_full_id.compute_short_id();
+    let right_node_id_full = *right_adnl.key_by_tag(0)?.full_id();
+    let right_node_id = right_node_id_full.compute_short_id();
 
     left_adnl.add_peer(
         adnl::NewPeerContext::AdnlPacket,
         &left_node_id,
         &right_node_id,
         right_adnl.socket_addr(),
-        right_node_full_id,
+        right_node_id_full,
     )?;
 
     left_adnl.start()?;

@@ -367,10 +367,10 @@ impl Node {
     /// Returns and error if stored value is incorrect
     pub async fn store_overlay_node(
         self: &Arc<Self>,
-        overlay_full_id: &overlay::IdFull,
+        overlay_id_full: &overlay::IdFull,
         node: proto::overlay::Node<'_>,
     ) -> Result<bool> {
-        let overlay_id = overlay_full_id.compute_short_id();
+        let overlay_id = overlay_id_full.compute_short_id();
         overlay_id.verify_overlay_node(&node)?;
 
         let value = tl_proto::serialize_as_boxed(proto::overlay::Nodes {
@@ -385,7 +385,7 @@ impl Node {
                     idx: 0,
                 },
                 id: everscale_crypto::tl::PublicKey::Overlay {
-                    name: overlay_full_id.as_slice(),
+                    name: overlay_id_full.as_slice(),
                 },
                 update_rule: proto::dht::UpdateRule::OverlayNodes,
                 signature: Default::default(),
@@ -568,18 +568,18 @@ impl NodeState {
         adnl: &adnl::Node,
         mut peer: proto::dht::NodeOwned,
     ) -> Result<Option<adnl::NodeIdShort>> {
-        let peer_full_id = adnl::NodeIdFull::try_from(peer.id.as_equivalent_ref())?;
+        let peer_id_full = adnl::NodeIdFull::try_from(peer.id.as_equivalent_ref())?;
 
         // Verify signature
         let signature = std::mem::take(&mut peer.signature);
-        if peer_full_id.verify(peer.as_boxed(), &signature).is_err() {
+        if peer_id_full.verify(peer.as_boxed(), &signature).is_err() {
             tracing::warn!("Invalid DHT peer signature");
             return Ok(None);
         }
         peer.signature = signature;
 
         // Parse remaining peer data
-        let peer_id = peer_full_id.compute_short_id();
+        let peer_id = peer_id_full.compute_short_id();
         let peer_ip_address =
             parse_address_list(&peer.addr_list, adnl.options().clock_tolerance_sec)?;
 
@@ -589,7 +589,7 @@ impl NodeState {
             self.key.id(),
             &peer_id,
             peer_ip_address,
-            peer_full_id,
+            peer_id_full,
         )?;
         if !is_new_peer {
             return Ok(None);
