@@ -72,7 +72,7 @@ mod node_impl {
     }
 
     /// Max allowed known peer count
-    pub const MAX_OVERLAY_PEERS: usize = 65536;
+    pub const MAX_OVERLAY_PEERS: u32 = 65536;
 }
 
 #[cfg(feature = "overlay")]

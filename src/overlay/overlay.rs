@@ -26,12 +26,12 @@ pub struct OverlayOptions {
     /// Instant random peers list length. Used to select neighbours.
     ///
     /// Default: `20`
-    pub max_random_peers: usize,
+    pub max_random_peers: u32,
 
     /// More persistent list of peers. Used to distribute broadcasts.
     ///
     /// Default: `5`
-    pub max_neighbours: usize,
+    pub max_neighbours: u32,
 
     /// Max simultaneous broadcasts.
     ///
@@ -57,17 +57,17 @@ pub struct OverlayOptions {
     /// Max number of peers to distribute broadcast to.
     ///
     /// Default: `3`
-    pub broadcast_target_count: usize,
+    pub broadcast_target_count: u32,
 
     /// Max number of peers to redistribute ordinary broadcast to.
     ///
     /// Default: `3`
-    pub secondary_broadcast_target_count: usize,
+    pub secondary_broadcast_target_count: u32,
 
     /// Max number of peers to redistribute FEC broadcast to.
     ///
     /// Default: `5`
-    pub secondary_fec_broadcast_target_count: usize,
+    pub secondary_fec_broadcast_target_count: u32,
 
     /// Number of FEC messages to send in group. There will be a short delay between them.
     ///
@@ -150,13 +150,20 @@ pub struct Overlay {
 
 impl Overlay {
     /// Create new overlay node on top of the given ADNL node
-    pub(super) fn new(node_key: Arc<adnl::Key>, id: IdShort, options: OverlayOptions) -> Arc<Self> {
+    pub(super) fn new(
+        node_key: Arc<adnl::Key>,
+        id: IdShort,
+        peers: &[adnl::NodeIdShort],
+        options: OverlayOptions,
+    ) -> Arc<Self> {
         let query_prefix = tl_proto::serialize(proto::rpc::OverlayQuery {
             overlay: id.as_slice(),
         });
         let message_prefix = tl_proto::serialize(proto::overlay::Message {
             overlay: id.as_slice(),
         });
+
+        let known_peers = adnl::PeersSet::with_peers_and_capacity(peers, MAX_OVERLAY_PEERS);
 
         let overlay = Arc::new(Self {
             id,
@@ -169,12 +176,16 @@ impl Overlay {
             received_broadcasts: Arc::new(BroadcastReceiver::default()),
             nodes: FxDashMap::default(),
             ignored_peers: FxDashSet::default(),
-            known_peers: adnl::PeersSet::with_capacity(MAX_OVERLAY_PEERS),
+            known_peers,
             random_peers: adnl::PeersSet::with_capacity(options.max_random_peers),
             neighbours: adnl::PeersSet::with_capacity(options.max_neighbours),
             query_prefix,
             message_prefix,
         });
+
+        if !peers.is_empty() {
+            overlay.update_random_peers(overlay.options.max_random_peers);
+        }
 
         let overlay_ref = Arc::downgrade(&overlay);
         let gc_interval = Duration::from_millis(options.broadcast_gc_interval_ms);
@@ -333,7 +344,7 @@ impl Overlay {
     }
 
     /// Fill `dst` with `amount` peers from known peers
-    pub fn write_cached_peers(&self, amount: usize, dst: &adnl::PeersSet) {
+    pub fn write_cached_peers(&self, amount: u32, dst: &adnl::PeersSet) {
         dst.randomly_fill_from(&self.known_peers, amount, Some(&self.ignored_peers));
     }
 
@@ -844,9 +855,9 @@ impl Overlay {
 
     /// Creates nodes list
     fn prepare_random_peers(&self) -> proto::overlay::NodesOwned {
-        const MAX_PEERS_IN_RESPONSE: usize = 4;
+        const MAX_PEERS_IN_RESPONSE: u32 = 4;
 
-        let mut nodes = SmallVec::with_capacity(MAX_PEERS_IN_RESPONSE + 1);
+        let mut nodes = SmallVec::with_capacity(MAX_PEERS_IN_RESPONSE as usize + 1);
         nodes.push(self.sign_local_node());
 
         let peers = adnl::PeersSet::with_capacity(MAX_PEERS_IN_RESPONSE);
@@ -861,7 +872,7 @@ impl Overlay {
     }
 
     /// Fills random peers and neighbours with a random subset from known peers
-    fn update_random_peers(&self, amount: usize) {
+    fn update_random_peers(&self, amount: u32) {
         self.random_peers
             .randomly_fill_from(&self.known_peers, amount, Some(&self.ignored_peers));
         self.neighbours
@@ -875,11 +886,11 @@ impl Overlay {
         self.ignored_peers.remove(peer_id);
         self.known_peers.insert(*peer_id);
 
-        if self.random_peers.len() < self.options.max_random_peers {
+        if self.random_peers.len() < self.options.max_random_peers as usize {
             self.random_peers.insert(*peer_id);
         }
 
-        if self.neighbours.len() < self.options.max_neighbours {
+        if self.neighbours.len() < self.options.max_neighbours as usize {
             self.neighbours.insert(*peer_id);
         }
 

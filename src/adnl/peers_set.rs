@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use parking_lot::{RwLock, RwLockReadGuard};
 use rand::seq::SliceRandom;
 
@@ -10,15 +12,22 @@ pub struct PeersSet {
 }
 
 impl PeersSet {
-    pub fn with_capacity(capacity: usize) -> Self {
+    /// Constructs new peers set with the specified fixed capacity
+    pub fn with_capacity(capacity: u32) -> Self {
         Self {
-            state: RwLock::new(PeersSetState {
-                version: 0,
-                cache: Default::default(),
-                index: Default::default(),
-                capacity: capacity as u32,
-                upper: 0,
-            }),
+            state: RwLock::new(PeersSetState::with_capacity(make_capacity(capacity))),
+        }
+    }
+
+    /// Constructs new peers set with some initial peers
+    ///
+    /// NOTE: Only first `capacity` peers will be added
+    pub fn with_peers_and_capacity(peers: &[NodeIdShort], capacity: u32) -> Self {
+        Self {
+            state: RwLock::new(PeersSetState::with_peers_and_capacity(
+                peers,
+                make_capacity(capacity),
+            )),
         }
     }
 
@@ -46,23 +55,22 @@ impl PeersSet {
         PeersCacheIter::new(self.state.read())
     }
 
-    pub fn get_random_peers(
-        &self,
-        amount: usize,
-        except: Option<&NodeIdShort>,
-    ) -> Vec<NodeIdShort> {
+    pub fn get_random_peers(&self, amount: u32, except: Option<&NodeIdShort>) -> Vec<NodeIdShort> {
         let state = self.state.read();
 
         let items = state
             .index
             .choose_multiple(
                 &mut rand::thread_rng(),
-                if except.is_some() { amount + 1 } else { amount },
+                if except.is_some() { amount + 1 } else { amount } as usize,
             )
             .cloned();
 
         match except {
-            Some(except) => items.filter(|item| item != except).take(amount).collect(),
+            Some(except) => items
+                .filter(|item| item != except)
+                .take(amount as usize)
+                .collect(),
             None => items.collect(),
         }
     }
@@ -70,7 +78,7 @@ impl PeersSet {
     pub fn randomly_fill_from(
         &self,
         other: &PeersSet,
-        amount: usize,
+        amount: u32,
         except: Option<&FxDashSet<NodeIdShort>>,
     ) {
         // NOTE: early return, otherwise it will deadlock if `other` is the same as self
@@ -79,8 +87,8 @@ impl PeersSet {
         }
 
         let selected_amount = match except {
-            Some(peers) => amount + peers.len(),
-            None => amount,
+            Some(peers) => amount as usize + peers.len(),
+            None => amount as usize,
         };
 
         let other_state = other.state.read();
@@ -94,7 +102,7 @@ impl PeersSet {
             Some(except) => {
                 new_peers
                     .filter(|peer_id| !except.contains(peer_id))
-                    .take(amount)
+                    .take(amount as usize)
                     .for_each(|peer_id| {
                         state.insert(peer_id);
                     });
@@ -180,55 +188,83 @@ struct PeersSetState {
     version: u64,
     cache: FxHashMap<NodeIdShort, u32>,
     index: Vec<NodeIdShort>,
-    capacity: u32,
+    capacity: NonZeroU32,
     upper: u32,
 }
 
 impl PeersSetState {
+    fn with_capacity(capacity: NonZeroU32) -> Self {
+        Self {
+            version: 0,
+            cache: FxHashMap::with_capacity_and_hasher(capacity.get() as usize, Default::default()),
+            index: Vec::with_capacity(capacity.get() as usize),
+            capacity,
+            upper: 0,
+        }
+    }
+
+    fn with_peers_and_capacity(peers: &[NodeIdShort], capacity: NonZeroU32) -> Self {
+        use std::collections::hash_map::Entry;
+
+        let mut res = Self::with_capacity(capacity);
+        let capacity = res.capacity.get();
+
+        for peer in peers {
+            if res.upper > capacity {
+                res.upper = 0;
+                break;
+            }
+
+            match res.cache.entry(*peer) {
+                Entry::Vacant(entry) => {
+                    entry.insert(res.upper);
+                    res.index.push(*peer);
+                    res.upper += 1;
+                }
+                Entry::Occupied(_) => continue,
+            }
+        }
+
+        res
+    }
+
     fn insert(&mut self, peer_id: NodeIdShort) -> bool {
         use std::collections::hash_map::Entry;
 
         // Insert new peer into cache
-        let (index, upper) = match self.cache.entry(peer_id) {
+        match self.cache.entry(peer_id) {
             Entry::Vacant(entry) => {
-                // Calculate index in range [0..limit)
-
-                let mut index = self.upper;
-                let mut upper = self.upper + 1;
-
-                if index >= self.capacity {
-                    if index >= self.capacity * 2 {
-                        upper -= self.capacity;
-                    }
-                    index %= self.capacity;
-                }
-
                 self.version += 1;
-                entry.insert(index);
-
-                (index as usize, upper)
+                entry.insert(self.upper);
             }
             Entry::Occupied(_) => return false,
         };
 
-        self.upper = upper;
+        let upper = (self.upper + 1) % self.capacity;
+        let index = std::mem::replace(&mut self.upper, upper) as usize;
 
-        // Update index
-        if index < self.index.len() {
-            let old_peer = std::mem::replace(&mut self.index[index], peer_id);
+        match self.index.get_mut(index) {
+            Some(slot) => {
+                let old_peer = std::mem::replace(slot, peer_id);
 
-            // Remove old peer
-            if let Entry::Occupied(entry) = self.cache.entry(old_peer) {
-                if entry.get() == &(index as u32) {
-                    entry.remove();
+                // Remove old peer
+                if let Entry::Occupied(entry) = self.cache.entry(old_peer) {
+                    if entry.get() == &(index as u32) {
+                        entry.remove();
+                    }
                 }
             }
-        } else {
-            self.index.push(peer_id);
+            None => self.index.push(peer_id),
         }
 
         true
     }
+}
+
+fn make_capacity(capacity: u32) -> NonZeroU32 {
+    let capacity = std::cmp::max(1, capacity);
+    // SAFETY: capacity is guaranteed to be at least 1
+    unsafe { NonZeroU32::new_unchecked(capacity) }
 }
 
 #[cfg(test)]

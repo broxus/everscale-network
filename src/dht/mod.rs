@@ -55,4 +55,4 @@ where
 pub const KEY_ADDRESS: &str = "address";
 pub const KEY_NODES: &str = "nodes";
 
-pub const MAX_DHT_PEERS: usize = 65536;
+pub const MAX_DHT_PEERS: u32 = 65536;

@@ -79,7 +79,26 @@ impl Node {
 
         match self.state.overlays.entry(*overlay_id) {
             Entry::Vacant(entry) => {
-                let overlay = Overlay::new(self.node_key.clone(), *overlay_id, options);
+                let overlay = Overlay::new(self.node_key.clone(), *overlay_id, &[], options);
+                entry.insert(overlay.clone());
+                (overlay, true)
+            }
+            Entry::Occupied(entry) => (entry.get().clone(), false),
+        }
+    }
+
+    pub fn add_private_overlay(
+        &self,
+        overlay_id: &IdShort,
+        overlay_key: Arc<adnl::Key>,
+        peers: &[adnl::NodeIdShort],
+        options: OverlayOptions,
+    ) -> (Arc<Overlay>, bool) {
+        use dashmap::mapref::entry::Entry;
+
+        match self.state.overlays.entry(*overlay_id) {
+            Entry::Vacant(entry) => {
+                let overlay = Overlay::new(overlay_key, *overlay_id, peers, options);
                 entry.insert(overlay.clone());
                 (overlay, true)
             }
