@@ -207,13 +207,13 @@ impl TransfersCache {
                                 seqno,
                             }
                             .write_to(&mut buffer);
-                            adnl.send_custom_message(local_id, peer_id, &buffer)?;
+                            ok!(adnl.send_custom_message(local_id, peer_id, &buffer));
 
                             // Send complete message
                             buffer.clear();
                             proto::rldp::MessagePart::Complete { transfer_id, part }
                                 .write_to(&mut buffer);
-                            adnl.send_custom_message(local_id, peer_id, &buffer)?;
+                            ok!(adnl.send_custom_message(local_id, peer_id, &buffer));
 
                             // Done
                             break;
@@ -473,7 +473,7 @@ impl OutgoingContext {
         let waves_interval = Duration::from_millis(query_options.query_wave_interval_ms);
 
         // For each outgoing message part
-        while let Some(packet_count) = self.transfer.start_next_part()? {
+        while let Some(packet_count) = ok!(self.transfer.start_next_part()) {
             let wave_len = std::cmp::min(packet_count, query_options.query_wave_len);
 
             let part = self.transfer.state().part();
@@ -484,19 +484,19 @@ impl OutgoingContext {
             'part: loop {
                 // Send parts in waves
                 for _ in 0..wave_len {
-                    self.adnl.send_custom_message(
+                    ok!(self.adnl.send_custom_message(
                         &self.local_id,
                         &self.peer_id,
-                        self.transfer.prepare_chunk()?,
-                    )?;
+                        ok!(self.transfer.prepare_chunk()),
+                    ));
 
-                    if self.transfer.is_finished_or_next_part(part)? {
+                    if ok!(self.transfer.is_finished_or_next_part(part)) {
                         break 'part;
                     }
                 }
 
                 tokio::time::sleep(waves_interval).await;
-                if self.transfer.is_finished_or_next_part(part)? {
+                if ok!(self.transfer.is_finished_or_next_part(part)) {
                     break 'part;
                 }
 
@@ -615,18 +615,25 @@ impl OwnedRldpMessageQuery {
         }
 
         let mut offset = 0;
-        let params = Query::read_from(&data, &mut offset).ok()?;
-        let data_meta = tl_proto::BytesMeta::read_from(&data, &mut offset).ok()?;
+        let params = match Query::read_from(&data, &mut offset) {
+            Ok(params) => params,
+            Err(_) => return None,
+        };
 
-        // SAFETY: parsed `BytesMeta` ensures that remaining packet data contains
-        // `data_meta.prefix_len + data_meta.len + data_meta.padding` bytes
-        unsafe {
-            std::ptr::copy(
-                data.as_ptr().add(offset + data_meta.prefix_len),
-                data.as_mut_ptr(),
-                data_meta.len,
-            );
-            data.set_len(data_meta.len);
+        match tl_proto::BytesMeta::read_from(&data, &mut offset) {
+            Ok(data_meta) => {
+                // SAFETY: parsed `BytesMeta` ensures that remaining packet data contains
+                // `data_meta.prefix_len + data_meta.len + data_meta.padding` bytes
+                unsafe {
+                    std::ptr::copy(
+                        data.as_ptr().add(offset + data_meta.prefix_len),
+                        data.as_mut_ptr(),
+                        data_meta.len,
+                    );
+                    data.set_len(data_meta.len);
+                };
+            }
+            Err(_) => return None,
         };
 
         Some(Self {

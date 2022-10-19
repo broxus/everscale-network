@@ -73,7 +73,7 @@ impl OutgoingTransfer {
         let mut seqno_out = self.state.seqno_out();
         let previous_seqno_out = seqno_out;
 
-        let data = encoder.encode(&mut seqno_out)?;
+        let data = ok!(encoder.encode(&mut seqno_out));
 
         let seqno_in = self.state.seqno_in();
 

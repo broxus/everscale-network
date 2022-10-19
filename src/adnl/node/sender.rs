@@ -175,12 +175,12 @@ impl Node {
                 );
                 message.write_to(&mut buffer);
 
-                self.send_packet(
+                ok!(self.send_packet(
                     peer_id,
                     peer,
                     signer,
                     proto::adnl::OutgoingMessages::Pair(&buffer),
-                )?;
+                ));
             }
 
             while offset < data.len() {
@@ -188,12 +188,12 @@ impl Node {
                 let message = build_part_message(&data, &hash, MAX_ADNL_MESSAGE_SIZE, &mut offset);
                 message.write_to(&mut buffer);
 
-                self.send_packet(
+                ok!(self.send_packet(
                     peer_id,
                     peer,
                     signer,
                     proto::adnl::OutgoingMessages::Single(&buffer),
-                )?;
+                ));
             }
 
             Ok(())
@@ -275,12 +275,16 @@ impl Node {
             }
         }
 
-        self.sender_queue_tx
+        if self
+            .sender_queue_tx
             .send(PacketToSend {
                 destination: peer.ip_address(),
                 data,
             })
-            .map_err(|_| AdnlSenderError::FailedToSendPacket)?;
+            .is_err()
+        {
+            return Err(AdnlSenderError::FailedToSendPacket.into());
+        }
 
         Ok(())
     }

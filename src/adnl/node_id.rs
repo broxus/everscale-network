@@ -30,13 +30,9 @@ impl NodeIdFull {
         message: T,
         other_signature: &[u8],
     ) -> Result<(), NodeIdFullError> {
-        let other_signature =
-            <[u8; 64]>::try_from(other_signature).map_err(|_| NodeIdFullError::InvalidSignature)?;
-
-        if self.0.verify(message, &other_signature) {
-            Ok(())
-        } else {
-            Err(NodeIdFullError::InvalidSignature)
+        match <[u8; 64]>::try_from(other_signature) {
+            Ok(other_signature) if self.0.verify(message, &other_signature) => Ok(()),
+            _ => Err(NodeIdFullError::InvalidSignature),
         }
     }
 
@@ -56,11 +52,10 @@ impl<'a> TryFrom<tl::PublicKey<'a>> for NodeIdFull {
 
     fn try_from(value: tl::PublicKey<'a>) -> Result<Self, Self::Error> {
         match value {
-            tl::PublicKey::Ed25519 { key } => {
-                let public_key = ed25519::PublicKey::from_bytes(*key)
-                    .ok_or(NodeIdFullError::InvalidPublicKey)?;
-                Ok(Self::new(public_key))
-            }
+            tl::PublicKey::Ed25519 { key } => match ed25519::PublicKey::from_bytes(*key) {
+                Some(public_key) => Ok(Self::new(public_key)),
+                None => Err(NodeIdFullError::InvalidPublicKey),
+            },
             _ => Err(NodeIdFullError::UnsupportedPublicKey),
         }
     }

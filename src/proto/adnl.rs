@@ -134,41 +134,50 @@ impl<'tl> TlRead<'tl> for IncomingPacketContents<'tl> {
             offset: &mut usize,
         ) -> TlResult<Option<T>> {
             Ok(if flags & (0b1 << N) != 0 {
-                Some(T::read_from(packet, offset)?)
+                match T::read_from(packet, offset) {
+                    Ok(value) => Some(value),
+                    Err(e) => return Err(e),
+                }
             } else {
                 None
             })
         }
 
-        if u32::read_from(packet, offset)? != Self::TL_ID {
-            return Err(TlError::UnknownConstructor);
+        match u32::read_from(packet, offset) {
+            Ok(Self::TL_ID) => {}
+            Ok(_) => return Err(TlError::UnknownConstructor),
+            Err(e) => return Err(e),
         }
 
-        <&[u8] as TlRead>::read_from(packet, offset)?; // rand1
+        ok!(<&[u8] as TlRead>::read_from(packet, offset)); // rand1
 
         let flags_offset = *offset as u16;
-        let flags = u32::read_from(packet, offset)?;
+        let flags = ok!(u32::read_from(packet, offset));
 
-        let from = read_optional::<everscale_crypto::tl::PublicKey, 0>(flags, packet, offset)?;
-        let from_short = read_optional::<HashRef, 1>(flags, packet, offset)?;
+        let from = ok!(read_optional::<everscale_crypto::tl::PublicKey, 0>(
+            flags, packet, offset
+        ));
+        let from_short = ok!(read_optional::<HashRef, 1>(flags, packet, offset));
 
-        let message = read_optional::<Message, 2>(flags, packet, offset)?;
-        let messages = read_optional::<SmallVec<[Message<'tl>; 2]>, 3>(flags, packet, offset)?;
+        let message = ok!(read_optional::<Message, 2>(flags, packet, offset));
+        let messages = ok!(read_optional::<SmallVec<[Message<'tl>; 2]>, 3>(
+            flags, packet, offset
+        ));
 
-        let address = read_optional::<AddressList, 4>(flags, packet, offset)?;
-        read_optional::<AddressList, 5>(flags, packet, offset)?; // priority_address
+        let address = ok!(read_optional::<AddressList, 4>(flags, packet, offset));
+        ok!(read_optional::<AddressList, 5>(flags, packet, offset)); // priority_address
 
-        let seqno = read_optional::<u64, 6>(flags, packet, offset)?;
-        let confirm_seqno = read_optional::<u64, 7>(flags, packet, offset)?;
+        let seqno = ok!(read_optional::<u64, 6>(flags, packet, offset));
+        let confirm_seqno = ok!(read_optional::<u64, 7>(flags, packet, offset));
 
-        read_optional::<u32, 8>(flags, packet, offset)?; // recv_addr_list_version
-        read_optional::<u32, 9>(flags, packet, offset)?; // recv_priority_addr_list_version
+        ok!(read_optional::<u32, 8>(flags, packet, offset)); // recv_addr_list_version
+        ok!(read_optional::<u32, 9>(flags, packet, offset)); // recv_priority_addr_list_version
 
-        let reinit_dates = read_optional::<ReinitDates, 10>(flags, packet, offset)?;
+        let reinit_dates = ok!(read_optional::<ReinitDates, 10>(flags, packet, offset));
 
         let signature = if flags & (0b1 << 11) != 0 {
             let signature_start = *offset as u16;
-            let signature = <&[u8]>::read_from(packet, offset)?;
+            let signature = ok!(<&[u8]>::read_from(packet, offset));
             let signature_end = *offset as u16;
 
             if signature.len() != 64 {
@@ -185,7 +194,7 @@ impl<'tl> TlRead<'tl> for IncomingPacketContents<'tl> {
             None
         };
 
-        <&[u8] as TlRead>::read_from(packet, offset)?; // rand2
+        ok!(<&[u8] as TlRead>::read_from(packet, offset)); // rand2
 
         Ok(Self {
             from,
@@ -364,19 +373,19 @@ impl<'tl> TlRead<'tl> for AddressList {
     type Repr = Bare;
 
     fn read_from(packet: &'tl [u8], offset: &mut usize) -> TlResult<Self> {
-        let address_count = u32::read_from(packet, offset)?;
+        let address_count = ok!(u32::read_from(packet, offset));
         let mut address = None;
         for _ in 0..address_count {
-            let item = Address::read_from(packet, offset)?;
+            let item = ok!(Address::read_from(packet, offset));
             if address.is_none() {
                 address = Some(item);
             }
         }
 
-        let version = u32::read_from(packet, offset)?;
-        let reinit_date = u32::read_from(packet, offset)?;
-        let _priority = u32::read_from(packet, offset)?;
-        let expire_at = u32::read_from(packet, offset)?;
+        let version = ok!(u32::read_from(packet, offset));
+        let reinit_date = ok!(u32::read_from(packet, offset));
+        let _priority = ok!(u32::read_from(packet, offset));
+        let expire_at = ok!(u32::read_from(packet, offset));
 
         Ok(Self {
             address,

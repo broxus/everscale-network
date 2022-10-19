@@ -223,8 +223,10 @@ fn make_overlay_nodes_value<'a, 'b, const N: usize>(
 fn deserialize_overlay_nodes(
     data: &[u8],
 ) -> tl_proto::TlResult<SmallVec<[proto::overlay::Node; 5]>> {
-    let proto::overlay::Nodes { nodes } = tl_proto::deserialize_as_boxed(data)?;
-    Ok(nodes)
+    match tl_proto::deserialize_as_boxed(data) {
+        Ok(proto::overlay::Nodes { nodes }) => Ok(nodes),
+        Err(e) => Err(e),
+    }
 }
 
 pub type StorageKeyId = [u8; 32];

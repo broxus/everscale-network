@@ -109,10 +109,13 @@ pub fn parse_handshake_packet(
     };
 
     // Compute shared secret
-    let shared_secret = local_key.secret_key().compute_shared_secret(
-        &ed25519::PublicKey::from_bytes(buffer[PUBLIC_KEY_RANGE].try_into().unwrap())
-            .ok_or(HandshakeError::InvalidPublicKey)?,
-    );
+    let shared_secret =
+        match ed25519::PublicKey::from_bytes(buffer[PUBLIC_KEY_RANGE].try_into().unwrap()) {
+            Some(other_public_key) => local_key
+                .secret_key()
+                .compute_shared_secret(&other_public_key),
+            None => return Err(HandshakeError::InvalidPublicKey),
+        };
 
     if buffer.len() > EXT_DATA_START {
         if let Some(version) =

@@ -210,8 +210,7 @@ impl PeersSetState {
         let capacity = res.capacity.get();
 
         for peer in peers {
-            if res.upper > capacity {
-                res.upper = 0;
+            if res.upper >= capacity {
                 break;
             }
 
@@ -225,6 +224,7 @@ impl PeersSetState {
             }
         }
 
+        res.upper %= capacity;
         res
     }
 
@@ -379,6 +379,52 @@ mod tests {
             let unique_peers = peers.into_iter().collect::<HashSet<_>>();
             assert!(!unique_peers.contains(&except));
             assert_eq!(unique_peers.len(), 5);
+        }
+    }
+
+    #[test]
+    fn with_peers_same_size_as_capacity() {
+        let peers = std::iter::repeat_with(NodeIdShort::random)
+            .take(10)
+            .collect::<Vec<_>>();
+        let cache = PeersSet::with_peers_and_capacity(&peers, peers.len() as u32);
+
+        {
+            let state = cache.state.write();
+            assert_eq!(state.version, 0);
+            assert_eq!(state.cache.len(), peers.len());
+            assert_eq!(state.index.len(), peers.len());
+            assert_eq!(state.upper, 0);
+        }
+    }
+
+    #[test]
+    fn with_peers_less_than_capacity() {
+        let peers = std::iter::repeat_with(NodeIdShort::random)
+            .take(5)
+            .collect::<Vec<_>>();
+        let cache = PeersSet::with_peers_and_capacity(&peers, 10);
+
+        {
+            let state = cache.state.write();
+            assert_eq!(state.cache.len(), peers.len());
+            assert_eq!(state.index.len(), peers.len());
+            assert_eq!(state.upper, peers.len() as u32);
+        }
+    }
+
+    #[test]
+    fn with_peers_greater_than_capacity() {
+        let peers = std::iter::repeat_with(NodeIdShort::random)
+            .take(16)
+            .collect::<Vec<_>>();
+        let cache = PeersSet::with_peers_and_capacity(&peers, 10);
+
+        {
+            let state = cache.state.write();
+            assert_eq!(state.cache.len(), 10);
+            assert_eq!(state.index.len(), 10);
+            assert_eq!(state.upper, 0);
         }
     }
 }

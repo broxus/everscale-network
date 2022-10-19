@@ -5,12 +5,16 @@ pub fn compress(data: &mut Vec<u8>) -> std::io::Result<()> {
     }
 
     let mut result = Vec::with_capacity(data.len() + 1);
-    zstd::stream::copy_encode(&mut data.as_slice(), &mut result, COMPRESSION_LEVEL)?;
-    zstd::stream::copy_encode(
+    ok!(zstd::stream::copy_encode(
+        &mut data.as_slice(),
+        &mut result,
+        COMPRESSION_LEVEL
+    ));
+    ok!(zstd::stream::copy_encode(
         &mut (uncompressed as u32).to_be_bytes().as_slice(),
         &mut result,
         COMPRESSION_LEVEL,
-    )?;
+    ));
     result.push(TAG_COMPRESSED);
 
     *data = result;

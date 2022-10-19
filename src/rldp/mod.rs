@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use frunk_core::hlist::{HCons, HList, IntoTuple2, Selector};
-use frunk_core::indices::{There, Here};
+use frunk_core::indices::{Here, There};
 
 pub(crate) use decoder::RaptorQDecoder;
 pub(crate) use encoder::RaptorQEncoder;
