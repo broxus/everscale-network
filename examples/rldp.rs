@@ -59,7 +59,7 @@ async fn main() -> Result<()> {
         let query = example_request();
         let iterations = iterations.clone();
         handles.push(tokio::spawn(async move {
-            loop {
+            let e = loop {
                 let query = tl_proto::serialize(query);
                 match left_rldp
                     .query(&left_node_id, &right_node_id, query, None)
@@ -69,9 +69,10 @@ async fn main() -> Result<()> {
                         iterations.fetch_add(1, Ordering::Relaxed);
                     }
                     Ok((None, _)) => println!("Packet lost"),
-                    Err(e) => println!("Error: {e:?}"),
+                    Err(e) => break e,
                 }
-            }
+            };
+            println!("Error: {e:?}");
         }));
     }
 
