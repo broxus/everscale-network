@@ -453,10 +453,7 @@ impl Node {
         query: Bytes,
         timeout: Option<u64>,
     ) -> Result<Option<Vec<u8>>> {
-        use futures_util::future::{select, Either};
-        use rand::Rng;
-
-        let query_id: QueryId = fast_thread_rng().gen();
+        let query_id: QueryId = gen_fast_bytes();
 
         let pending_query = self.queries.add_query(query_id);
         self.send_message(
@@ -475,18 +472,11 @@ impl Node {
             .get(peer_id)
             .map(|entry| entry.value().clone());
 
-        let answer = {
-            let timeout = timeout.unwrap_or(self.options.query_default_timeout_ms);
-            tokio::pin!(
-                let pending_query = pending_query.wait();
-                let timeout = tokio::time::sleep(Duration::from_millis(timeout));
-            );
-
-            match select(pending_query, timeout).await {
-                Either::Left((data, _)) => data,
-                Either::Right(_) => None,
-            }
-        };
+        let timeout = timeout.unwrap_or(self.options.query_default_timeout_ms);
+        let answer = tokio::time::timeout(Duration::from_millis(timeout), pending_query.wait())
+            .await
+            .ok()
+            .flatten();
 
         if answer.is_none() {
             if let Some(channel) = channel {

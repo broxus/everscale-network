@@ -207,8 +207,6 @@ impl Node {
         mut signer: MessageSigner,
         messages: proto::adnl::OutgoingMessages,
     ) -> Result<()> {
-        use rand::Rng;
-
         const MAX_PRIORITY_ATTEMPTS: u64 = 10;
 
         // Determine whether priority channels are supported by remote peer
@@ -225,7 +223,7 @@ impl Node {
         };
 
         // Generate on-stack random data
-        let rand_bytes: [u8; 10] = rand::thread_rng().gen();
+        let rand_bytes: [u8; 10] = gen_fast_bytes();
 
         let now = now();
         let address = proto::adnl::AddressList {

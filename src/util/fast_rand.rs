@@ -1,4 +1,5 @@
 use std::cell::UnsafeCell;
+use std::mem::MaybeUninit;
 use std::rc::Rc;
 use std::thread_local;
 
@@ -14,6 +15,21 @@ thread_local!(
 pub fn fast_thread_rng() -> SmallThreadRng {
     let rng = THREAD_RNG_KEY.with(|t| t.clone());
     SmallThreadRng { rng }
+}
+
+pub fn gen_fast_bytes<const N: usize>() -> [u8; N] {
+    THREAD_RNG_KEY.with(|t| {
+        unsafe {
+            // SAFETY: We must make sure to stop using `rng` before anyone else
+            // creates another mutable reference
+            let rng = &mut *t.get();
+
+            let mut id = MaybeUninit::<[u8; N]>::uninit();
+            rng.fill_bytes(&mut *id.as_mut_ptr() as &mut [u8; N]);
+
+            id.assume_init()
+        }
+    })
 }
 
 pub struct SmallThreadRng {
