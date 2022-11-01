@@ -453,6 +453,7 @@ impl Node {
         query: Bytes,
         timeout: Option<u64>,
     ) -> Result<Option<Vec<u8>>> {
+        use futures_util::future::{select, Either};
         use rand::Rng;
 
         let query_id: QueryId = fast_thread_rng().gen();
@@ -474,22 +475,24 @@ impl Node {
             .get(peer_id)
             .map(|entry| entry.value().clone());
 
-        let handle = tokio::spawn({
-            let queries = self.queries.clone();
+        let answer = {
             let timeout = timeout.unwrap_or(self.options.query_default_timeout_ms);
+            tokio::pin!(
+                let pending_query = pending_query.wait();
+                let timeout = tokio::time::sleep(Duration::from_millis(timeout));
+            );
 
-            async move {
-                tokio::time::sleep(Duration::from_millis(timeout)).await;
-                queries.update_query(query_id, None);
+            match select(pending_query, timeout).await {
+                Either::Left((data, _)) => data,
+                Either::Right(_) => None,
             }
-        });
+        };
 
-        let answer = pending_query.wait().await;
-        if answer.is_some() {
-            handle.abort();
-        } else if let Some(channel) = channel {
-            if channel.update_drop_timeout(now(), self.options.channel_reset_timeout_sec) {
-                self.reset_peer(local_id, peer_id)?;
+        if answer.is_none() {
+            if let Some(channel) = channel {
+                if channel.update_drop_timeout(now(), self.options.channel_reset_timeout_sec) {
+                    self.reset_peer(local_id, peer_id)?;
+                }
             }
         }
 

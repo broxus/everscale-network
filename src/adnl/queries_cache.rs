@@ -34,11 +34,9 @@ impl QueriesCache {
         }
     }
 
-    pub fn update_query(&self, query_id: QueryId, answer: Option<&[u8]>) {
+    pub fn update_query(&self, query_id: QueryId, answer: &[u8]) {
         if let Some((_, tx)) = self.queries.remove(&query_id) {
-            if let Some(answer) = answer {
-                tx.send(answer.to_vec()).ok();
-            }
+            tx.send(answer.to_vec()).ok();
         }
     }
 }
