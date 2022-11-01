@@ -347,7 +347,7 @@ pub enum AdnlChannelError {
 mod tests {
     use super::*;
     use crate::adnl::ComputeNodeIds;
-    use crate::utils::now;
+    use crate::util::now;
 
     #[test]
     fn test_encrypt_decrypt() {

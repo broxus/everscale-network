@@ -14,7 +14,7 @@ use super::NodeOptions;
 use crate::adnl;
 use crate::proto;
 use crate::subscriber::*;
-use crate::utils::*;
+use crate::util::*;
 
 pub struct TransfersCache {
     transfers: Arc<FxDashMap<TransferId, RldpTransfer>>,

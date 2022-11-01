@@ -15,7 +15,7 @@ use crate::adnl::peer::*;
 use crate::adnl::Node;
 
 use crate::proto;
-use crate::utils::*;
+use crate::util::*;
 
 impl Node {
     /// Starts a process that forwards packets from the sender queue to the UDP socket
@@ -39,8 +39,7 @@ impl Node {
                 }
             } {
                 // Send packet
-                let target: SocketAddrV4 = packet.destination.into();
-                socket.send_to(&packet.data, target).await.ok();
+                socket.send_to(&packet.data, packet.destination).await.ok();
             }
         });
     }
@@ -230,7 +229,7 @@ impl Node {
 
         let now = now();
         let address = proto::adnl::AddressList {
-            address: Some(self.socket_addr.as_tl()),
+            address: Some(proto::adnl::Address::from(&self.socket_addr)),
             version: now,
             reinit_date: self.start_time,
             expire_at: now + self.options.address_list_timeout_sec,
@@ -278,7 +277,7 @@ impl Node {
         if self
             .sender_queue_tx
             .send(PacketToSend {
-                destination: peer.ip_address(),
+                destination: peer.addr(),
                 data,
             })
             .is_err()
@@ -300,7 +299,7 @@ enum MessageSigner<'a> {
 }
 
 pub struct PacketToSend {
-    destination: PackedSocketAddr,
+    destination: SocketAddrV4,
     data: Vec<u8>,
 }
 

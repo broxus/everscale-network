@@ -9,7 +9,7 @@ use super::overlay_id::IdShort;
 use crate::adnl;
 use crate::proto;
 use crate::subscriber::*;
-use crate::utils::*;
+use crate::util::*;
 
 /// P2P messages distribution layer group
 pub struct Node {

@@ -1,11 +1,11 @@
 use std::borrow::Cow;
+use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
 use everscale_crypto::ed25519;
-use everscale_network::utils::PackedSocketAddr;
 use everscale_network::{adnl, rldp};
 use everscale_network::{NetworkBuilder, QueryConsumingResult, QuerySubscriber, SubscriberContext};
 use rand::Rng;
@@ -20,10 +20,10 @@ async fn main() -> Result<()> {
         ..Default::default()
     };
 
-    let build_node = |port, service| -> Result<(Arc<adnl::Node>, Arc<rldp::Node>)> {
+    let build_node = |service| -> Result<(Arc<adnl::Node>, Arc<rldp::Node>)> {
         let key = ed25519::SecretKey::generate(&mut rand::thread_rng());
         let (adnl, rldp) = NetworkBuilder::with_adnl(
-            PackedSocketAddr::localhost(port),
+            (Ipv4Addr::LOCALHOST, 0),
             adnl::Keystore::builder()
                 .with_tagged_key(key.to_bytes(), 0)?
                 .build(),
@@ -35,8 +35,8 @@ async fn main() -> Result<()> {
         Ok((adnl, rldp))
     };
 
-    let (left_adnl, left_rldp) = build_node(20000, Arc::new(Service))?;
-    let (right_adnl, _right_rldp) = build_node(20001, Arc::new(Service))?;
+    let (left_adnl, left_rldp) = build_node(Arc::new(Service))?;
+    let (right_adnl, _right_rldp) = build_node(Arc::new(Service))?;
 
     let left_node_id = *left_adnl.key_by_tag(0)?.id();
 

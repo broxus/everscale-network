@@ -1,3 +1,5 @@
+use std::net::{Ipv4Addr, SocketAddrV4};
+
 use smallvec::SmallVec;
 use tl_proto::{Bare, Boxed, BoxedConstructor, TlError, TlPacket, TlRead, TlResult, TlWrite};
 
@@ -397,18 +399,46 @@ impl<'tl> TlRead<'tl> for AddressList {
 }
 
 #[derive(Debug, Copy, Clone, TlRead, TlWrite)]
-#[tl(boxed, scheme = "scheme.tl")]
-#[non_exhaustive]
-pub enum Address {
-    #[tl(id = "adnl.address.udp", size_hint = 8)]
-    Udp { ip: u32, port: u32 },
-    // Disabled until ipv6 is widely supported
-    // #[tl(id = "adnl.address.udp6", size_hint = 20)]
-    // Udp6 { ip: [u8; 16], port: u32 },
+#[tl(boxed, id = "adnl.address.udp", scheme = "scheme.tl", size_hint = 8)]
+pub struct Address {
+    pub ip: u32,
+    pub port: u32,
 }
 
-#[derive(Copy, Clone, TlRead, TlWrite)]
+impl From<&SocketAddrV4> for Address {
+    fn from(addr: &SocketAddrV4) -> Self {
+        Self {
+            ip: u32::from_be_bytes(addr.ip().octets()),
+            port: addr.port() as u32,
+        }
+    }
+}
+
+impl From<Address> for SocketAddrV4 {
+    fn from(addr: Address) -> Self {
+        Self::new(Ipv4Addr::from(addr.ip), addr.port as u16)
+    }
+}
+
+#[derive(Debug, Copy, Clone, TlRead, TlWrite)]
 #[tl(boxed, id = "adnl.pong", size_hint = 8, scheme = "scheme.tl")]
 pub struct Pong {
     pub value: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn correct_addr_conversion() {
+        let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 123);
+
+        let test = Address::from(&addr);
+        assert_eq!(test.ip, 0x7f000001);
+        assert_eq!(test.port, 123);
+
+        let test = SocketAddrV4::from(test);
+        assert_eq!(test, addr);
+    }
 }

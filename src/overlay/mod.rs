@@ -34,7 +34,7 @@ mod node_impl {
     };
 
     use crate::rldp;
-    use crate::utils::{DeferredInitialization, NetworkBuilder};
+    use crate::util::{DeferredInitialization, NetworkBuilder};
 
     pub(crate) type Deferred = Result<Arc<Node>>;
 

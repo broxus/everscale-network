@@ -18,7 +18,7 @@ pub use node::{Node, NodeMetrics, NodeOptions};
 
 use crate::adnl;
 use crate::subscriber::QuerySubscriber;
-use crate::utils::{DeferredInitialization, NetworkBuilder};
+use crate::util::{DeferredInitialization, NetworkBuilder};
 
 pub(crate) mod compression;
 mod decoder;

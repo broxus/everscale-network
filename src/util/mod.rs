@@ -5,15 +5,15 @@ use std::hash::BuildHasherDefault;
 use rustc_hash::FxHasher;
 pub use rustc_hash::{FxHashMap, FxHashSet};
 
+pub use self::address_list::*;
 pub use self::deferred_initialization::*;
 pub use self::network_builder::*;
-pub use self::packed_socket_addr::*;
 pub use self::packets_history::*;
 pub use self::updated_at::*;
 
+mod address_list;
 mod deferred_initialization;
 mod network_builder;
-mod packed_socket_addr;
 mod packets_history;
 mod updated_at;
 

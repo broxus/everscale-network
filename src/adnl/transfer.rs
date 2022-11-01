@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use sha2::Digest;
 
-use crate::utils::*;
+use crate::util::*;
 
 pub type TransferId = [u8; 32];
 

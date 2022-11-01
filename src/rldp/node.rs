@@ -9,7 +9,7 @@ use super::transfers_cache::*;
 use crate::adnl;
 use crate::proto;
 use crate::subscriber::*;
-use crate::utils::*;
+use crate::util::*;
 
 /// RLDP node configuration
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]

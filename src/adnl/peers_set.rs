@@ -4,7 +4,7 @@ use parking_lot::{RwLock, RwLockReadGuard};
 use rand::seq::SliceRandom;
 
 use super::node_id::NodeIdShort;
-use crate::utils::{FxDashSet, FxHashMap};
+use crate::util::{FxDashSet, FxHashMap};
 
 /// A set of unique short node ids
 pub struct PeersSet {

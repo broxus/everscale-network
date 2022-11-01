@@ -17,7 +17,7 @@ use crate::adnl::transfer::*;
 use crate::adnl::Node;
 use crate::proto;
 use crate::subscriber::*;
-use crate::utils::*;
+use crate::util::*;
 
 impl Node {
     /// Starts a process that listens for and processes packets from the UDP socket
@@ -408,12 +408,12 @@ impl Node {
             )?;
 
             if let Some(list) = &packet.address {
-                let ip_address = parse_address_list(list, self.options.clock_tolerance_sec)?;
+                let addr = parse_address_list(list, self.options.clock_tolerance_sec)?;
                 self.add_peer(
                     NewPeerContext::AdnlPacket,
                     local_id,
                     &peer_id,
-                    ip_address,
+                    addr,
                     full_id,
                 )?;
             }

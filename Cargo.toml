@@ -4,7 +4,7 @@ version = "0.4.0"
 description = "Implementation of the network part of the Everscale blockchain"
 repository = "https://github.com/broxus/everscale-network"
 authors = ["Ivan Kalinin <i.kalinin@dexpa.io>"]
-rust-version = "1.60.0"
+rust-version = "1.64.0"
 edition = "2021"
 include = ["src/**/*.rs", "src/**/*.tl", "README.md"]
 license = "Apache-2.0"
@@ -16,6 +16,18 @@ path = "examples/adnl.rs"
 [[example]]
 name = "rldp"
 path = "examples/rldp.rs"
+
+[[example]]
+name = "dht"
+path = "examples/dht.rs"
+
+[[example]]
+name = "overlay"
+path = "examples/overlay.rs"
+
+[[example]]
+name = "overlay-query"
+path = "examples/overlay_query.rs"
 
 [profile.release]
 debug = true

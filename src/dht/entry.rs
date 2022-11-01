@@ -9,7 +9,7 @@ use super::node::Node;
 use super::streams::DhtValuesStream;
 use crate::adnl;
 use crate::proto;
-use crate::utils::now;
+use crate::util::now;
 
 #[must_use]
 #[derive(Copy, Clone)]

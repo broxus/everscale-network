@@ -1,5 +1,6 @@
 use std::convert::TryFrom;
 use std::hash::BuildHasherDefault;
+use std::net::SocketAddrV4;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,7 +18,7 @@ use super::{broadcast_receiver::*, MAX_OVERLAY_PEERS};
 use crate::adnl;
 use crate::proto;
 use crate::rldp::{self, compression, RaptorQDecoder, RaptorQEncoder};
-use crate::utils::*;
+use crate::util::*;
 
 /// Overlay configuration
 #[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
@@ -253,7 +254,7 @@ impl Overlay {
     pub fn add_public_peer(
         &self,
         adnl: &adnl::Node,
-        ip_address: PackedSocketAddr,
+        addr: SocketAddrV4,
         node: proto::overlay::Node<'_>,
     ) -> Result<Option<adnl::NodeIdShort>> {
         if let Err(e) = self.id.verify_overlay_node(&node) {
@@ -268,7 +269,7 @@ impl Overlay {
             adnl::NewPeerContext::PublicOverlay,
             self.overlay_key().id(),
             &peer_id,
-            ip_address,
+            addr,
             peer_id_full,
         )?;
         if is_new_peer {
@@ -288,12 +289,12 @@ impl Overlay {
         nodes: I,
     ) -> Result<Vec<adnl::NodeIdShort>>
     where
-        I: IntoIterator<Item = (PackedSocketAddr, proto::overlay::Node<'a>)>,
+        I: IntoIterator<Item = (SocketAddrV4, proto::overlay::Node<'a>)>,
     {
         let local_id = self.overlay_key().id();
 
         let mut result = Vec::new();
-        for (ip_address, node) in nodes {
+        for (addr, node) in nodes {
             if let Err(e) = self.id.verify_overlay_node(&node) {
                 tracing::debug!("Error during overlay peer verification: {e:?}");
                 continue;
@@ -306,13 +307,13 @@ impl Overlay {
                 adnl::NewPeerContext::PublicOverlay,
                 local_id,
                 &peer_id,
-                ip_address,
+                addr,
                 peer_id_full,
             )?;
             if is_new_peer {
                 self.insert_public_peer(&peer_id, node);
                 result.push(peer_id);
-                tracing::trace!("Node id: {peer_id}, address: {ip_address}");
+                tracing::trace!("Node id: {peer_id}, address: {addr}");
             }
         }
 

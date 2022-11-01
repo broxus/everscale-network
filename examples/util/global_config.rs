@@ -63,10 +63,7 @@ impl<'de> Deserialize<'de> for DhtNode {
             address: entry
                 .addr_list
                 .address
-                .map(|addr| proto::adnl::Address::Udp {
-                    ip: u32::from_be_bytes(addr.ip().octets()),
-                    port: addr.port() as u32,
-                }),
+                .map(|addr| proto::adnl::Address::from(&addr)),
             version: entry.addr_list.version,
             reinit_date: entry.addr_list.reinit_date,
             expire_at: entry.addr_list.expire_at,

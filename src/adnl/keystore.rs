@@ -5,7 +5,7 @@ use anyhow::Result;
 use everscale_crypto::ed25519;
 
 use super::node_id::{ComputeNodeIds, NodeIdFull, NodeIdShort};
-use crate::utils::*;
+use crate::util::*;
 
 /// Tagged keystore for ADNL keys
 #[derive(Default)]

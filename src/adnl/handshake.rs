@@ -8,7 +8,7 @@ use super::encryption::*;
 use super::keystore::Key;
 use super::node_id::{NodeIdFull, NodeIdShort};
 use super::packet_view::*;
-use crate::utils::*;
+use crate::util::*;
 
 /// Modifies `buffer` in-place to contain the handshake packet
 pub fn build_handshake_packet(

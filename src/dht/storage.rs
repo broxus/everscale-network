@@ -9,7 +9,7 @@ use super::KEY_NODES;
 use crate::adnl;
 use crate::overlay;
 use crate::proto;
-use crate::utils::*;
+use crate::util::*;
 
 pub struct StorageOptions {
     pub max_key_name_len: usize,

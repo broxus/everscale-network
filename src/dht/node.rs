@@ -1,5 +1,6 @@
 use std::borrow::{Borrow, Cow};
 use std::convert::TryFrom;
+use std::net::SocketAddrV4;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,14 +21,14 @@ use crate::adnl;
 use crate::overlay;
 use crate::proto;
 use crate::subscriber::*;
-use crate::utils::*;
+use crate::util::*;
 
 /// DHT node configuration
 #[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct NodeOptions {
     /// Default stored value timeout used for [`Node::store_overlay_node`] and
-    /// [`Node::store_ip_address`]
+    /// [`Node::store_address`]
     ///
     /// Default: `3600` seconds
     pub value_ttl_sec: u32,
@@ -274,7 +275,7 @@ impl Node {
     pub async fn find_overlay_nodes(
         self: &Arc<Self>,
         overlay_id: &overlay::IdShort,
-    ) -> Result<Vec<(PackedSocketAddr, proto::overlay::NodeOwned)>> {
+    ) -> Result<Vec<(SocketAddrV4, proto::overlay::NodeOwned)>> {
         let mut result = Vec::new();
         let mut nodes = Vec::new();
         let mut cache = FxHashSet::default();
@@ -340,14 +341,14 @@ impl Node {
     pub async fn find_address(
         self: &Arc<Self>,
         peer_id: &adnl::NodeIdShort,
-    ) -> Result<(PackedSocketAddr, adnl::NodeIdFull)> {
+    ) -> Result<(SocketAddrV4, adnl::NodeIdFull)> {
         let mut values = self.entry(peer_id, KEY_ADDRESS).values();
         while let Some((key, BoxedWrapper(value))) = values.next().await {
             match (
                 parse_address_list(&value, self.adnl.options().clock_tolerance_sec),
                 adnl::NodeIdFull::try_from(key.id.as_equivalent_ref()),
             ) {
-                (Ok(ip_address), Ok(full_id)) => return Ok((ip_address, full_id)),
+                (Ok(addr), Ok(full_id)) => return Ok((addr, full_id)),
                 _ => continue,
             }
         }
@@ -410,18 +411,18 @@ impl Node {
             .await
     }
 
-    /// Stores given ip into multiple DHT nodes
-    pub async fn store_ip_address(
+    /// Stores given socket address into multiple DHT nodes
+    pub async fn store_address(
         self: &Arc<Self>,
         key: &adnl::Key,
-        ip: PackedSocketAddr,
+        addr: &SocketAddrV4,
     ) -> Result<bool> {
         let clock_tolerance_sec = self.adnl.options().clock_tolerance_sec;
 
         self.entry(key.id(), KEY_ADDRESS)
             .with_data(
                 proto::adnl::AddressList {
-                    address: Some(ip.as_tl()),
+                    address: Some(proto::adnl::Address::from(addr)),
                     version: now(),
                     reinit_date: self.adnl.start_time(),
                     expire_at: 0,
@@ -431,9 +432,13 @@ impl Node {
             .sign_and_store(key)?
             .then_check(move |_, BoxedWrapper(address_list)| {
                 match parse_address_list(&address_list, clock_tolerance_sec)? {
-                    stored_ip if stored_ip == ip => Ok(true),
-                    stored_ip => {
-                        tracing::warn!("Found another stored address {stored_ip}, expected {ip}");
+                    stored_addr if stored_addr == *addr => Ok(true),
+                    stored_addr => {
+                        tracing::warn!(
+                            "Found another stored address {}, expected {}",
+                            stored_addr,
+                            addr
+                        );
                         Ok(false)
                     }
                 }
@@ -580,15 +585,14 @@ impl NodeState {
 
         // Parse remaining peer data
         let peer_id = peer_id_full.compute_short_id();
-        let peer_ip_address =
-            parse_address_list(&peer.addr_list, adnl.options().clock_tolerance_sec)?;
+        let peer_addr = parse_address_list(&peer.addr_list, adnl.options().clock_tolerance_sec)?;
 
         // Add new ADNL peer
         let is_new_peer = adnl.add_peer(
             adnl::NewPeerContext::Dht,
             self.key.id(),
             &peer_id,
-            peer_ip_address,
+            peer_addr,
             peer_id_full,
         )?;
         if !is_new_peer {

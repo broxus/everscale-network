@@ -1,3 +1,4 @@
+use std::net::SocketAddrV4;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,7 +22,7 @@ use super::socket::make_udp_socket;
 use super::transfer::*;
 use crate::proto;
 use crate::subscriber::*;
-use crate::utils::*;
+use crate::util::*;
 
 mod receiver;
 mod sender;
@@ -106,7 +107,7 @@ impl Default for NodeOptions {
 /// Unreliable UDP transport layer
 pub struct Node {
     /// Socket address of the node
-    socket_addr: PackedSocketAddr,
+    socket_addr: SocketAddrV4,
     /// Immutable keystore
     keystore: Keystore,
     /// Configuration
@@ -144,7 +145,7 @@ pub struct Node {
 impl Node {
     /// Create new ADNL node on the specified address
     pub fn new(
-        mut socket_addr: PackedSocketAddr,
+        mut socket_addr: SocketAddrV4,
         keystore: Keystore,
         options: NodeOptions,
         peer_filter: Option<Arc<dyn PeerFilter>>,
@@ -266,7 +267,7 @@ impl Node {
 
     /// Socket address of the node
     #[inline(always)]
-    pub fn socket_addr(&self) -> PackedSocketAddr {
+    pub fn socket_addr(&self) -> SocketAddrV4 {
         self.socket_addr
     }
 
@@ -279,7 +280,7 @@ impl Node {
     /// Builds new address list for the current ADNL node with no expiration date
     pub fn build_address_list(&self) -> proto::adnl::AddressList {
         proto::adnl::AddressList {
-            address: Some(self.socket_addr.as_tl()),
+            address: Some(proto::adnl::Address::from(&self.socket_addr)),
             version: now(),
             reinit_date: self.start_time,
             expire_at: 0,
@@ -308,19 +309,19 @@ impl Node {
         ctx: NewPeerContext,
         local_id: &NodeIdShort,
         peer_id: &NodeIdShort,
-        peer_ip_address: PackedSocketAddr,
+        addr: SocketAddrV4,
         peer_id_full: NodeIdFull,
     ) -> Result<bool> {
         use dashmap::mapref::entry::Entry;
 
         // Ignore ourself
-        if peer_id == local_id || peer_ip_address == self.socket_addr {
+        if peer_id == local_id || addr == self.socket_addr {
             return Ok(false);
         }
 
         // Check peer with peer filter (if specified)
         if let Some(filter) = &self.peer_filter {
-            if !filter.check(ctx, peer_ip_address, peer_id) {
+            if !filter.check(ctx, &addr, peer_id) {
                 return Ok(false);
             }
         }
@@ -328,14 +329,12 @@ impl Node {
         // Search remove peer in known peers
         match self.get_peers(local_id)?.entry(*peer_id) {
             // Update ip if peer is already known
-            Entry::Occupied(entry) => entry.get().set_ip_address(peer_ip_address),
+            Entry::Occupied(entry) => entry.get().set_addr(addr),
             // Create new peer state otherwise
             Entry::Vacant(entry) => {
-                entry.insert(Peer::new(self.start_time, peer_ip_address, peer_id_full));
+                entry.insert(Peer::new(self.start_time, addr, peer_id_full));
 
-                tracing::trace!(
-                    "Added ADNL peer {peer_ip_address}. PEER ID {peer_id} -> LOCAL ID {local_id}"
-                );
+                tracing::trace!("Added ADNL peer {addr}. PEER ID {peer_id} -> LOCAL ID {local_id}");
             }
         };
 
@@ -361,26 +360,26 @@ impl Node {
         Ok(peers.remove(peer_id).is_some())
     }
 
-    /// Searches for remote peer ip in the known peers
-    pub fn get_peer_ip(
+    /// Searches for remote peer socket address in the known peers
+    pub fn get_peer_address(
         &self,
         local_id: &NodeIdShort,
         peer_id: &NodeIdShort,
-    ) -> Option<PackedSocketAddr> {
+    ) -> Option<SocketAddrV4> {
         let peers = self.get_peers(local_id).ok()?;
         let peer = peers.get(peer_id)?;
-        Some(peer.ip_address())
+        Some(peer.addr())
     }
 
-    /// Matches entries with peer id by ip
+    /// Matches entries with peer id by socket address
     ///
     /// NOTE: It is a quite expensive method that iterates over all peers
     /// and may block new peers from being added during the execution time.
     /// Use it with caution.
-    pub fn match_peer_ips<T>(
+    pub fn match_peer_addresses<T>(
         &self,
         local_id: &NodeIdShort,
-        mut entries: FxHashMap<PackedSocketAddr, T>,
+        mut entries: FxHashMap<SocketAddrV4, T>,
     ) -> Option<FxHashMap<T, NodeIdShort>>
     where
         T: std::hash::Hash + Eq,
@@ -389,7 +388,7 @@ impl Node {
 
         let mut result = FxHashMap::with_capacity_and_hasher(entries.len(), Default::default());
         for peer in peers.iter() {
-            if let Some(key) = entries.remove(&peer.ip_address()) {
+            if let Some(key) = entries.remove(&peer.addr()) {
                 result.insert(key, *peer.key());
             }
         }

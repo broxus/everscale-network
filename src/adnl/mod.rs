@@ -75,9 +75,10 @@
 //! [`NodeIdShort`]: NodeIdShort
 //! [`Message`]: crate::proto::adnl::Message
 
+use std::net::{SocketAddr, SocketAddrV4, ToSocketAddrs};
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use frunk_core::hlist::{HCons, HNil};
 use frunk_core::indices::Here;
 
@@ -87,7 +88,7 @@ pub use self::node_id::{ComputeNodeIds, NodeIdFull, NodeIdShort};
 pub use self::peer::{NewPeerContext, PeerFilter};
 pub use self::peers_set::PeersSet;
 
-use crate::utils::{DeferredInitialization, NetworkBuilder, PackedSocketAddr};
+use crate::util::{DeferredInitialization, NetworkBuilder};
 
 mod channel;
 mod encryption;
@@ -117,32 +118,45 @@ impl DeferredInitialization for Deferred {
 
 impl NetworkBuilder<HNil, (Here, Here)> {
     pub fn with_adnl<T>(
-        socket_addr: T,
+        addr: T,
         keystore: Keystore,
         options: NodeOptions,
     ) -> NetworkBuilder<HCons<Deferred, HNil>, (Here, Here)>
     where
-        T: Into<PackedSocketAddr>,
+        T: ToSocketAddrs,
     {
-        Self::with_adnl_ext(socket_addr, keystore, options, None)
+        Self::with_adnl_ext(addr, keystore, options, None)
     }
 
     pub fn with_adnl_ext<T>(
-        socket_addr: T,
+        addr: T,
         keystore: Keystore,
         options: NodeOptions,
         peer_filter: Option<Arc<dyn PeerFilter>>,
     ) -> NetworkBuilder<HCons<Deferred, HNil>, (Here, Here)>
     where
-        T: Into<PackedSocketAddr>,
+        T: ToSocketAddrs,
     {
         NetworkBuilder(
             HCons {
-                head: Node::new(socket_addr.into(), keystore, options, peer_filter),
+                head: parse_socket_addr(addr)
+                    .and_then(|addr| Node::new(addr, keystore, options, peer_filter)),
                 tail: HNil,
             },
             Default::default(),
         )
+    }
+}
+
+fn parse_socket_addr<T: ToSocketAddrs>(addr: T) -> Result<SocketAddrV4> {
+    match addr
+        .to_socket_addrs()
+        .context("Failed to parse socket addr")?
+        .next()
+    {
+        Some(SocketAddr::V4(addr)) => Ok(addr),
+        Some(SocketAddr::V6(_)) => anyhow::bail!("IPv6 is not supported"),
+        None => anyhow::bail!("Invalid ip address"),
     }
 }
 

@@ -12,7 +12,7 @@ pub use entry::Entry;
 pub use node::{Node, NodeMetrics, NodeOptions};
 
 use crate::adnl;
-use crate::utils::{DeferredInitialization, NetworkBuilder};
+use crate::util::{DeferredInitialization, NetworkBuilder};
 
 mod buckets;
 mod entry;

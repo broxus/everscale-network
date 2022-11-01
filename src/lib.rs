@@ -13,7 +13,7 @@ macro_rules! ok {
 pub use tl_proto;
 
 pub use subscriber::{MessageSubscriber, QueryConsumingResult, QuerySubscriber, SubscriberContext};
-pub use utils::NetworkBuilder;
+pub use util::NetworkBuilder;
 
 pub mod adnl;
 #[cfg(feature = "dht")]
@@ -23,4 +23,4 @@ pub mod proto;
 #[cfg(feature = "rldp")]
 pub mod rldp;
 mod subscriber;
-pub mod utils;
+pub mod util;
