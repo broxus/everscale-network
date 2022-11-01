@@ -71,6 +71,8 @@ async fn main() -> Result<()> {
         _ = tokio::time::sleep(Duration::from_secs(10)) => {},
     }
 
+    left_node.shutdown();
+
     let throughput = (tl_proto::serialize(example_request()).len()
         + tl_proto::serialize(example_response()).len())
         * iterations.load(Ordering::Relaxed);

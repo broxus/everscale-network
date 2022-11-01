@@ -455,7 +455,7 @@ impl Node {
     ) -> Result<Option<Vec<u8>>> {
         use rand::Rng;
 
-        let query_id: QueryId = rand::thread_rng().gen();
+        let query_id: QueryId = fast_thread_rng().gen();
 
         let pending_query = self.queries.add_query(query_id);
         self.send_message(
@@ -480,16 +480,11 @@ impl Node {
 
             async move {
                 tokio::time::sleep(Duration::from_millis(timeout)).await;
-
-                match queries.update_query(query_id, None).await {
-                    Ok(true) => { /* dropped query */ }
-                    Err(_) => tracing::warn!("Failed to drop query"),
-                    _ => { /* do nothing */ }
-                }
+                queries.update_query(query_id, None);
             }
         });
 
-        let answer = pending_query.wait().await?;
+        let answer = pending_query.wait().await;
         if answer.is_some() {
             handle.abort();
         } else if let Some(channel) = channel {

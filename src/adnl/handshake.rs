@@ -10,6 +10,11 @@ use super::node_id::{NodeIdFull, NodeIdShort};
 use super::packet_view::*;
 use crate::util::*;
 
+#[inline(always)]
+pub fn compute_handshake_prefix_len(version: Option<u16>) -> usize {
+    96 + if version.is_some() { 4 } else { 0 }
+}
+
 /// Modifies `buffer` in-place to contain the handshake packet
 pub fn build_handshake_packet(
     peer_id: &NodeIdShort,
@@ -27,7 +32,7 @@ pub fn build_handshake_packet(
     // Prepare packet
     let checksum: [u8; 32] = compute_packet_data_hash(version, buffer.as_slice());
 
-    let header_len = 96 + if version.is_some() { 4 } else { 0 };
+    let header_len = compute_handshake_prefix_len(version);
     let buffer_len = buffer.len();
     buffer.resize(header_len + buffer_len, 0);
     buffer.copy_within(..buffer_len, header_len);

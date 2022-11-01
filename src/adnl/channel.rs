@@ -215,7 +215,7 @@ impl Channel {
             &self.channel_out.ordinary
         };
 
-        let prefix_len = 64 + if version.is_some() { 4 } else { 0 };
+        let prefix_len = Self::compute_prefix_len(version);
         let buffer_len = buffer.len();
         buffer.resize(prefix_len + buffer_len, 0);
         buffer.copy_within(..buffer_len, prefix_len);
@@ -247,6 +247,11 @@ impl Channel {
                     .apply_keystream(&mut buffer[64..]);
             }
         }
+    }
+
+    #[inline(always)]
+    pub fn compute_prefix_len(version: Option<u16>) -> usize {
+        64 + if version.is_some() { 4 } else { 0 }
     }
 }
 

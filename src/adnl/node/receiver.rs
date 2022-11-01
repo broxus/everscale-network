@@ -253,7 +253,8 @@ impl Node {
         // Process message
         match alt_message.unwrap_or(message) {
             proto::adnl::Message::Answer { query_id, answer } => {
-                self.process_message_answer(query_id, answer).await
+                self.process_message_answer(query_id, answer);
+                Ok(())
             }
             proto::adnl::Message::ConfirmChannel { key, date, .. } => self
                 .process_message_confirm_channel(
@@ -308,12 +309,8 @@ impl Node {
         }
     }
 
-    async fn process_message_answer(&self, query_id: &QueryId, answer: &[u8]) -> Result<()> {
-        if self.queries.update_query(*query_id, Some(answer)).await? {
-            Ok(())
-        } else {
-            Err(AdnlReceiverError::UnknownQueryAnswer.into())
-        }
+    fn process_message_answer(&self, query_id: &QueryId, answer: &[u8]) {
+        self.queries.update_query(*query_id, Some(answer));
     }
 
     fn process_message_confirm_channel(
@@ -607,8 +604,6 @@ enum AdnlReceiverError {
     InvalidPacket,
     #[error("Unknown message")]
     UnknownMessage,
-    #[error("Received answer to unknown query")]
-    UnknownQueryAnswer,
     #[error("Channel with unknown peer")]
     UnknownPeerInChannel,
     #[error("No subscribers for custom message")]

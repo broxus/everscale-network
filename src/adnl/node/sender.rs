@@ -264,13 +264,21 @@ impl Node {
         packet.signature = signature.as_ref().map(<[u8; 64]>::as_slice);
 
         // Serialize packet
-        let mut data = tl_proto::serialize(packet);
+        let adnl_version = self.options.version;
+        let prefix_len = match &signer {
+            MessageSigner::Channel { .. } => Channel::compute_prefix_len(adnl_version),
+            MessageSigner::Random(..) => compute_handshake_prefix_len(adnl_version),
+        };
+
+        let mut data = Vec::with_capacity(prefix_len + packet.max_size_hint());
+        packet.write_to(&mut data);
+
         match signer {
             MessageSigner::Channel { channel, priority } => {
-                channel.encrypt(&mut data, priority, self.options.version)
+                channel.encrypt(&mut data, priority, adnl_version)
             }
             MessageSigner::Random(_) => {
-                build_handshake_packet(peer_id, peer.id(), &mut data, self.options.version)
+                build_handshake_packet(peer_id, peer.id(), &mut data, adnl_version)
             }
         }
 

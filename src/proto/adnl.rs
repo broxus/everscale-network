@@ -24,7 +24,8 @@ impl<'tl> TlWrite for OutgoingPacketContents<'tl> {
     type Repr = Boxed;
 
     fn max_size_hint(&self) -> usize {
-        8 // rand1 (1 byte length, 7 bytes data)
+        4 // constructor
+            + 8 // rand1 (1 byte length, 7 bytes data)
             + 4 // flags
             + self.from.max_size_hint()
             + self.messages.max_size_hint()

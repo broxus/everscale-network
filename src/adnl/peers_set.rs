@@ -4,7 +4,7 @@ use parking_lot::{RwLock, RwLockReadGuard};
 use rand::seq::SliceRandom;
 
 use super::node_id::NodeIdShort;
-use crate::util::{FxDashSet, FxHashMap};
+use crate::util::{fast_thread_rng, FxDashSet, FxHashMap};
 
 /// A set of unique short node ids
 pub struct PeersSet {
@@ -61,7 +61,7 @@ impl PeersSet {
         let items = state
             .index
             .choose_multiple(
-                &mut rand::thread_rng(),
+                &mut fast_thread_rng(),
                 if except.is_some() { amount + 1 } else { amount } as usize,
             )
             .cloned();
