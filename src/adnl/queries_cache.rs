@@ -34,8 +34,8 @@ impl QueriesCache {
         }
     }
 
-    pub fn update_query(&self, query_id: QueryId, answer: &[u8]) {
-        if let Some((_, tx)) = self.queries.remove(&query_id) {
+    pub fn update_query(&self, query_id: &QueryId, answer: &[u8]) {
+        if let Some((_, tx)) = self.queries.remove(query_id) {
             tx.send(answer.to_vec()).ok();
         }
     }

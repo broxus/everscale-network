@@ -310,7 +310,7 @@ impl Node {
     }
 
     fn process_message_answer(&self, query_id: &QueryId, answer: &[u8]) {
-        self.queries.update_query(*query_id, answer);
+        self.queries.update_query(query_id, answer);
     }
 
     fn process_message_confirm_channel(
