@@ -48,14 +48,14 @@ impl Transfer {
         data: Vec<u8>,
         transfer_id: &TransferId,
     ) -> Result<Option<Vec<u8>>, TransferError> {
-        let length = data.len();
+        let len = data.len();
         if self.parts.insert(offset, data).is_some() {
             return Ok(None);
         }
 
         // Increase received length.
         // This part heavily relies on ordering, so hope that it works as expected
-        self.received_len.fetch_add(length, Ordering::Release);
+        self.received_len.fetch_add(len, Ordering::Release);
 
         // Check if it is equal to the total length and make sure it will be big enough to fail
         // next check on success
@@ -72,7 +72,12 @@ impl Transfer {
         // Handle part
         match received.cmp(&self.total_len) {
             std::cmp::Ordering::Equal => {
-                tracing::debug!("Finished ADNL transfer ({received} of {})", self.total_len);
+                tracing::debug!(
+                    received,
+                    total = self.total_len,
+                    transfer_id = %DisplayTransferId(transfer_id),
+                    "finished ADNL transfer"
+                );
 
                 // Combine all parts
                 received = 0;
@@ -99,12 +104,28 @@ impl Transfer {
             std::cmp::Ordering::Greater => Err(TransferError::ReceivedTooMuch),
             std::cmp::Ordering::Less => {
                 tracing::trace!(
-                    "Received ADNL transfer part ({received} of {})",
-                    self.total_len
+                    received,
+                    total = self.total_len,
+                    transfer_id = %DisplayTransferId(transfer_id),
+                    "received ADNL transfer part"
                 );
                 Ok(None)
             }
         }
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct DisplayTransferId<'a>(pub &'a TransferId);
+
+impl std::fmt::Display for DisplayTransferId<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut output = [0u8; 64];
+        hex::encode_to_slice(&self.0, &mut output).ok();
+
+        // SAFETY: output is guaranteed to contain only [0-9a-f]
+        let output = unsafe { std::str::from_utf8_unchecked(&output) };
+        f.write_str(output)
     }
 }
 

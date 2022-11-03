@@ -42,7 +42,7 @@ async fn main() -> Result<()> {
         dht.add_dht_peer(peer)?;
     }
 
-    tracing::info!("searching DHT nodes");
+    tracing::info!("searching for DHT nodes");
     let new_dht_nodes = dht.find_more_dht_nodes().await?;
     tracing::info!("found {new_dht_nodes} DHT nodes");
 

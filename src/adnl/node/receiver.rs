@@ -61,14 +61,14 @@ impl Node {
                 tokio::pin!(let recv = socket.recv_from(raw_buffer););
                 let result = match select(recv, &mut cancelled).await {
                     Either::Left((left, _)) => left,
-                    Either::Right(_) => return,
+                    Either::Right(_) => break,
                 };
 
                 let len = match result {
                     Ok((len, _)) if len == 0 => continue,
                     Ok((len, _)) => len,
                     Err(e) => {
-                        tracing::warn!("Failed to receive data: {e}");
+                        tracing::warn!("failed to receive data: {e}");
                         continue;
                     }
                 };
@@ -86,7 +86,7 @@ impl Node {
                 // Process packet
                 let ctx = ctx.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = ctx
+                    if let Err(error) = ctx
                         .node
                         .handle_received_data(
                             PacketView::from(buffer.as_mut_slice()),
@@ -95,10 +95,12 @@ impl Node {
                         )
                         .await
                     {
-                        tracing::trace!("Failed to handle received data: {e}");
+                        tracing::trace!(?error, "failed to handle received data");
                     }
                 });
             }
+
+            tracing::debug!("receiver loop finished");
         });
     }
 
@@ -130,8 +132,8 @@ impl Node {
             )
         } else {
             tracing::trace!(
-                "Received message to unknown key ID: {}",
-                hex::encode(&data[0..32])
+                key_id = hex::encode(&data[0..32]),
+                "received message to unknown key ID",
             );
             return Ok(());
         };
@@ -197,6 +199,13 @@ impl Node {
                 Entry::Vacant(entry) => {
                     let entry = entry.insert(Arc::new(Transfer::new(total_size as usize)));
                     let transfer = entry.value().clone();
+                    tracing::debug!(
+                        %local_id,
+                        %peer_id,
+                        total = total_size,
+                        transfer_id = %DisplayTransferId(&transfer_id),
+                        "started ADNL transfer"
+                    );
 
                     tokio::spawn({
                         let incoming_transfers = self.incoming_transfers.clone();
@@ -212,8 +221,8 @@ impl Node {
 
                                 if incoming_transfers.remove(&transfer_id).is_some() {
                                     tracing::debug!(
-                                        "ADNL transfer {} timed out",
-                                        hex::encode(&transfer_id)
+                                        transfer_id = %DisplayTransferId(&transfer_id),
+                                        "ADNL transfer timed out"
                                     );
                                 }
                                 break;
@@ -567,7 +576,7 @@ impl Node {
             }
         }
 
-        tracing::trace!("Channel {context}: {local_id} -> {peer_id}");
+        tracing::trace!(%local_id, %peer_id, "{context} channel");
 
         Ok(())
     }

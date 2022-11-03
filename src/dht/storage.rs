@@ -139,7 +139,7 @@ impl Storage {
         let mut new_nodes = deserialize_overlay_nodes(value.value)?;
         new_nodes.retain(|node| {
             if overlay_id.verify_overlay_node(node).is_err() {
-                tracing::warn!("Bad overlay node: {node:?}");
+                tracing::warn!(?node, "bad overlay node");
                 false
             } else {
                 true

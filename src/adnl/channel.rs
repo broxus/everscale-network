@@ -264,8 +264,8 @@ pub enum ChannelCreationContext {
 impl std::fmt::Display for ChannelCreationContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::CreateChannel => f.write_str("creation"),
-            Self::ConfirmChannel => f.write_str("confirmation"),
+            Self::CreateChannel => f.write_str("created"),
+            Self::ConfirmChannel => f.write_str("confirmed"),
         }
     }
 }

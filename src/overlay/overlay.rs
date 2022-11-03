@@ -258,7 +258,7 @@ impl Overlay {
         node: proto::overlay::Node<'_>,
     ) -> Result<Option<adnl::NodeIdShort>> {
         if let Err(e) = self.id.verify_overlay_node(&node) {
-            tracing::warn!("Error during overlay peer verification: {e:?}");
+            tracing::warn!("invalid public overlay node: {e:?}");
             return Ok(None);
         }
 
@@ -296,7 +296,7 @@ impl Overlay {
         let mut result = Vec::new();
         for (addr, node) in nodes {
             if let Err(e) = self.id.verify_overlay_node(&node) {
-                tracing::debug!("Error during overlay peer verification: {e:?}");
+                tracing::debug!("invalid public overlay node: {e:?}");
                 continue;
             }
 
@@ -313,7 +313,7 @@ impl Overlay {
             if is_new_peer {
                 self.insert_public_peer(&peer_id, node);
                 result.push(peer_id);
-                tracing::trace!("Node id: {peer_id}, address: {addr}");
+                tracing::trace!(%peer_id, %addr, "new public peer");
             }
         }
 
@@ -490,13 +490,13 @@ impl Overlay {
         let answer = match self.adnl_query(adnl, peer_id, query, timeout).await? {
             Some(answer) => answer,
             None => {
-                tracing::trace!("No random peers from {peer_id}");
+                tracing::trace!(%peer_id, "no random peers found");
                 return Ok(None);
             }
         };
 
         let answer = tl_proto::deserialize_as_boxed(&answer)?;
-        tracing::trace!("Got random peers from {peer_id}");
+        tracing::trace!(%peer_id, "got random peers");
         let proto::overlay::Nodes { nodes } = self.filter_nodes(answer);
 
         let nodes = nodes
@@ -511,7 +511,7 @@ impl Overlay {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to process peer: {e}");
+                    tracing::warn!("failed to process peer: {e}");
                     None
                 }
             })
@@ -626,7 +626,7 @@ impl Overlay {
 
         transfer.updated_at.refresh();
         if transfer.source != source {
-            tracing::trace!("Same broadcast but parts from different sources");
+            tracing::trace!("same broadcast but parts from different sources");
             return Ok(());
         }
 
@@ -705,14 +705,14 @@ impl Overlay {
         let broadcast_to_sign = make_broadcast_to_sign(&data, date, None);
         let broadcast_id = broadcast_to_sign.compute_broadcast_id();
         if !self.create_broadcast(broadcast_id) {
-            tracing::warn!("Trying to send duplicated broadcast");
+            tracing::warn!("trying to send duplicated broadcast");
             return Default::default();
         }
         let signature = key.sign(broadcast_to_sign);
 
         if self.options.force_compression {
             if let Err(e) = compression::compress(&mut data) {
-                tracing::warn!("Failed to compress overlay broadcast: {e:?}");
+                tracing::warn!("failed to compress overlay broadcast: {e:?}");
             }
         }
 
@@ -758,13 +758,13 @@ impl Overlay {
     ) -> OutgoingBroadcastInfo {
         let broadcast_id = sha2::Sha256::digest(&data).into();
         if !self.create_broadcast(broadcast_id) {
-            tracing::warn!("Trying to send duplicated broadcast");
+            tracing::warn!("trying to send duplicated broadcast");
             return Default::default();
         }
 
         if self.options.force_compression {
             if let Err(e) = compression::compress(&mut data) {
-                tracing::warn!("Failed to compress overlay FEC broadcast: {e:?}");
+                tracing::warn!("failed to compress overlay FEC broadcast: {e:?}");
             }
         }
 
@@ -806,7 +806,7 @@ impl Overlay {
                         Ok(data) => data,
                         // Rare case, it is easier to just ignore it
                         Err(e) => {
-                            tracing::warn!("Failed to send overlay broadcast: {e}");
+                            tracing::warn!("failed to send overlay broadcast: {e}");
                             break 'outer;
                         }
                     };
@@ -831,8 +831,6 @@ impl Overlay {
 
     /// Verifies and retains only valid remote peers
     fn filter_nodes<'a>(&self, mut nodes: proto::overlay::Nodes<'a>) -> proto::overlay::Nodes<'a> {
-        tracing::trace!("-------- Got random peers");
-
         nodes.nodes.retain(|node| {
             if !matches!(
                 node.id,
@@ -842,9 +840,8 @@ impl Overlay {
                 return false;
             }
 
-            tracing::trace!("{node:?}");
             if let Err(e) = self.id.verify_overlay_node(node) {
-                tracing::warn!("Error during overlay peer verification: {e:?}");
+                tracing::warn!("invalid overlay node: {e:?}");
                 return false;
             }
 
@@ -966,7 +963,7 @@ impl Overlay {
                     Ok(None) => continue,
                     // Error during decoding
                     Err(e) => {
-                        tracing::warn!("Error when receiving overlay broadcast: {e}");
+                        tracing::warn!("error when receiving overlay broadcast: {e}");
                         break;
                     }
                 }
@@ -979,7 +976,7 @@ impl Overlay {
                         transfer.completed.store(true, Ordering::Release);
                     }
                     _ => {
-                        tracing::error!("Incoming fec broadcast mismatch");
+                        tracing::error!("incoming fec broadcast mismatch");
                     }
                 }
             }
@@ -1004,7 +1001,7 @@ impl Overlay {
                         }
                         OwnedBroadcast::Incoming(_) => {}
                         _ => {
-                            tracing::error!("Incoming fec broadcast mismatch");
+                            tracing::error!("incoming fec broadcast mismatch");
                         }
                     }
                 }
@@ -1072,7 +1069,7 @@ impl Overlay {
     ) {
         for peer_id in neighbours {
             if let Err(e) = adnl.send_custom_message(local_id, peer_id, data) {
-                tracing::warn!("Failed to distribute broadcast: {e}");
+                tracing::warn!("failed to distribute broadcast: {e}");
             }
         }
     }

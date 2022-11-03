@@ -169,15 +169,13 @@ impl Node {
     }
 
     fn make_query(&self, mut data: Vec<u8>) -> ([u8; 32], Vec<u8>) {
-        use rand::Rng;
-
         if self.options.force_compression {
             if let Err(e) = compression::compress(&mut data) {
-                tracing::warn!("Failed to compress RLDP query: {e:?}");
+                tracing::warn!("failed to compress RLDP query: {e:?}");
             }
         }
 
-        let query_id = rand::thread_rng().gen();
+        let query_id = gen_fast_bytes();
         let data = proto::rldp::Message::Query {
             query_id: &query_id,
             max_answer_size: self.options.max_answer_size as u64,

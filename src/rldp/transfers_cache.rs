@@ -385,7 +385,7 @@ impl IncomingContext {
 
             // Exit loop if all bytes were received
             match self.transfer.total_size() {
-                Some(total_size) if total_size == self.transfer.data().len() => {
+                Some(total_size) if self.transfer.data().len() >= total_size => {
                     break;
                 }
                 None => {
@@ -577,7 +577,7 @@ async fn process_rldp_query(
             Some(mut answer) => {
                 if answer_compression {
                     if let Err(e) = compression::compress(&mut answer) {
-                        tracing::warn!("Failed to compress RLDP answer: {e:?}");
+                        tracing::warn!("failed to compress RLDP answer: {e:?}");
                     }
                 }
                 if answer.len() > query.max_answer_size as usize {

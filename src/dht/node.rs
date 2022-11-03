@@ -8,7 +8,6 @@ use anyhow::Result;
 use bytes::Bytes;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
-use rand::Rng;
 use smallvec::smallvec;
 use tl_proto::{BoxedConstructor, BoxedWrapper, TlRead, TlWrite};
 
@@ -199,7 +198,8 @@ impl Node {
 
     /// Sends ping query to the given peer
     pub async fn ping(&self, peer_id: &adnl::NodeIdShort) -> Result<bool> {
-        let random_id = rand::thread_rng().gen();
+        use rand::RngCore;
+        let random_id = fast_thread_rng().next_u64();
         match self
             .query(peer_id, proto::rpc::DhtPing { random_id })
             .await?
@@ -261,7 +261,9 @@ impl Node {
                         node_count += self.add_dht_peer(node)?.is_some() as usize;
                     }
                 }
-                Err(e) => tracing::warn!("Failed to get DHT nodes from {peer_id}: {e:?}"),
+                Err(e) => {
+                    tracing::warn!(%peer_id, "failed to get DHT nodes: {e:?}")
+                }
             }
         }
 
@@ -435,9 +437,9 @@ impl Node {
                     stored_addr if stored_addr == *addr => Ok(true),
                     stored_addr => {
                         tracing::warn!(
-                            "Found another stored address {}, expected {}",
-                            stored_addr,
-                            addr
+                            stored = %stored_addr,
+                            expected = %addr,
+                            "stored address mismatch",
                         );
                         Ok(false)
                     }
@@ -510,7 +512,7 @@ impl Node {
             proto::dht::ValueResult::ValueNotFound(proto::dht::NodesOwned { nodes }) => {
                 for node in nodes {
                     if let Err(e) = self.add_dht_peer(node) {
-                        tracing::warn!("Failed to add DHT peer: {e:?}");
+                        tracing::warn!("failed to add DHT peer: {e:?}");
                     }
                 }
                 Ok(None)
@@ -578,7 +580,7 @@ impl NodeState {
         // Verify signature
         let signature = std::mem::take(&mut peer.signature);
         if peer_id_full.verify(peer.as_boxed(), &signature).is_err() {
-            tracing::warn!("Invalid DHT peer signature");
+            tracing::warn!("invalid DHT peer signature");
             return Ok(None);
         }
         peer.signature = signature;

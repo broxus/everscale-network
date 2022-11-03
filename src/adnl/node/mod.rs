@@ -333,8 +333,7 @@ impl Node {
             // Create new peer state otherwise
             Entry::Vacant(entry) => {
                 entry.insert(Peer::new(self.start_time, addr, peer_id_full));
-
-                tracing::trace!("Added ADNL peer {addr}. PEER ID {peer_id} -> LOCAL ID {local_id}");
+                tracing::trace!(%local_id, %peer_id, %addr, "added ADNL peer");
             }
         };
 
@@ -515,7 +514,7 @@ impl Node {
         let peers = self.get_peers(local_id)?;
         let mut peer = peers.get_mut(peer_id).ok_or(NodeError::UnknownPeer)?;
 
-        tracing::trace!("Resetting peer pair {local_id} -> {peer_id}");
+        tracing::trace!(%local_id, %peer_id, "resetting peer pair");
 
         self.channels_by_peers
             .remove(peer_id)

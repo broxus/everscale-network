@@ -41,6 +41,8 @@ impl Node {
                 // Send packet
                 socket.send_to(&packet.data, packet.destination).await.ok();
             }
+
+            tracing::debug!("sender loop finished");
         });
     }
 
@@ -76,7 +78,7 @@ impl Node {
         let (additional_size, additional_message) = match &channel {
             Some(channel) if channel.ready() => (0, None),
             Some(channel_data) => {
-                tracing::trace!("Confirm channel {local_id} -> {peer_id}");
+                tracing::trace!(%local_id, %peer_id, "sending ConfirmChannel");
 
                 force_handshake = true;
                 (
@@ -89,7 +91,7 @@ impl Node {
                 )
             }
             None => {
-                tracing::trace!("Create channel {local_id} -> {peer_id}");
+                tracing::trace!(%local_id, %peer_id, "sending CreateChannel");
 
                 (
                     MSG_CREATE_CHANNEL_SIZE,

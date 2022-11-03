@@ -13,6 +13,8 @@ use tl_proto::{TlRead, TlWrite};
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    tracing_subscriber::fmt::init();
+
     let adnl_node_options = adnl::NodeOptions::default();
     let rldp_node_options = rldp::NodeOptions {
         max_peer_queries: 10000,
