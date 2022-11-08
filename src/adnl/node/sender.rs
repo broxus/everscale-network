@@ -1,4 +1,4 @@
-use std::net::SocketAddrV4;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -224,12 +224,24 @@ impl Node {
             false
         };
 
+        // Adjust socket addr
+        let mut local_addr = self.socket_addr;
+        let mut peer_addr = peer.addr();
+
+        if self.options.use_loopback_for_neighbours
+            && local_addr.ip() == peer_addr.ip()
+            && !peer_addr.ip().is_loopback()
+        {
+            local_addr.set_ip(Ipv4Addr::LOCALHOST);
+            peer_addr.set_ip(Ipv4Addr::LOCALHOST);
+        }
+
         // Generate on-stack random data
         let rand_bytes: [u8; 10] = gen_fast_bytes();
 
         let now = now();
         let address = proto::adnl::AddressList {
-            address: Some(proto::adnl::Address::from(&self.socket_addr)),
+            address: Some(proto::adnl::Address::from(&local_addr)),
             version: now,
             reinit_date: self.start_time,
             expire_at: now + self.options.address_list_timeout_sec,
@@ -285,7 +297,7 @@ impl Node {
         if self
             .sender_queue_tx
             .send(PacketToSend {
-                destination: peer.addr(),
+                destination: peer_addr,
                 data,
             })
             .is_err()

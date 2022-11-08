@@ -81,6 +81,11 @@ pub struct NodeOptions {
     /// Default: `true`
     pub force_use_priority_channels: bool,
 
+    /// Whether to use loopback ip to communicate with nodes on the same ip
+    ///
+    /// Default: `false`
+    pub use_loopback_for_neighbours: bool,
+
     /// ADNL protocol version.
     ///
     /// Default: None
@@ -99,6 +104,7 @@ impl Default for NodeOptions {
             packet_history_enabled: false,
             packet_signature_required: true,
             force_use_priority_channels: true,
+            use_loopback_for_neighbours: false,
             version: None,
         }
     }
