@@ -196,7 +196,10 @@ impl QuerySubscriber for NodeState {
             None => return Err(NodeError::NoConsumerFound.into()),
         };
 
-        match consumer.try_consume_query(ctx, constructor, query).await? {
+        match consumer
+            .try_consume_query(ctx, constructor, Cow::Borrowed(&query[offset..]))
+            .await?
+        {
             QueryConsumingResult::Consumed(result) => Ok(QueryConsumingResult::Consumed(result)),
             QueryConsumingResult::Rejected(_) => Err(NodeError::UnsupportedQuery.into()),
         }

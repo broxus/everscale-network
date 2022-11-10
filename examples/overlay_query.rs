@@ -92,8 +92,9 @@ impl QuerySubscriber for OverlaySubscriber {
         &self,
         _: SubscriberContext<'a>,
         constructor: u32,
-        _: Cow<'a, [u8]>,
+        query: Cow<'a, [u8]>,
     ) -> Result<QueryConsumingResult<'a>> {
+        tracing::info!("query: {}", hex::encode(query));
         if constructor == RpcGetCapabilities::TL_ID {
             QueryConsumingResult::consume(Capabilities {
                 version: 2,
