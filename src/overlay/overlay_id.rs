@@ -120,7 +120,7 @@ impl<'a> Borrow<[u8; 32]> for &'a IdShort {
 
 impl std::fmt::Display for IdShort {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str(&hex::encode(&self.0))
+        f.write_str(&hex::encode(self.0))
     }
 }
 

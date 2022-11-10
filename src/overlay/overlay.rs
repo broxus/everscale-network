@@ -405,15 +405,24 @@ impl Overlay {
     /// Sends RLDP query directly to the given peer. In case of timeout returns `Ok((None, max_timeout))`
     ///
     /// NOTE: Local id ([`Overlay::overlay_key`]) will be used as sender
-    pub async fn rldp_query(
+    pub async fn rldp_query<Q>(
         &self,
         rldp: &rldp::Node,
         peer_id: &adnl::NodeIdShort,
-        data: Vec<u8>,
+        query: Q,
         roundtrip: Option<u64>,
-    ) -> Result<(Option<Vec<u8>>, u64)> {
+    ) -> Result<(Option<Vec<u8>>, u64)>
+    where
+        Q: TlWrite,
+    {
         let local_id = self.overlay_key().id();
-        rldp.query(local_id, peer_id, data, roundtrip).await
+
+        let prefix = self.query_prefix();
+        let mut query_data = Vec::with_capacity(prefix.len() + query.max_size_hint());
+        query_data.extend_from_slice(prefix);
+        query.write_to(&mut query_data);
+
+        rldp.query(local_id, peer_id, query_data, roundtrip).await
     }
 
     /// Distributes provided message to the neighbours subset.
@@ -1233,7 +1242,7 @@ fn make_fec_part_to_sign(
             .map(adnl::NodeIdShort::as_slice)
             .unwrap_or(&[0; 32]),
     );
-    broadcast_hash.update(&tl_proto::hash(params));
+    broadcast_hash.update(tl_proto::hash(params));
     broadcast_hash.update(data_hash);
     broadcast_hash.update(data_size.to_le_bytes());
     broadcast_hash.update(flags.to_le_bytes());

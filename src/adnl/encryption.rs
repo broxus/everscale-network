@@ -18,7 +18,7 @@ pub fn compute_packet_data_hash(version: Option<u16>, data: &[u8]) -> [u8; 32] {
     match version {
         Some(version) => {
             let mut hash = sha2::Sha256::new();
-            hash.update(&version.to_be_bytes());
+            hash.update(version.to_be_bytes());
             hash.update(data);
             hash.finalize()
         }

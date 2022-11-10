@@ -35,14 +35,15 @@ impl Node {
                 tokio::pin!(let recv = sender_queue_rx.recv(););
                 match select(recv, &mut cancelled).await {
                     Either::Left((packet, _)) => packet,
-                    Either::Right(_) => return,
+                    Either::Right(_) => {
+                        tracing::debug!("sender loop finished");
+                        return;
+                    }
                 }
             } {
                 // Send packet
                 socket.send_to(&packet.data, packet.destination).await.ok();
             }
-
-            tracing::debug!("sender loop finished");
         });
     }
 

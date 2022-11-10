@@ -40,7 +40,7 @@ impl PacketsHistory {
             }
 
             for i in 0..HISTORY_SIZE {
-                let value = if i == HISTORY_SIZE / 2 { 1 } else { 0 };
+                let value = u64::from(i == HISTORY_SIZE / 2);
                 mask.bits[i].store(value, Ordering::Release);
             }
         }

@@ -417,14 +417,14 @@ impl Node {
     pub async fn store_address(
         self: &Arc<Self>,
         key: &adnl::Key,
-        addr: &SocketAddrV4,
+        addr: SocketAddrV4,
     ) -> Result<bool> {
         let clock_tolerance_sec = self.adnl.options().clock_tolerance_sec;
 
         self.entry(key.id(), KEY_ADDRESS)
             .with_data(
                 proto::adnl::AddressList {
-                    address: Some(proto::adnl::Address::from(addr)),
+                    address: Some(proto::adnl::Address::from(&addr)),
                     version: now(),
                     reinit_date: self.adnl.start_time(),
                     expire_at: 0,
@@ -434,7 +434,7 @@ impl Node {
             .sign_and_store(key)?
             .then_check(move |_, BoxedWrapper(address_list)| {
                 match parse_address_list(&address_list, clock_tolerance_sec)? {
-                    stored_addr if stored_addr == *addr => Ok(true),
+                    stored_addr if stored_addr == addr => Ok(true),
                     stored_addr => {
                         tracing::warn!(
                             stored = %stored_addr,
