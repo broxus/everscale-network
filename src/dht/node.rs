@@ -8,6 +8,7 @@ use anyhow::Result;
 use bytes::Bytes;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
+use rustc_hash::FxHashSet;
 use smallvec::smallvec;
 use tl_proto::{BoxedConstructor, BoxedWrapper, TlRead, TlWrite};
 

@@ -3,12 +3,12 @@ use std::sync::Arc;
 
 use aes::cipher::{StreamCipher, StreamCipherSeek};
 use everscale_crypto::ed25519;
+use rustc_hash::FxHashMap;
 
 use super::encryption::*;
 use super::keystore::Key;
 use super::node_id::{NodeIdFull, NodeIdShort};
 use super::packet_view::*;
-use crate::util::*;
 
 #[inline(always)]
 pub fn compute_handshake_prefix_len(version: Option<u16>) -> usize {

@@ -11,6 +11,7 @@ use crate::adnl;
 use crate::proto;
 use crate::util::now;
 
+/// DHT entry builder
 #[must_use]
 #[derive(Copy, Clone)]
 pub struct Entry<'a> {

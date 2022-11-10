@@ -34,8 +34,8 @@ impl DeferredInitialization for Deferred {
     type Initialized = Arc<Node>;
 
     fn initialize(self) -> Result<Self::Initialized> {
-        let (adnl, subscripts, options) = self?;
-        Node::new(adnl, subscripts, options)
+        let (adnl, subscribers, options) = self?;
+        Node::new(adnl, subscribers, options)
     }
 }
 
@@ -44,6 +44,34 @@ where
     L: HList + Selector<adnl::Deferred, A>,
     HCons<Deferred, L>: IntoTuple2,
 {
+    /// Creates RLDP network layer
+    ///
+    /// See [`with_rldp_ext`] if you need an RLDP node with additional subscribers
+    ///
+    /// [`with_rldp_ext`]: fn@crate::util::NetworkBuilder::with_rldp_ext
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::error::Error;
+    ///
+    /// use everscale_network::{adnl, rldp, NetworkBuilder};
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn Error>> {
+    ///     let keystore = adnl::Keystore::builder()
+    ///         .with_tagged_key([0; 32], 0)?
+    ///         .build();
+    ///
+    ///     let adnl_options = adnl::NodeOptions::default();
+    ///     let rldp_options = rldp::NodeOptions::default();
+    ///
+    ///     let (adnl, rldp) = NetworkBuilder::with_adnl("127.0.0.1:10000", keystore, adnl_options)
+    ///         .with_rldp(rldp_options)
+    ///         .build()?;
+    ///     Ok(())
+    /// }
+    /// ```
     #[allow(clippy::type_complexity)]
     pub fn with_rldp(
         self,
@@ -52,6 +80,52 @@ where
         self.with_rldp_ext(options, Vec::new())
     }
 
+    /// Creates RLDP network layer with additional RLDP query subscribers
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::borrow::Cow;
+    /// use std::error::Error;
+    /// use std::sync::Arc;
+    ///
+    /// use anyhow::Result;
+    /// use everscale_network::{
+    ///     adnl, rldp, NetworkBuilder, QueryConsumingResult, QuerySubscriber, SubscriberContext,
+    /// };
+    ///
+    /// struct LoggerSubscriber;
+    ///
+    /// #[async_trait::async_trait]
+    /// impl QuerySubscriber for LoggerSubscriber {
+    ///     async fn try_consume_query<'a>(
+    ///         &self,
+    ///         ctx: SubscriberContext<'a>,
+    ///         constructor: u32,
+    ///         query: Cow<'a, [u8]>,
+    ///     ) -> Result<QueryConsumingResult<'a>> {
+    ///         println!("received {constructor}");
+    ///         Ok(QueryConsumingResult::Rejected(query))
+    ///     }
+    /// }
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn Error>> {
+    ///     let keystore = adnl::Keystore::builder()
+    ///         .with_tagged_key([0; 32], 0)?
+    ///         .build();
+    ///
+    ///     let adnl_options = adnl::NodeOptions::default();
+    ///     let rldp_options = rldp::NodeOptions::default();
+    ///
+    ///     let subscriber = Arc::new(LoggerSubscriber);
+    ///
+    ///     let (adnl, rldp) = NetworkBuilder::with_adnl("127.0.0.1:10000", keystore, adnl_options)
+    ///         .with_rldp_ext(rldp_options, vec![subscriber])
+    ///         .build()?;
+    ///     Ok(())
+    /// }
+    /// ```
     #[allow(clippy::type_complexity)]
     pub fn with_rldp_ext(
         self,

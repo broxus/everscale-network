@@ -11,31 +11,36 @@ use rand::Rng;
 pub struct NodeIdFull(ed25519::PublicKey);
 
 impl NodeIdFull {
+    /// Constructs full node id from a valid ED25519 public key
     pub const fn new(public_key: ed25519::PublicKey) -> Self {
         Self(public_key)
     }
 
+    /// Returns inner public key
     #[inline(always)]
     pub const fn public_key(&self) -> &ed25519::PublicKey {
         &self.0
     }
 
+    /// Represents public key as a TL structure
     #[inline(always)]
     pub fn as_tl(&self) -> tl::PublicKey {
         self.0.as_tl()
     }
 
+    /// Verifies the signature of an arbitrary serializable data
     pub fn verify<T: tl_proto::TlWrite<Repr = tl_proto::Boxed>>(
         &self,
-        message: T,
+        data: T,
         other_signature: &[u8],
     ) -> Result<(), NodeIdFullError> {
         match <[u8; 64]>::try_from(other_signature) {
-            Ok(other_signature) if self.0.verify(message, &other_signature) => Ok(()),
+            Ok(other_signature) if self.0.verify(data, &other_signature) => Ok(()),
             _ => Err(NodeIdFullError::InvalidSignature),
         }
     }
 
+    /// Hashes inner public key
     pub fn compute_short_id(&self) -> NodeIdShort {
         NodeIdShort::new(tl_proto::hash(self.0.as_tl()))
     }
@@ -77,15 +82,18 @@ pub enum NodeIdFullError {
 pub struct NodeIdShort([u8; 32]);
 
 impl NodeIdShort {
+    /// Constructs short node id from public key hash
     #[inline(always)]
     pub const fn new(hash: [u8; 32]) -> Self {
         Self(hash)
     }
 
+    /// Generates random short node id
     pub fn random() -> Self {
         Self(rand::thread_rng().gen())
     }
 
+    /// Returns inner bytes
     #[inline(always)]
     pub const fn as_slice(&self) -> &[u8; 32] {
         &self.0
@@ -164,6 +172,7 @@ impl<'a> Borrow<[u8; 32]> for &'a NodeIdShort {
     }
 }
 
+/// Abstract trait to compute all node ids
 pub trait ComputeNodeIds {
     fn compute_node_ids(&self) -> (NodeIdFull, NodeIdShort);
 }

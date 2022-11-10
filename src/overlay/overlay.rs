@@ -8,6 +8,7 @@ use std::time::Duration;
 use anyhow::Result;
 use crossbeam_queue::SegQueue;
 use parking_lot::Mutex;
+use rustc_hash::FxHashMap;
 use sha2::Digest;
 use smallvec::SmallVec;
 use tl_proto::{HashWrapper, TlWrite};
@@ -1099,6 +1100,7 @@ impl Overlay {
     }
 }
 
+/// Overlay broadcast target
 #[derive(Debug, Clone)]
 pub enum BroadcastTarget {
     /// Select N random peers from current neighbours
@@ -1314,6 +1316,7 @@ type VacantBroadcastEntry<'a> = dashmap::mapref::entry::VacantEntry<
     BuildHasherDefault<rustc_hash::FxHasher>,
 >;
 
+/// Type alias for received nodes
 pub type ReceivedPeersMap =
     FxHashMap<HashWrapper<everscale_crypto::tl::PublicKeyOwned>, proto::overlay::NodeOwned>;
 

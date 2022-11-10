@@ -16,10 +16,13 @@ use crate::util::{DeferredInitialization, NetworkBuilder};
 
 mod buckets;
 mod entry;
-pub mod futures;
 mod node;
 mod peers_iter;
 mod storage;
+
+/// DHT helper futures
+pub mod futures;
+/// DHT helper streams
 pub mod streams;
 
 pub(crate) type Deferred = Result<(Arc<adnl::Node>, usize, NodeOptions)>;
@@ -38,6 +41,32 @@ where
     L: HList + Selector<adnl::Deferred, A>,
     HCons<Deferred, L>: IntoTuple2,
 {
+    /// Creates DHT network layer
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::error::Error;
+    ///
+    /// use everscale_network::{adnl, dht, NetworkBuilder};
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn Error>> {
+    ///     const DHT_KEY_TAG: usize = 0;
+    ///
+    ///     let keystore = adnl::Keystore::builder()
+    ///         .with_tagged_key([0; 32], DHT_KEY_TAG)?
+    ///         .build();
+    ///
+    ///     let adnl_options = adnl::NodeOptions::default();
+    ///     let dht_options = dht::NodeOptions::default();
+    ///
+    ///     let (adnl, dht) = NetworkBuilder::with_adnl("127.0.0.1:10000", keystore, adnl_options)
+    ///         .with_dht(DHT_KEY_TAG, dht_options)
+    ///         .build()?;
+    ///     Ok(())
+    /// }
+    /// ```
     #[allow(clippy::type_complexity)]
     pub fn with_dht(
         self,
@@ -52,7 +81,11 @@ where
     }
 }
 
+/// DHT key name used for storing nodes socket address
 pub const KEY_ADDRESS: &str = "address";
+
+/// DHT key name used for storing overlay nodes
 pub const KEY_NODES: &str = "nodes";
 
+/// Max allowed DHT peers in the network
 pub const MAX_DHT_PEERS: u32 = 65536;

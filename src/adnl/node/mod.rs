@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use parking_lot::Mutex;
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use tl_proto::{TlRead, TlWrite};
 use tokio::sync::mpsc;
@@ -213,6 +214,7 @@ impl Node {
         }
     }
 
+    /// Adds a new message subscriber brefore the node was started
     pub fn add_message_subscriber(
         &self,
         message_subscriber: Arc<dyn MessageSubscriber>,
@@ -227,6 +229,7 @@ impl Node {
         }
     }
 
+    /// Adds a new query subscriber brefore the node was started
     pub fn add_query_subscriber(&self, query_subscriber: Arc<dyn QuerySubscriber>) -> Result<()> {
         let mut init = self.init_state.lock();
         match &mut *init {
@@ -283,7 +286,7 @@ impl Node {
         self.start_time
     }
 
-    /// Builds new address list for the current ADNL node with no expiration date
+    /// Builds a new address list for the current ADNL node with no expiration date
     pub fn build_address_list(&self) -> proto::adnl::AddressList {
         proto::adnl::AddressList {
             address: Some(proto::adnl::Address::from(&self.socket_addr)),
@@ -327,7 +330,7 @@ impl Node {
 
         // Check peer with peer filter (if specified)
         if let Some(filter) = &self.peer_filter {
-            if !filter.check(ctx, &addr, peer_id) {
+            if !filter.check(ctx, addr, peer_id) {
                 return Ok(false);
             }
         }
@@ -494,6 +497,7 @@ impl Node {
         Ok(answer)
     }
 
+    /// Sends a one-way ADNL message
     pub fn send_custom_message(
         &self,
         local_id: &NodeIdShort,

@@ -3,26 +3,26 @@
 use std::hash::BuildHasherDefault;
 
 use rustc_hash::FxHasher;
-pub use rustc_hash::{FxHashMap, FxHashSet};
 
-pub use self::address_list::*;
-pub use self::deferred_initialization::*;
-pub use self::fast_rand::*;
-pub use self::network_builder::*;
-pub use self::packets_history::*;
-pub use self::updated_at::*;
+pub use self::network_builder::{
+    DeferredInitialization, DeferredInitializationList, NetworkBuilder,
+};
+
+pub(crate) use self::address_list::*;
+pub(crate) use self::fast_rand::*;
+pub(crate) use self::packets_history::*;
+pub(crate) use self::updated_at::*;
 
 mod address_list;
-mod deferred_initialization;
 mod fast_rand;
 mod network_builder;
 mod packets_history;
 mod updated_at;
 
-pub type FxDashSet<K> = dashmap::DashSet<K, BuildHasherDefault<FxHasher>>;
-pub type FxDashMap<K, V> = dashmap::DashMap<K, V, BuildHasherDefault<FxHasher>>;
+pub(crate) type FxDashSet<K> = dashmap::DashSet<K, BuildHasherDefault<FxHasher>>;
+pub(crate) type FxDashMap<K, V> = dashmap::DashMap<K, V, BuildHasherDefault<FxHasher>>;
 
-pub fn now() -> u32 {
+pub(crate) fn now() -> u32 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

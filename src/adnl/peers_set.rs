@@ -2,9 +2,10 @@ use std::num::NonZeroU32;
 
 use parking_lot::{RwLock, RwLockReadGuard};
 use rand::seq::SliceRandom;
+use rustc_hash::FxHashMap;
 
 use super::node_id::NodeIdShort;
-use crate::util::{fast_thread_rng, FxDashSet, FxHashMap};
+use crate::util::{fast_thread_rng, FxDashSet};
 
 /// A set of unique short node ids
 pub struct PeersSet {

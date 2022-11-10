@@ -172,7 +172,7 @@ pub enum NewPeerContext {
 
 /// New peers filter
 pub trait PeerFilter: Send + Sync {
-    fn check(&self, ctx: NewPeerContext, addr: &SocketAddrV4, peer_id: &NodeIdShort) -> bool;
+    fn check(&self, ctx: NewPeerContext, addr: SocketAddrV4, peer_id: &NodeIdShort) -> bool;
 }
 
 #[cfg(test)]

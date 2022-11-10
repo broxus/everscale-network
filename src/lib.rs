@@ -1,5 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 
+//! Implementation of the network part of the Everscale blockchain.
+
 macro_rules! ok {
     ($expr:expr) => {
         match $expr {
@@ -10,7 +12,8 @@ macro_rules! ok {
 }
 
 // Re-export TL-proto crate
-pub use tl_proto;
+pub use everscale_crypto as crypto;
+pub use tl_proto as tl;
 
 pub use subscriber::{MessageSubscriber, QueryConsumingResult, QuerySubscriber, SubscriberContext};
 pub use util::NetworkBuilder;

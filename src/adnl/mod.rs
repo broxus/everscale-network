@@ -117,6 +117,32 @@ impl DeferredInitialization for Deferred {
 }
 
 impl NetworkBuilder<HNil, (Here, Here)> {
+    /// Creates a basic network layer that is an ADNL node
+    ///
+    /// See [`with_adnl_ext`] if you need a node with a peer filter
+    ///
+    /// [`with_adnl_ext`]: fn@crate::util::NetworkBuilder::with_adnl_ext
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::error::Error;
+    ///
+    /// use everscale_network::{adnl, NetworkBuilder};
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn Error>> {
+    ///     let keystore = adnl::Keystore::builder()
+    ///         .with_tagged_key([0; 32], 0)?
+    ///         .build();
+    ///
+    ///     let options = adnl::NodeOptions::default();
+    ///
+    ///     let adnl = NetworkBuilder::with_adnl("127.0.0.1:10000", keystore, options).build()?;
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
     pub fn with_adnl<T>(
         addr: T,
         keystore: Keystore,
@@ -125,14 +151,62 @@ impl NetworkBuilder<HNil, (Here, Here)> {
     where
         T: ToSocketAddrs,
     {
-        Self::with_adnl_ext(addr, keystore, options, None)
+        NetworkBuilder(
+            HCons {
+                head: parse_socket_addr(addr)
+                    .and_then(|addr| Node::new(addr, keystore, options, None)),
+                tail: HNil,
+            },
+            Default::default(),
+        )
     }
 
+    /// Creates a basic network layer that is an ADNL node with additional filter
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::error::Error;
+    /// use std::net::SocketAddrV4;
+    /// use std::sync::Arc;
+    ///
+    /// use everscale_network::{adnl, NetworkBuilder};
+    ///
+    /// struct MyFilter;
+    ///
+    /// impl adnl::PeerFilter for MyFilter {
+    ///     fn check(
+    ///         &self,
+    ///         ctx: adnl::NewPeerContext,
+    ///         addr: SocketAddrV4,
+    ///         peer_id: &adnl::NodeIdShort,
+    ///     ) -> bool {
+    ///         // Allow only non-loopback IPs
+    ///         !addr.ip().is_loopback()
+    ///     }
+    /// }
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn Error>> {
+    ///     let keystore = adnl::Keystore::builder()
+    ///         .with_tagged_key([0; 32], 0)?
+    ///         .build();
+    ///
+    ///     let options = adnl::NodeOptions::default();
+    ///
+    ///     let peer_filter = Arc::new(MyFilter);
+    ///
+    ///     let adnl = NetworkBuilder::with_adnl_ext("127.0.0.1:10000", keystore, options, peer_filter)
+    ///         .build()?;
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
     pub fn with_adnl_ext<T>(
         addr: T,
         keystore: Keystore,
         options: NodeOptions,
-        peer_filter: Option<Arc<dyn PeerFilter>>,
+        peer_filter: Arc<dyn PeerFilter>,
     ) -> NetworkBuilder<HCons<Deferred, HNil>, (Here, Here)>
     where
         T: ToSocketAddrs,
@@ -140,7 +214,7 @@ impl NetworkBuilder<HNil, (Here, Here)> {
         NetworkBuilder(
             HCons {
                 head: parse_socket_addr(addr)
-                    .and_then(|addr| Node::new(addr, keystore, options, peer_filter)),
+                    .and_then(|addr| Node::new(addr, keystore, options, Some(peer_filter))),
                 tail: HNil,
             },
             Default::default(),
@@ -157,11 +231,5 @@ fn parse_socket_addr<T: ToSocketAddrs>(addr: T) -> Result<SocketAddrV4> {
         Some(SocketAddr::V4(addr)) => Ok(addr),
         Some(SocketAddr::V6(_)) => anyhow::bail!("IPv6 is not supported"),
         None => anyhow::bail!("Invalid ip address"),
-    }
-}
-
-impl<I> NetworkBuilder<HCons<Deferred, HNil>, I> {
-    pub fn build(self) -> Result<Arc<Node>> {
-        self.0.head.initialize()
     }
 }

@@ -2,6 +2,7 @@ use std::convert::TryFrom;
 use std::ops::Deref;
 
 use anyhow::Result;
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use tl_proto::{BoxedConstructor, HashWrapper, TlWrite};
 

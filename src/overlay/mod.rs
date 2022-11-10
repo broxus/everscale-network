@@ -51,6 +51,36 @@ mod node_impl {
         L: HList + Selector<rldp::Deferred, R>,
         HCons<Deferred, L>: IntoTuple2,
     {
+        /// Creates overlay network layer.
+        ///
+        /// NOTE: RLDP network layer must be present before calling this method.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use std::error::Error;
+        ///
+        /// use everscale_network::{adnl, rldp, NetworkBuilder};
+        ///
+        /// #[tokio::main]
+        /// async fn main() -> Result<(), Box<dyn Error>> {
+        ///     const OVERLAY_KEY_TAG: usize = 0;
+        ///
+        ///     let keystore = adnl::Keystore::builder()
+        ///         .with_tagged_key([0; 32], OVERLAY_KEY_TAG)?
+        ///         .build();
+        ///
+        ///     let adnl_options = adnl::NodeOptions::default();
+        ///     let rldp_options = rldp::NodeOptions::default();
+        ///
+        ///     let (adnl, rldp, overlay) =
+        ///         NetworkBuilder::with_adnl("127.0.0.1:10000", keystore, adnl_options)
+        ///             .with_rldp(rldp_options)
+        ///             .with_overlay(OVERLAY_KEY_TAG)
+        ///             .build()?;
+        ///     Ok(())
+        /// }
+        /// ```
         #[allow(clippy::type_complexity)]
         pub fn with_overlay(
             mut self,
