@@ -6,7 +6,9 @@ use rand::Rng;
 
 /// Full ADNL node id.
 ///
-/// See [`everscale_crypto::tl::PublicKey::Ed25519`]
+/// See [`PublicKey::Ed25519`]
+///
+/// [`PublicKey::Ed25519`]: everscale_crypto::tl::PublicKey::Ed25519
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct NodeIdFull(ed25519::PublicKey);
 

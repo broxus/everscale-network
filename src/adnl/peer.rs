@@ -93,7 +93,9 @@ impl Peer {
     /// Generates new channel key pair and resets receiver/sender states
     ///
     /// NOTE: Receiver state increments its reinit date so the peer will reset states
-    /// on the next message (see [`AdnlPeer::try_reinit_sender`])
+    /// on the next message (see [`try_reinit_sender`])
+    ///
+    /// [`try_reinit_sender`]: fn@crate::adnl::Peer::try_reinit_sender
     pub fn reset(&mut self) {
         let reinit_date = self.receiver_state.reinit_date();
 

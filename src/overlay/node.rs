@@ -36,10 +36,12 @@ impl Node {
         }))
     }
 
+    /// Returns inner query subscriber
     pub fn query_subscriber(&self) -> Arc<dyn QuerySubscriber> {
         self.state.clone()
     }
 
+    /// Returns metrics for all overlays
     pub fn metrics(&self) -> impl Iterator<Item = (IdShort, OverlayMetrics)> + '_ {
         self.state
             .overlays
@@ -52,7 +54,7 @@ impl Node {
         &self.adnl
     }
 
-    /// Add overlay queries subscriber
+    /// Adds overlay queries subscriber
     pub fn add_overlay_subscriber(
         &self,
         overlay_id: IdShort,
@@ -69,7 +71,7 @@ impl Node {
         }
     }
 
-    /// Creates new overlay
+    /// Creates new public overlay
     pub fn add_public_overlay(
         &self,
         overlay_id: &IdShort,
@@ -87,6 +89,7 @@ impl Node {
         }
     }
 
+    /// Creates new private overlay
     pub fn add_private_overlay(
         &self,
         overlay_id: &IdShort,
