@@ -22,8 +22,8 @@ name = "dht"
 path = "examples/dht.rs"
 
 [[example]]
-name = "overlay"
-path = "examples/overlay.rs"
+name = "overlay-broadcast"
+path = "examples/overlay_broadcast.rs"
 
 [[example]]
 name = "overlay-query"

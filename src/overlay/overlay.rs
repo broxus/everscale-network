@@ -25,14 +25,9 @@ use crate::util::*;
 #[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct OverlayOptions {
-    /// Instant random peers list length. Used to select neighbours.
-    ///
-    /// Default: `20`
-    pub max_random_peers: u32,
-
     /// More persistent list of peers. Used to distribute broadcasts.
     ///
-    /// Default: `5`
+    /// Default: `200`
     pub max_neighbours: u32,
 
     /// Max simultaneous broadcasts.
@@ -58,7 +53,7 @@ pub struct OverlayOptions {
 
     /// Max number of peers to distribute broadcast to.
     ///
-    /// Default: `3`
+    /// Default: `5`
     pub broadcast_target_count: u32,
 
     /// Max number of peers to redistribute ordinary broadcast to.
@@ -68,18 +63,18 @@ pub struct OverlayOptions {
 
     /// Max number of peers to redistribute FEC broadcast to.
     ///
-    /// Default: `5`
+    /// Default: `3`
     pub secondary_fec_broadcast_target_count: u32,
 
     /// Number of FEC messages to send in group. There will be a short delay between them.
     ///
     /// Default: `20`
-    pub broadcast_wave_len: usize,
+    pub fec_broadcast_wave_len: usize,
 
     /// Interval between FEC broadcast waves.
     ///
     /// Default: `10` ms
-    pub broadcast_wave_interval_ms: u64,
+    pub fec_broadcast_wave_interval_ms: u64,
 
     /// Overlay broadcast timeout. It will be forcefully dropped if not received in this time.
     ///
@@ -95,17 +90,16 @@ pub struct OverlayOptions {
 impl Default for OverlayOptions {
     fn default() -> Self {
         Self {
-            max_random_peers: 20,
-            max_neighbours: 5,
+            max_neighbours: 200,
             max_broadcast_log: 1000,
             broadcast_gc_interval_ms: 1000,
             overlay_peers_timeout_ms: 60000,
             max_ordinary_broadcast_len: 768,
-            broadcast_target_count: 3,
+            broadcast_target_count: 5,
             secondary_broadcast_target_count: 3,
-            secondary_fec_broadcast_target_count: 5,
-            broadcast_wave_len: 20,
-            broadcast_wave_interval_ms: 10,
+            secondary_fec_broadcast_target_count: 3,
+            fec_broadcast_wave_len: 20,
+            fec_broadcast_wave_interval_ms: 10,
             broadcast_timeout_sec: 60,
             force_compression: false,
         }
@@ -139,8 +133,6 @@ pub struct Overlay {
     ignored_peers: FxDashSet<adnl::NodeIdShort>,
     /// All known peers
     known_peers: adnl::PeersSet,
-    /// Known peers subset
-    random_peers: adnl::PeersSet,
     /// Random peers subset
     neighbours: adnl::PeersSet,
 
@@ -179,14 +171,13 @@ impl Overlay {
             nodes: FxDashMap::default(),
             ignored_peers: FxDashSet::default(),
             known_peers,
-            random_peers: adnl::PeersSet::with_capacity(options.max_random_peers),
             neighbours: adnl::PeersSet::with_capacity(options.max_neighbours),
             query_prefix,
             message_prefix,
         });
 
         if !peers.is_empty() {
-            overlay.update_random_peers(overlay.options.max_random_peers);
+            overlay.update_neighbours(overlay.options.max_neighbours);
         }
 
         let overlay_ref = Arc::downgrade(&overlay);
@@ -207,7 +198,7 @@ impl Overlay {
 
                 peers_timeout += options.broadcast_gc_interval_ms;
                 if peers_timeout > options.overlay_peers_timeout_ms {
-                    overlay.update_random_peers(1);
+                    overlay.update_neighbours(1);
                     peers_timeout = 0;
                 }
 
@@ -230,8 +221,7 @@ impl Overlay {
             owned_broadcasts_len: self.owned_broadcasts.len(),
             finished_broadcasts_len: self.finished_broadcast_count.load(Ordering::Acquire),
             node_count: self.nodes.len(),
-            known_peers_len: self.known_peers.len(),
-            random_peers_len: self.random_peers.len(),
+            known_peers: self.known_peers.len(),
             neighbours: self.neighbours.len(),
             received_broadcasts_data_len: self.received_broadcasts.data_len(),
             received_broadcasts_barrier_count: self.received_broadcasts.barriers_len(),
@@ -326,8 +316,8 @@ impl Overlay {
         if !self.ignored_peers.insert(*peer_id) {
             return false;
         }
-        if self.random_peers.contains(peer_id) {
-            self.update_random_peers(self.options.max_random_peers);
+        if self.neighbours.contains(peer_id) {
+            self.update_neighbours(self.options.max_neighbours);
         }
         true
     }
@@ -336,13 +326,13 @@ impl Overlay {
     ///
     /// NOTE: Peer might have been excluded. If you need to check whether the
     /// specified peer is still in this overlay use [`Overlay::is_active_public_peer`]
-    pub fn is_public_peer(&self, peer_id: &adnl::NodeIdShort) -> bool {
-        self.random_peers.contains(peer_id)
+    pub fn is_known_peer(&self, peer_id: &adnl::NodeIdShort) -> bool {
+        self.known_peers.contains(peer_id)
     }
 
     /// Checks whether the specified peer is in the current public overlay
     pub fn is_active_public_peer(&self, peer_id: &adnl::NodeIdShort) -> bool {
-        self.random_peers.contains(peer_id) && !self.ignored_peers.contains(peer_id)
+        self.known_peers.contains(peer_id) && !self.ignored_peers.contains(peer_id)
     }
 
     /// Fill `dst` with `amount` peers from known peers
@@ -791,7 +781,7 @@ impl Overlay {
         let neighbours = match target {
             BroadcastTarget::RandomNeighbours => OwnedBroadcastTarget::Neighbours(
                 self.neighbours
-                    .get_random_peers(self.options.max_neighbours, None),
+                    .get_random_peers(self.options.broadcast_target_count, None),
             ),
             BroadcastTarget::Explicit(neighbours) => OwnedBroadcastTarget::Explicit(neighbours),
         };
@@ -802,8 +792,8 @@ impl Overlay {
         };
 
         // Spawn sender
-        let wave_len = self.options.broadcast_wave_len;
-        let waves_interval = Duration::from_millis(self.options.broadcast_wave_interval_ms);
+        let wave_len = self.options.fec_broadcast_wave_len;
+        let waves_interval = Duration::from_millis(self.options.fec_broadcast_wave_interval_ms);
         let overlay = self.clone();
         let adnl = adnl.clone();
         let local_id = *local_id;
@@ -869,7 +859,7 @@ impl Overlay {
         nodes.push(self.sign_local_node());
 
         let peers = adnl::PeersSet::with_capacity(MAX_PEERS_IN_RESPONSE);
-        peers.randomly_fill_from(&self.random_peers, MAX_PEERS_IN_RESPONSE, None);
+        peers.randomly_fill_from(&self.neighbours, MAX_PEERS_IN_RESPONSE, None);
         for peer_id in &peers {
             if let Some(node) = self.nodes.get(peer_id) {
                 nodes.push(node.clone());
@@ -879,12 +869,10 @@ impl Overlay {
         proto::overlay::NodesOwned { nodes }
     }
 
-    /// Fills random peers and neighbours with a random subset from known peers
-    fn update_random_peers(&self, amount: u32) {
-        self.random_peers
-            .randomly_fill_from(&self.known_peers, amount, Some(&self.ignored_peers));
+    /// Fills neighbours with a random subset from known peers
+    fn update_neighbours(&self, amount: u32) {
         self.neighbours
-            .randomly_fill_from(&self.random_peers, amount, Some(&self.ignored_peers));
+            .randomly_fill_from(&self.known_peers, amount, Some(&self.ignored_peers));
     }
 
     /// Adds public peer info
@@ -894,11 +882,7 @@ impl Overlay {
         self.ignored_peers.remove(peer_id);
         self.known_peers.insert(*peer_id);
 
-        if self.random_peers.len() < self.options.max_random_peers as usize {
-            self.random_peers.insert(*peer_id);
-        }
-
-        if self.neighbours.len() < self.options.max_neighbours as usize {
+        if !self.neighbours.is_full() {
             self.neighbours.insert(*peer_id);
         }
 
@@ -1135,8 +1119,7 @@ pub struct OverlayMetrics {
     pub owned_broadcasts_len: usize,
     pub finished_broadcasts_len: u32,
     pub node_count: usize,
-    pub known_peers_len: usize,
-    pub random_peers_len: usize,
+    pub known_peers: usize,
     pub neighbours: usize,
     pub received_broadcasts_data_len: usize,
     pub received_broadcasts_barrier_count: usize,

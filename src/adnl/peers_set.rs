@@ -1,4 +1,6 @@
+use std::borrow::Borrow;
 use std::num::NonZeroU32;
+use std::rc::Rc;
 
 use parking_lot::{RwLock, RwLockReadGuard};
 use rand::seq::SliceRandom;
@@ -37,11 +39,14 @@ impl PeersSet {
     }
 
     pub fn contains(&self, peer: &NodeIdShort) -> bool {
-        self.state.read().cache.contains_key(peer)
+        self.state.read().cache.contains_key(Wrapper::wrap(peer))
     }
 
     pub fn get(&self, index: usize) -> Option<NodeIdShort> {
-        self.state.read().index.get(index).cloned()
+        let state = self.state.read();
+
+        let item = state.index.get(index)?;
+        Some(*item.0.borrow())
     }
 
     pub fn len(&self) -> usize {
@@ -52,27 +57,29 @@ impl PeersSet {
         self.state.read().index.is_empty()
     }
 
-    pub fn iter(&self) -> PeersCacheIter {
-        PeersCacheIter::new(self.state.read())
+    pub fn is_full(&self) -> bool {
+        self.state.read().is_full()
+    }
+
+    pub fn iter(&self) -> Iter {
+        Iter::new(self.state.read())
     }
 
     pub fn get_random_peers(&self, amount: u32, except: Option<&NodeIdShort>) -> Vec<NodeIdShort> {
         let state = self.state.read();
 
-        let items = state
-            .index
-            .choose_multiple(
-                &mut fast_thread_rng(),
-                if except.is_some() { amount + 1 } else { amount } as usize,
-            )
-            .cloned();
+        let items = state.index.choose_multiple(
+            &mut fast_thread_rng(),
+            if except.is_some() { amount + 1 } else { amount } as usize,
+        );
 
         match except {
             Some(except) => items
-                .filter(|item| item != except)
+                .filter(|item| &*item.0 != except)
                 .take(amount as usize)
+                .map(RefId::copy_inner)
                 .collect(),
-            None => items.collect(),
+            None => items.map(RefId::copy_inner).collect(),
         }
     }
 
@@ -95,22 +102,22 @@ impl PeersSet {
         let other_state = other.state.read();
         let new_peers = other_state
             .index
-            .choose_multiple(&mut rand::thread_rng(), selected_amount)
-            .cloned();
+            .choose_multiple(&mut rand::thread_rng(), selected_amount);
 
         let mut state = self.state.write();
+
+        let insert = |peer_id: &RefId| {
+            state.insert(peer_id.copy_inner());
+        };
+
         match except {
             Some(except) => {
                 new_peers
-                    .filter(|peer_id| !except.contains(peer_id))
+                    .filter(|peer_id| !except.contains(&*peer_id.0))
                     .take(amount as usize)
-                    .for_each(|peer_id| {
-                        state.insert(peer_id);
-                    });
+                    .for_each(insert);
             }
-            None => new_peers.for_each(|peer_id| {
-                state.insert(peer_id);
-            }),
+            None => new_peers.for_each(insert),
         }
     }
 
@@ -133,16 +140,49 @@ impl PeersSet {
 
     /// Clones internal node ids storage
     pub fn clone_inner(&self) -> Vec<NodeIdShort> {
-        self.state.read().index.clone()
+        let state = self.state.read();
+        state.index.iter().map(Ref::copy_inner).collect()
     }
 }
 
-pub struct PeersCacheIter<'a> {
-    _state: RwLockReadGuard<'a, PeersSetState>,
-    iter: std::slice::Iter<'a, NodeIdShort>,
+impl IntoIterator for PeersSet {
+    type Item = NodeIdShort;
+    type IntoIter = IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        IntoIter {
+            inner: self.state.into_inner().index.into_iter(),
+        }
+    }
 }
 
-impl<'a> PeersCacheIter<'a> {
+pub struct IntoIter {
+    inner: std::vec::IntoIter<Ref<NodeIdShort>>,
+}
+
+impl Iterator for IntoIter {
+    type Item = NodeIdShort;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let next = self.inner.next()?;
+            if let Ok(id) = Rc::try_unwrap(next.0) {
+                break Some(id);
+            }
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+pub struct Iter<'a> {
+    _state: RwLockReadGuard<'a, PeersSetState>,
+    iter: std::slice::Iter<'a, Ref<NodeIdShort>>,
+}
+
+impl<'a> Iter<'a> {
     fn new(state: RwLockReadGuard<'a, PeersSetState>) -> Self {
         // SAFETY: index array lifetime is bounded to the lifetime of the `RwLockReadGuard`
         let iter = unsafe {
@@ -155,11 +195,12 @@ impl<'a> PeersCacheIter<'a> {
     }
 }
 
-impl<'a> Iterator for PeersCacheIter<'a> {
+impl<'a> Iterator for Iter<'a> {
     type Item = &'a NodeIdShort;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next()
+        let item = self.iter.next()?;
+        Some(item.0.as_ref())
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -167,18 +208,9 @@ impl<'a> Iterator for PeersCacheIter<'a> {
     }
 }
 
-impl IntoIterator for PeersSet {
-    type Item = NodeIdShort;
-    type IntoIter = std::vec::IntoIter<NodeIdShort>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.state.into_inner().index.into_iter()
-    }
-}
-
 impl<'a> IntoIterator for &'a PeersSet {
     type Item = &'a NodeIdShort;
-    type IntoIter = PeersCacheIter<'a>;
+    type IntoIter = Iter<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
@@ -187,8 +219,8 @@ impl<'a> IntoIterator for &'a PeersSet {
 
 struct PeersSetState {
     version: u64,
-    cache: FxHashMap<NodeIdShort, u32>,
-    index: Vec<NodeIdShort>,
+    cache: FxHashMap<RefId, u32>,
+    index: Vec<RefId>,
     capacity: NonZeroU32,
     upper: u32,
 }
@@ -215,10 +247,12 @@ impl PeersSetState {
                 break;
             }
 
-            match res.cache.entry(*peer) {
+            let peer = Ref(Rc::new(*peer));
+
+            match res.cache.entry(peer.clone()) {
                 Entry::Vacant(entry) => {
                     entry.insert(res.upper);
-                    res.index.push(*peer);
+                    res.index.push(peer);
                     res.upper += 1;
                 }
                 Entry::Occupied(_) => continue,
@@ -229,11 +263,17 @@ impl PeersSetState {
         res
     }
 
+    fn is_full(&self) -> bool {
+        self.index.len() >= self.capacity.get() as usize
+    }
+
     fn insert(&mut self, peer_id: NodeIdShort) -> bool {
         use std::collections::hash_map::Entry;
 
+        let peer_id = Ref(Rc::new(peer_id));
+
         // Insert new peer into cache
-        match self.cache.entry(peer_id) {
+        match self.cache.entry(peer_id.clone()) {
             Entry::Vacant(entry) => {
                 self.version += 1;
                 entry.insert(self.upper);
@@ -262,6 +302,53 @@ impl PeersSetState {
     }
 }
 
+// SAFETY: internal Rcs are not exposed by the api and the reference
+// counts only change in methods with `&mut self`
+unsafe impl Send for PeersSetState {}
+unsafe impl Sync for PeersSetState {}
+
+type RefId = Ref<NodeIdShort>;
+
+#[derive(Hash, Eq, PartialEq)]
+struct Ref<T>(Rc<T>);
+
+impl<T: Copy> Ref<T> {
+    #[inline]
+    fn copy_inner(&self) -> T {
+        *self.0
+    }
+}
+
+impl<T> Clone for Ref<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+#[derive(Hash, Eq, PartialEq)]
+#[repr(transparent)]
+struct Wrapper<T: ?Sized>(T);
+
+impl<T: ?Sized> Wrapper<T> {
+    #[inline(always)]
+    fn wrap(value: &T) -> &Self {
+        // SAFETY: Wrapper<T> is #[repr(transparent)]
+        unsafe { &*(value as *const T as *const Self) }
+    }
+}
+
+impl<K, Q> Borrow<Wrapper<Q>> for Ref<K>
+where
+    K: Borrow<Q>,
+    Q: ?Sized,
+{
+    fn borrow(&self) -> &Wrapper<Q> {
+        let k: &K = self.0.borrow();
+        let q: &Q = k.borrow();
+        Wrapper::wrap(q)
+    }
+}
+
 fn make_capacity(capacity: u32) -> NonZeroU32 {
     let capacity = std::cmp::max(1, capacity);
     // SAFETY: capacity is guaranteed to be at least 1
@@ -281,6 +368,7 @@ mod tests {
         let peer_id = NodeIdShort::random();
         assert!(cache.insert(peer_id));
         assert!(!cache.insert(peer_id));
+        assert!(!cache.is_full());
     }
 
     #[test]
@@ -292,14 +380,16 @@ mod tests {
             .collect::<Vec<_>>();
 
         for peer_id in peers.iter().take(3) {
+            assert!(!cache.is_full());
             assert!(cache.insert(*peer_id));
         }
 
+        assert!(cache.is_full());
         assert!(cache.contains(&peers[0]));
 
         cache.insert(peers[3]);
-        assert!(cache.contains(&peers[3]));
 
+        assert!(cache.contains(&peers[3]));
         assert!(!cache.contains(&peers[0]));
     }
 
@@ -312,6 +402,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         for peer_id in peers.iter() {
+            assert!(!cache.is_full());
             assert!(cache.insert(*peer_id));
         }
 
@@ -322,6 +413,7 @@ mod tests {
         std::iter::repeat_with(NodeIdShort::random)
             .take(6)
             .for_each(|peer_id| {
+                assert!(cache.is_full());
                 cache.insert(peer_id);
             });
 
@@ -396,6 +488,7 @@ mod tests {
             assert_eq!(state.cache.len(), peers.len());
             assert_eq!(state.index.len(), peers.len());
             assert_eq!(state.upper, 0);
+            assert!(state.is_full());
         }
     }
 
@@ -411,6 +504,7 @@ mod tests {
             assert_eq!(state.cache.len(), peers.len());
             assert_eq!(state.index.len(), peers.len());
             assert_eq!(state.upper, peers.len() as u32);
+            assert!(!state.is_full());
         }
     }
 
@@ -426,6 +520,7 @@ mod tests {
             assert_eq!(state.cache.len(), 10);
             assert_eq!(state.index.len(), 10);
             assert_eq!(state.upper, 0);
+            assert!(state.is_full());
         }
     }
 }
