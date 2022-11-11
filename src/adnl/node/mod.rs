@@ -573,16 +573,16 @@ fn make_query<T>(prefix: Option<&[u8]>, query: T) -> Bytes
 where
     T: TlWrite,
 {
-    match prefix {
-        Some(prefix) => {
-            let mut data = Vec::with_capacity(prefix.len() + query.max_size_hint());
-            data.extend_from_slice(prefix);
-            query.write_to(&mut data);
-            data
-        }
-        None => tl_proto::serialize(query),
+    let prefix_len = match prefix {
+        Some(prefix) => prefix.len(),
+        None => 0,
+    };
+    let mut data = Vec::with_capacity(prefix_len + query.max_size_hint());
+    if let Some(prefix) = prefix {
+        data.extend_from_slice(prefix);
     }
-    .into()
+    query.write_to(&mut data);
+    data.into()
 }
 
 #[derive(thiserror::Error, Debug)]

@@ -30,7 +30,7 @@ async fn main() -> Result<()> {
 
     // Create basic network parts
     let (adnl, dht, _rldp, overlay) =
-        NetworkBuilder::with_adnl((my_ip, 30000), keystore, Default::default())
+        NetworkBuilder::with_adnl((my_ip, 0), keystore, Default::default())
             .with_dht(KEY_TAG, Default::default())
             .with_rldp(Default::default())
             .with_overlay(KEY_TAG)

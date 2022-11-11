@@ -122,7 +122,7 @@ impl Node {
             .retain(|_, semaphore| semaphore.available_permits() < max_permits);
     }
 
-    #[tracing::instrument(level = "debug", name = "rldp_query", skip(self, data))]
+    #[tracing::instrument(level = "debug", name = "rldp_query", skip_all, fields(%local_id, %peer_id, ?roundtrip))]
     pub async fn query(
         &self,
         local_id: &adnl::NodeIdShort,
