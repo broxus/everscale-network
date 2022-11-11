@@ -40,7 +40,7 @@ impl PacketsHistory {
             }
 
             for i in 0..HISTORY_SIZE {
-                let value = if i == HISTORY_SIZE / 2 { 1 } else { 0 };
+                let value = u64::from(i == HISTORY_SIZE / 2);
                 mask.bits[i].store(value, Ordering::Release);
             }
         }
@@ -92,7 +92,7 @@ impl PacketsHistory {
             let index_normalized = index & !INDEX_MASK;
 
             if index_normalized > seqno_normalized + INDEX_MASK + 1 {
-                tracing::debug!("Peer packet with seqno {seqno} is too old {index_normalized}");
+                tracing::debug!(seqno, index_normalized, "peer packet is too old");
                 return false;
             }
 
@@ -113,7 +113,7 @@ impl PacketsHistory {
                     }
 
                     if already_delivered != 0 {
-                        tracing::trace!("Peer packet with seqno {seqno} was already received");
+                        tracing::trace!(seqno, "peer packet was already received");
                         return false;
                     }
 

@@ -215,7 +215,7 @@ impl Channel {
             &self.channel_out.ordinary
         };
 
-        let prefix_len = 64 + if version.is_some() { 4 } else { 0 };
+        let prefix_len = Self::compute_prefix_len(version);
         let buffer_len = buffer.len();
         buffer.resize(prefix_len + buffer_len, 0);
         buffer.copy_within(..buffer_len, prefix_len);
@@ -248,6 +248,11 @@ impl Channel {
             }
         }
     }
+
+    #[inline(always)]
+    pub fn compute_prefix_len(version: Option<u16>) -> usize {
+        64 + if version.is_some() { 4 } else { 0 }
+    }
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -259,8 +264,8 @@ pub enum ChannelCreationContext {
 impl std::fmt::Display for ChannelCreationContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::CreateChannel => f.write_str("creation"),
-            Self::ConfirmChannel => f.write_str("confirmation"),
+            Self::CreateChannel => f.write_str("created"),
+            Self::ConfirmChannel => f.write_str("confirmed"),
         }
     }
 }
@@ -347,7 +352,7 @@ pub enum AdnlChannelError {
 mod tests {
     use super::*;
     use crate::adnl::ComputeNodeIds;
-    use crate::utils::now;
+    use crate::util::now;
 
     #[test]
     fn test_encrypt_decrypt() {

@@ -3,12 +3,17 @@ use std::sync::Arc;
 
 use aes::cipher::{StreamCipher, StreamCipherSeek};
 use everscale_crypto::ed25519;
+use rustc_hash::FxHashMap;
 
 use super::encryption::*;
 use super::keystore::Key;
 use super::node_id::{NodeIdFull, NodeIdShort};
 use super::packet_view::*;
-use crate::utils::*;
+
+#[inline(always)]
+pub fn compute_handshake_prefix_len(version: Option<u16>) -> usize {
+    96 + if version.is_some() { 4 } else { 0 }
+}
 
 /// Modifies `buffer` in-place to contain the handshake packet
 pub fn build_handshake_packet(
@@ -27,7 +32,7 @@ pub fn build_handshake_packet(
     // Prepare packet
     let checksum: [u8; 32] = compute_packet_data_hash(version, buffer.as_slice());
 
-    let header_len = 96 + if version.is_some() { 4 } else { 0 };
+    let header_len = compute_handshake_prefix_len(version);
     let buffer_len = buffer.len();
     buffer.resize(header_len + buffer_len, 0);
     buffer.copy_within(..buffer_len, header_len);
@@ -109,10 +114,13 @@ pub fn parse_handshake_packet(
     };
 
     // Compute shared secret
-    let shared_secret = local_key.secret_key().compute_shared_secret(
-        &ed25519::PublicKey::from_bytes(buffer[PUBLIC_KEY_RANGE].try_into().unwrap())
-            .ok_or(HandshakeError::InvalidPublicKey)?,
-    );
+    let shared_secret =
+        match ed25519::PublicKey::from_bytes(buffer[PUBLIC_KEY_RANGE].try_into().unwrap()) {
+            Some(other_public_key) => local_key
+                .secret_key()
+                .compute_shared_secret(&other_public_key),
+            None => return Err(HandshakeError::InvalidPublicKey),
+        };
 
     if buffer.len() > EXT_DATA_START {
         if let Some(version) =

@@ -16,7 +16,8 @@ mod broadcast_receiver;
 #[cfg(feature = "overlay")]
 mod node;
 #[cfg(feature = "overlay")]
-mod overlay_shard;
+#[allow(clippy::module_inception)]
+mod overlay;
 
 #[cfg(feature = "overlay")]
 mod node_impl {
@@ -24,17 +25,16 @@ mod node_impl {
 
     use anyhow::Result;
     use frunk_core::hlist::{HCons, HList, IntoTuple2, Selector};
-    use frunk_core::indices::{Here, There};
+    use frunk_core::indices::There;
 
     pub use super::node::Node;
-    pub use super::overlay_shard::{
-        BroadcastTarget, IncomingBroadcastInfo, OutgoingBroadcastInfo, ReceivedPeersMap, Shard,
-        ShardMetrics, ShardOptions,
+    pub use super::overlay::{
+        BroadcastTarget, IncomingBroadcastInfo, OutgoingBroadcastInfo, Overlay, OverlayMetrics,
+        OverlayOptions, ReceivedPeersMap,
     };
 
-    use crate::adnl;
     use crate::rldp;
-    use crate::utils::{DeferredInitialization, NetworkBuilder};
+    use crate::util::{DeferredInitialization, NetworkBuilder};
 
     pub(crate) type Deferred = Result<Arc<Node>>;
 
@@ -46,30 +46,63 @@ mod node_impl {
         }
     }
 
-    impl<L, I> NetworkBuilder<L, I>
+    impl<L, A, R> NetworkBuilder<L, (A, R)>
     where
-        L: HList + Selector<rldp::Deferred, Here> + Selector<Arc<adnl::Node>, I>,
+        L: HList + Selector<rldp::Deferred, R>,
         HCons<Deferred, L>: IntoTuple2,
     {
+        /// Creates overlay network layer.
+        ///
+        /// NOTE: RLDP network layer must be present before calling this method.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use std::error::Error;
+        ///
+        /// use everscale_network::{adnl, rldp, NetworkBuilder};
+        ///
+        /// #[tokio::main]
+        /// async fn main() -> Result<(), Box<dyn Error>> {
+        ///     const OVERLAY_KEY_TAG: usize = 0;
+        ///
+        ///     let keystore = adnl::Keystore::builder()
+        ///         .with_tagged_key([0; 32], OVERLAY_KEY_TAG)?
+        ///         .build();
+        ///
+        ///     let adnl_options = adnl::NodeOptions::default();
+        ///     let rldp_options = rldp::NodeOptions::default();
+        ///
+        ///     let (adnl, rldp, overlay) =
+        ///         NetworkBuilder::with_adnl("127.0.0.1:10000", keystore, adnl_options)
+        ///             .with_rldp(rldp_options)
+        ///             .with_overlay(OVERLAY_KEY_TAG)
+        ///             .build()?;
+        ///     Ok(())
+        /// }
+        /// ```
         #[allow(clippy::type_complexity)]
         pub fn with_overlay(
             mut self,
-            zero_state_file_hash: [u8; 32],
             key_tag: usize,
-        ) -> NetworkBuilder<HCons<Deferred, L>, There<I>> {
-            let adnl: &Arc<adnl::Node> = self.0.get();
-            let overlay = Node::new(adnl.clone(), zero_state_file_hash, key_tag);
-            if let Ok(overlay) = &overlay {
-                let rldp: &mut rldp::Deferred = self.0.get_mut();
-                rldp.1.push(overlay.query_subscriber());
-            }
+        ) -> NetworkBuilder<HCons<Deferred, L>, (There<A>, There<R>)> {
+            let deferred = match self.0.get_mut() {
+                Ok((adnl, subscribers, _)) => {
+                    let overlay = Node::new(adnl.clone(), key_tag);
+                    if let Ok(overlay) = &overlay {
+                        subscribers.push(overlay.query_subscriber());
+                    }
+                    overlay
+                }
+                Err(_) => Err(anyhow::anyhow!("ADNL was not initialized")),
+            };
 
-            NetworkBuilder(self.0.prepend(overlay), Default::default())
+            NetworkBuilder(self.0.prepend(deferred), Default::default())
         }
     }
 
     /// Max allowed known peer count
-    pub const MAX_OVERLAY_PEERS: usize = 65536;
+    pub const MAX_OVERLAY_PEERS: u32 = 65536;
 }
 
 #[cfg(feature = "overlay")]

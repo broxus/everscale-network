@@ -78,6 +78,32 @@ pub struct ShardPublicOverlayId<'tl> {
     pub zero_state_file_hash: HashRef<'tl>,
 }
 
+pub struct CatchainFirstBlock<'a, 'tl: 'a, I> {
+    pub unique_hash: HashRef<'tl>,
+    pub nodes: tl_proto::IterRef<'a, I>,
+}
+
+impl<'a, 'tl: 'a, I> TlWrite for CatchainFirstBlock<'a, 'tl, I>
+where
+    I: Iterator<Item = HashRef<'tl>> + ExactSizeIterator + Clone,
+{
+    type Repr = tl_proto::Boxed;
+
+    fn max_size_hint(&self) -> usize {
+        4 + self.unique_hash.max_size_hint() + self.nodes.max_size_hint()
+    }
+
+    fn write_to<P>(&self, packet: &mut P)
+    where
+        P: tl_proto::TlPacket,
+    {
+        const ID: u32 = tl_proto::id!(scheme = "scheme.tl", "catchain.firstblock");
+        ID.write_to(packet);
+        self.unique_hash.write_to(packet);
+        self.nodes.write_to(packet);
+    }
+}
+
 #[derive(Debug, Copy, Clone, TlWrite, TlRead)]
 #[tl(boxed, id = "overlay.message", scheme = "scheme.tl", size_hint = 32)]
 pub struct Message<'tl> {

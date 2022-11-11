@@ -1,4 +1,4 @@
-use std::net::SocketAddrV4;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -15,7 +15,7 @@ use crate::adnl::peer::*;
 use crate::adnl::Node;
 
 use crate::proto;
-use crate::utils::*;
+use crate::util::*;
 
 impl Node {
     /// Starts a process that forwards packets from the sender queue to the UDP socket
@@ -35,12 +35,14 @@ impl Node {
                 tokio::pin!(let recv = sender_queue_rx.recv(););
                 match select(recv, &mut cancelled).await {
                     Either::Left((packet, _)) => packet,
-                    Either::Right(_) => return,
+                    Either::Right(_) => {
+                        tracing::debug!("sender loop finished");
+                        return;
+                    }
                 }
             } {
                 // Send packet
-                let target: SocketAddrV4 = packet.destination.into();
-                socket.send_to(&packet.data, target).await.ok();
+                socket.send_to(&packet.data, packet.destination).await.ok();
             }
         });
     }
@@ -77,7 +79,7 @@ impl Node {
         let (additional_size, additional_message) = match &channel {
             Some(channel) if channel.ready() => (0, None),
             Some(channel_data) => {
-                tracing::trace!("Confirm channel {local_id} -> {peer_id}");
+                tracing::trace!(%local_id, %peer_id, "sending ConfirmChannel");
 
                 force_handshake = true;
                 (
@@ -90,7 +92,7 @@ impl Node {
                 )
             }
             None => {
-                tracing::trace!("Create channel {local_id} -> {peer_id}");
+                tracing::trace!(%local_id, %peer_id, "sending CreateChannel");
 
                 (
                     MSG_CREATE_CHANNEL_SIZE,
@@ -175,12 +177,12 @@ impl Node {
                 );
                 message.write_to(&mut buffer);
 
-                self.send_packet(
+                ok!(self.send_packet(
                     peer_id,
                     peer,
                     signer,
                     proto::adnl::OutgoingMessages::Pair(&buffer),
-                )?;
+                ));
             }
 
             while offset < data.len() {
@@ -188,12 +190,12 @@ impl Node {
                 let message = build_part_message(&data, &hash, MAX_ADNL_MESSAGE_SIZE, &mut offset);
                 message.write_to(&mut buffer);
 
-                self.send_packet(
+                ok!(self.send_packet(
                     peer_id,
                     peer,
                     signer,
                     proto::adnl::OutgoingMessages::Single(&buffer),
-                )?;
+                ));
             }
 
             Ok(())
@@ -208,8 +210,6 @@ impl Node {
         mut signer: MessageSigner,
         messages: proto::adnl::OutgoingMessages,
     ) -> Result<()> {
-        use rand::Rng;
-
         const MAX_PRIORITY_ATTEMPTS: u64 = 10;
 
         // Determine whether priority channels are supported by remote peer
@@ -225,12 +225,24 @@ impl Node {
             false
         };
 
+        // Adjust socket addr
+        let mut local_addr = self.socket_addr;
+        let mut peer_addr = peer.addr();
+
+        if self.options.use_loopback_for_neighbours
+            && local_addr.ip() == peer_addr.ip()
+            && !peer_addr.ip().is_loopback()
+        {
+            local_addr.set_ip(Ipv4Addr::LOCALHOST);
+            peer_addr.set_ip(Ipv4Addr::LOCALHOST);
+        }
+
         // Generate on-stack random data
-        let rand_bytes: [u8; 10] = rand::thread_rng().gen();
+        let rand_bytes: [u8; 10] = gen_fast_bytes();
 
         let now = now();
         let address = proto::adnl::AddressList {
-            address: Some(self.socket_addr.as_tl()),
+            address: Some(proto::adnl::Address::from(&local_addr)),
             version: now,
             reinit_date: self.start_time,
             expire_at: now + self.options.address_list_timeout_sec,
@@ -265,22 +277,34 @@ impl Node {
         packet.signature = signature.as_ref().map(<[u8; 64]>::as_slice);
 
         // Serialize packet
-        let mut data = tl_proto::serialize(packet);
+        let adnl_version = self.options.version;
+        let prefix_len = match &signer {
+            MessageSigner::Channel { .. } => Channel::compute_prefix_len(adnl_version),
+            MessageSigner::Random(..) => compute_handshake_prefix_len(adnl_version),
+        };
+
+        let mut data = Vec::with_capacity(prefix_len + packet.max_size_hint());
+        packet.write_to(&mut data);
+
         match signer {
             MessageSigner::Channel { channel, priority } => {
-                channel.encrypt(&mut data, priority, self.options.version)
+                channel.encrypt(&mut data, priority, adnl_version)
             }
             MessageSigner::Random(_) => {
-                build_handshake_packet(peer_id, peer.id(), &mut data, self.options.version)
+                build_handshake_packet(peer_id, peer.id(), &mut data, adnl_version)
             }
         }
 
-        self.sender_queue_tx
+        if self
+            .sender_queue_tx
             .send(PacketToSend {
-                destination: peer.ip_address(),
+                destination: peer_addr,
                 data,
             })
-            .map_err(|_| AdnlSenderError::FailedToSendPacket)?;
+            .is_err()
+        {
+            return Err(AdnlSenderError::FailedToSendPacket.into());
+        }
 
         Ok(())
     }
@@ -296,7 +320,7 @@ enum MessageSigner<'a> {
 }
 
 pub struct PacketToSend {
-    destination: PackedSocketAddr,
+    destination: SocketAddrV4,
     data: Vec<u8>,
 }
 

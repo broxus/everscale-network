@@ -1,5 +1,6 @@
 use std::borrow::{Borrow, Cow};
 use std::convert::TryFrom;
+use std::net::SocketAddrV4;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -7,7 +8,7 @@ use anyhow::Result;
 use bytes::Bytes;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
-use rand::Rng;
+use rustc_hash::FxHashSet;
 use smallvec::smallvec;
 use tl_proto::{BoxedConstructor, BoxedWrapper, TlRead, TlWrite};
 
@@ -20,14 +21,14 @@ use crate::adnl;
 use crate::overlay;
 use crate::proto;
 use crate::subscriber::*;
-use crate::utils::*;
+use crate::util::*;
 
 /// DHT node configuration
 #[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct NodeOptions {
     /// Default stored value timeout used for [`Node::store_overlay_node`] and
-    /// [`Node::store_ip_address`]
+    /// [`Node::store_address`]
     ///
     /// Default: `3600` seconds
     pub value_ttl_sec: u32,
@@ -198,7 +199,8 @@ impl Node {
 
     /// Sends ping query to the given peer
     pub async fn ping(&self, peer_id: &adnl::NodeIdShort) -> Result<bool> {
-        let random_id = rand::thread_rng().gen();
+        use rand::RngCore;
+        let random_id = fast_thread_rng().next_u64();
         match self
             .query(peer_id, proto::rpc::DhtPing { random_id })
             .await?
@@ -260,7 +262,9 @@ impl Node {
                         node_count += self.add_dht_peer(node)?.is_some() as usize;
                     }
                 }
-                Err(e) => tracing::warn!("Failed to get DHT nodes from {peer_id}: {e:?}"),
+                Err(e) => {
+                    tracing::warn!(%peer_id, "failed to get DHT nodes: {e:?}")
+                }
             }
         }
 
@@ -274,7 +278,7 @@ impl Node {
     pub async fn find_overlay_nodes(
         self: &Arc<Self>,
         overlay_id: &overlay::IdShort,
-    ) -> Result<Vec<(PackedSocketAddr, proto::overlay::NodeOwned)>> {
+    ) -> Result<Vec<(SocketAddrV4, proto::overlay::NodeOwned)>> {
         let mut result = Vec::new();
         let mut nodes = Vec::new();
         let mut cache = FxHashSet::default();
@@ -340,14 +344,14 @@ impl Node {
     pub async fn find_address(
         self: &Arc<Self>,
         peer_id: &adnl::NodeIdShort,
-    ) -> Result<(PackedSocketAddr, adnl::NodeIdFull)> {
+    ) -> Result<(SocketAddrV4, adnl::NodeIdFull)> {
         let mut values = self.entry(peer_id, KEY_ADDRESS).values();
         while let Some((key, BoxedWrapper(value))) = values.next().await {
             match (
                 parse_address_list(&value, self.adnl.options().clock_tolerance_sec),
                 adnl::NodeIdFull::try_from(key.id.as_equivalent_ref()),
             ) {
-                (Ok(ip_address), Ok(full_id)) => return Ok((ip_address, full_id)),
+                (Ok(addr), Ok(full_id)) => return Ok((addr, full_id)),
                 _ => continue,
             }
         }
@@ -367,10 +371,10 @@ impl Node {
     /// Returns and error if stored value is incorrect
     pub async fn store_overlay_node(
         self: &Arc<Self>,
-        overlay_full_id: &overlay::IdFull,
+        overlay_id_full: &overlay::IdFull,
         node: proto::overlay::Node<'_>,
     ) -> Result<bool> {
-        let overlay_id = overlay_full_id.compute_short_id();
+        let overlay_id = overlay_id_full.compute_short_id();
         overlay_id.verify_overlay_node(&node)?;
 
         let value = tl_proto::serialize_as_boxed(proto::overlay::Nodes {
@@ -385,7 +389,7 @@ impl Node {
                     idx: 0,
                 },
                 id: everscale_crypto::tl::PublicKey::Overlay {
-                    name: overlay_full_id.as_slice(),
+                    name: overlay_id_full.as_slice(),
                 },
                 update_rule: proto::dht::UpdateRule::OverlayNodes,
                 signature: Default::default(),
@@ -410,18 +414,18 @@ impl Node {
             .await
     }
 
-    /// Stores given ip into multiple DHT nodes
-    pub async fn store_ip_address(
+    /// Stores given socket address into multiple DHT nodes
+    pub async fn store_address(
         self: &Arc<Self>,
         key: &adnl::Key,
-        ip: PackedSocketAddr,
+        addr: SocketAddrV4,
     ) -> Result<bool> {
         let clock_tolerance_sec = self.adnl.options().clock_tolerance_sec;
 
         self.entry(key.id(), KEY_ADDRESS)
             .with_data(
                 proto::adnl::AddressList {
-                    address: Some(ip.as_tl()),
+                    address: Some(proto::adnl::Address::from(&addr)),
                     version: now(),
                     reinit_date: self.adnl.start_time(),
                     expire_at: 0,
@@ -431,9 +435,13 @@ impl Node {
             .sign_and_store(key)?
             .then_check(move |_, BoxedWrapper(address_list)| {
                 match parse_address_list(&address_list, clock_tolerance_sec)? {
-                    stored_ip if stored_ip == ip => Ok(true),
-                    stored_ip => {
-                        tracing::warn!("Found another stored address {stored_ip}, expected {ip}");
+                    stored_addr if stored_addr == addr => Ok(true),
+                    stored_addr => {
+                        tracing::warn!(
+                            stored = %stored_addr,
+                            expected = %addr,
+                            "stored address mismatch",
+                        );
                         Ok(false)
                     }
                 }
@@ -505,7 +513,7 @@ impl Node {
             proto::dht::ValueResult::ValueNotFound(proto::dht::NodesOwned { nodes }) => {
                 for node in nodes {
                     if let Err(e) = self.add_dht_peer(node) {
-                        tracing::warn!("Failed to add DHT peer: {e:?}");
+                        tracing::warn!("failed to add DHT peer: {e:?}");
                     }
                 }
                 Ok(None)
@@ -568,28 +576,27 @@ impl NodeState {
         adnl: &adnl::Node,
         mut peer: proto::dht::NodeOwned,
     ) -> Result<Option<adnl::NodeIdShort>> {
-        let peer_full_id = adnl::NodeIdFull::try_from(peer.id.as_equivalent_ref())?;
+        let peer_id_full = adnl::NodeIdFull::try_from(peer.id.as_equivalent_ref())?;
 
         // Verify signature
         let signature = std::mem::take(&mut peer.signature);
-        if peer_full_id.verify(peer.as_boxed(), &signature).is_err() {
-            tracing::warn!("Invalid DHT peer signature");
+        if peer_id_full.verify(peer.as_boxed(), &signature).is_err() {
+            tracing::warn!("invalid DHT peer signature");
             return Ok(None);
         }
         peer.signature = signature;
 
         // Parse remaining peer data
-        let peer_id = peer_full_id.compute_short_id();
-        let peer_ip_address =
-            parse_address_list(&peer.addr_list, adnl.options().clock_tolerance_sec)?;
+        let peer_id = peer_id_full.compute_short_id();
+        let peer_addr = parse_address_list(&peer.addr_list, adnl.options().clock_tolerance_sec)?;
 
         // Add new ADNL peer
         let is_new_peer = adnl.add_peer(
             adnl::NewPeerContext::Dht,
             self.key.id(),
             &peer_id,
-            peer_ip_address,
-            peer_full_id,
+            peer_addr,
+            peer_id_full,
         )?;
         if !is_new_peer {
             return Ok(None);

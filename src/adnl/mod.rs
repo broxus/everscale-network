@@ -75,8 +75,10 @@
 //! [`NodeIdShort`]: NodeIdShort
 //! [`Message`]: crate::proto::adnl::Message
 
+use std::net::{SocketAddr, SocketAddrV4, ToSocketAddrs};
 use std::sync::Arc;
 
+use anyhow::{Context, Result};
 use frunk_core::hlist::{HCons, HNil};
 use frunk_core::indices::Here;
 
@@ -86,7 +88,7 @@ pub use self::node_id::{ComputeNodeIds, NodeIdFull, NodeIdShort};
 pub use self::peer::{NewPeerContext, PeerFilter};
 pub use self::peers_set::PeersSet;
 
-use crate::utils::{NetworkBuilder, PackedSocketAddr};
+use crate::util::{DeferredInitialization, NetworkBuilder};
 
 mod channel;
 mod encryption;
@@ -102,18 +104,117 @@ mod queries_cache;
 mod socket;
 mod transfer;
 
-impl NetworkBuilder<HNil, Here> {
+pub(crate) type Deferred = Result<Arc<Node>>;
+
+impl DeferredInitialization for Deferred {
+    type Initialized = Arc<Node>;
+
+    fn initialize(self) -> Result<Self::Initialized> {
+        let adnl = self?;
+        adnl.start()?;
+        Ok(adnl)
+    }
+}
+
+impl NetworkBuilder<HNil, (Here, Here)> {
+    /// Creates a basic network layer that is an ADNL node
+    ///
+    /// See [`with_adnl_ext`] if you need a node with a peer filter
+    ///
+    /// [`with_adnl_ext`]: fn@crate::util::NetworkBuilder::with_adnl_ext
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::error::Error;
+    ///
+    /// use everscale_network::{adnl, NetworkBuilder};
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn Error>> {
+    ///     let keystore = adnl::Keystore::builder()
+    ///         .with_tagged_key([0; 32], 0)?
+    ///         .build();
+    ///
+    ///     let options = adnl::NodeOptions::default();
+    ///
+    ///     let adnl = NetworkBuilder::with_adnl("127.0.0.1:10000", keystore, options).build()?;
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
     pub fn with_adnl<T>(
-        socket_addr: T,
+        addr: T,
         keystore: Keystore,
         options: NodeOptions,
-    ) -> NetworkBuilder<HCons<Arc<Node>, HNil>, Here>
+    ) -> NetworkBuilder<HCons<Deferred, HNil>, (Here, Here)>
     where
-        T: Into<PackedSocketAddr>,
+        T: ToSocketAddrs,
     {
         NetworkBuilder(
             HCons {
-                head: Node::new(socket_addr, keystore, options, None),
+                head: parse_socket_addr(addr)
+                    .and_then(|addr| Node::new(addr, keystore, options, None)),
+                tail: HNil,
+            },
+            Default::default(),
+        )
+    }
+
+    /// Creates a basic network layer that is an ADNL node with additional filter
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::error::Error;
+    /// use std::net::SocketAddrV4;
+    /// use std::sync::Arc;
+    ///
+    /// use everscale_network::{adnl, NetworkBuilder};
+    ///
+    /// struct MyFilter;
+    ///
+    /// impl adnl::PeerFilter for MyFilter {
+    ///     fn check(
+    ///         &self,
+    ///         ctx: adnl::NewPeerContext,
+    ///         addr: SocketAddrV4,
+    ///         peer_id: &adnl::NodeIdShort,
+    ///     ) -> bool {
+    ///         // Allow only non-loopback IPs
+    ///         !addr.ip().is_loopback()
+    ///     }
+    /// }
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn Error>> {
+    ///     let keystore = adnl::Keystore::builder()
+    ///         .with_tagged_key([0; 32], 0)?
+    ///         .build();
+    ///
+    ///     let options = adnl::NodeOptions::default();
+    ///
+    ///     let peer_filter = Arc::new(MyFilter);
+    ///
+    ///     let adnl = NetworkBuilder::with_adnl_ext("127.0.0.1:10000", keystore, options, peer_filter)
+    ///         .build()?;
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn with_adnl_ext<T>(
+        addr: T,
+        keystore: Keystore,
+        options: NodeOptions,
+        peer_filter: Arc<dyn PeerFilter>,
+    ) -> NetworkBuilder<HCons<Deferred, HNil>, (Here, Here)>
+    where
+        T: ToSocketAddrs,
+    {
+        NetworkBuilder(
+            HCons {
+                head: parse_socket_addr(addr)
+                    .and_then(|addr| Node::new(addr, keystore, options, Some(peer_filter))),
                 tail: HNil,
             },
             Default::default(),
@@ -121,8 +222,14 @@ impl NetworkBuilder<HNil, Here> {
     }
 }
 
-impl<I> NetworkBuilder<HCons<Arc<Node>, HNil>, I> {
-    pub fn build(self) -> Arc<Node> {
-        self.0.head
+fn parse_socket_addr<T: ToSocketAddrs>(addr: T) -> Result<SocketAddrV4> {
+    match addr
+        .to_socket_addrs()
+        .context("Failed to parse socket addr")?
+        .next()
+    {
+        Some(SocketAddr::V4(addr)) => Ok(addr),
+        Some(SocketAddr::V6(_)) => anyhow::bail!("IPv6 is not supported"),
+        None => anyhow::bail!("Invalid ip address"),
     }
 }

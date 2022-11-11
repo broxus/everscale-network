@@ -2,11 +2,11 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 use anyhow::Result;
-use rand::Rng;
 
 use super::encoder::*;
 use super::transfers_cache::TransferId;
 use crate::proto;
+use crate::util::*;
 
 pub struct OutgoingTransfer {
     buffer: Vec<u8>,
@@ -19,7 +19,7 @@ pub struct OutgoingTransfer {
 
 impl OutgoingTransfer {
     pub fn new(data: Vec<u8>, transfer_id: Option<TransferId>) -> Self {
-        let transfer_id = transfer_id.unwrap_or_else(|| rand::thread_rng().gen());
+        let transfer_id = transfer_id.unwrap_or_else(gen_fast_bytes);
 
         Self {
             buffer: Vec::new(),
@@ -73,7 +73,7 @@ impl OutgoingTransfer {
         let mut seqno_out = self.state.seqno_out();
         let previous_seqno_out = seqno_out;
 
-        let data = encoder.encode(&mut seqno_out)?;
+        let data = ok!(encoder.encode(&mut seqno_out));
 
         let seqno_in = self.state.seqno_in();
 

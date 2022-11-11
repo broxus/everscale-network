@@ -2,6 +2,7 @@ use std::convert::TryFrom;
 use std::ops::Deref;
 
 use anyhow::Result;
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use tl_proto::{BoxedConstructor, HashWrapper, TlWrite};
 
@@ -9,7 +10,7 @@ use super::KEY_NODES;
 use crate::adnl;
 use crate::overlay;
 use crate::proto;
-use crate::utils::*;
+use crate::util::*;
 
 pub struct StorageOptions {
     pub max_key_name_len: usize,
@@ -139,7 +140,7 @@ impl Storage {
         let mut new_nodes = deserialize_overlay_nodes(value.value)?;
         new_nodes.retain(|node| {
             if overlay_id.verify_overlay_node(node).is_err() {
-                tracing::warn!("Bad overlay node: {node:?}");
+                tracing::warn!(?node, "bad overlay node");
                 false
             } else {
                 true
@@ -223,8 +224,10 @@ fn make_overlay_nodes_value<'a, 'b, const N: usize>(
 fn deserialize_overlay_nodes(
     data: &[u8],
 ) -> tl_proto::TlResult<SmallVec<[proto::overlay::Node; 5]>> {
-    let proto::overlay::Nodes { nodes } = tl_proto::deserialize_as_boxed(data)?;
-    Ok(nodes)
+    match tl_proto::deserialize_as_boxed(data) {
+        Ok(proto::overlay::Nodes { nodes }) => Ok(nodes),
+        Err(e) => Err(e),
+    }
 }
 
 pub type StorageKeyId = [u8; 32];

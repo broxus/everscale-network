@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -6,7 +7,6 @@ use std::time::Duration;
 use anyhow::Result;
 use everscale_crypto::ed25519;
 use everscale_network::adnl;
-use everscale_network::utils::PackedSocketAddr;
 use everscale_network::{QueryConsumingResult, QuerySubscriber, SubscriberContext};
 use tl_proto::{TlRead, TlWrite};
 
@@ -18,35 +18,35 @@ async fn main() -> Result<()> {
 
     let left_key = ed25519::SecretKey::generate(&mut rand::thread_rng());
     let left_node = adnl::Node::new(
-        PackedSocketAddr::localhost(20000),
+        SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0),
         adnl::Keystore::builder()
             .with_tagged_keys([(left_key.to_bytes(), 0)])?
             .build(),
         adnl_node_options,
         None,
-    );
+    )?;
     let left_node_id = *left_node.key_by_tag(0)?.id();
 
     let right_key = ed25519::SecretKey::generate(&mut rand::thread_rng());
     let right_node = adnl::Node::new(
-        PackedSocketAddr::localhost(20001),
+        SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0),
         adnl::Keystore::builder()
             .with_tagged_keys([(right_key.to_bytes(), 0)])?
             .build(),
         adnl_node_options,
         None,
-    );
+    )?;
     right_node.add_query_subscriber(Arc::new(Service))?;
 
-    let right_node_full_id = *right_node.key_by_tag(0)?.full_id();
-    let right_node_id = right_node_full_id.compute_short_id();
+    let right_node_id_full = *right_node.key_by_tag(0)?.full_id();
+    let right_node_id = right_node_id_full.compute_short_id();
 
     left_node.add_peer(
         adnl::NewPeerContext::AdnlPacket,
         &left_node_id,
         &right_node_id,
         right_node.socket_addr(),
-        right_node_full_id,
+        right_node_id_full,
     )?;
 
     left_node.start()?;
@@ -59,10 +59,17 @@ async fn main() -> Result<()> {
         let query = example_request();
         let iterations = iterations.clone();
         handles.push(tokio::spawn(async move {
-            loop {
-                query_data::<_, DataFull>(&left_node, &left_node_id, &right_node_id, query).await;
-                iterations.fetch_add(1, Ordering::Relaxed);
-            }
+            let e = loop {
+                match query_data::<_, DataFull>(&left_node, &left_node_id, &right_node_id, query)
+                    .await
+                {
+                    Ok(_) => {
+                        iterations.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(e) => break e,
+                }
+            };
+            println!("Error: {e:?}");
         }));
     }
 
@@ -70,6 +77,8 @@ async fn main() -> Result<()> {
         _ = futures_util::future::join_all(handles) => {},
         _ = tokio::time::sleep(Duration::from_secs(10)) => {},
     }
+
+    left_node.shutdown();
 
     let throughput = (tl_proto::serialize(example_request()).len()
         + tl_proto::serialize(example_response()).len())
@@ -85,18 +94,19 @@ async fn query_data<Q, A>(
     left_node_id: &adnl::NodeIdShort,
     right_node_id: &adnl::NodeIdShort,
     query: Q,
-) where
+) -> Result<()>
+where
     Q: TlWrite,
     for<'a> A: TlRead<'a, Repr = tl_proto::Boxed> + 'static,
 {
     match left_node
         .query::<Q, A>(left_node_id, right_node_id, query, None)
-        .await
+        .await?
     {
-        Ok(Some(_)) => {}
-        Ok(None) => println!("Packet lost"),
-        Err(e) => println!("Error: {e:?}"),
+        Some(_) => {}
+        None => println!("Packet lost"),
     };
+    Ok(())
 }
 
 struct Service;

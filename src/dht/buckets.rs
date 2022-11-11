@@ -2,7 +2,7 @@ use std::borrow::Borrow;
 
 use crate::adnl;
 use crate::proto;
-use crate::utils::*;
+use crate::util::*;
 
 /// DHT nodes, distributed by max equal bits
 pub struct Buckets {

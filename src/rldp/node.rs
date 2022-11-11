@@ -9,7 +9,7 @@ use super::transfers_cache::*;
 use crate::adnl;
 use crate::proto;
 use crate::subscriber::*;
-use crate::utils::*;
+use crate::util::*;
 
 /// RLDP node configuration
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
@@ -122,7 +122,7 @@ impl Node {
             .retain(|_, semaphore| semaphore.available_permits() < max_permits);
     }
 
-    #[tracing::instrument(level = "debug", name = "rldp_query", skip(self, data))]
+    #[tracing::instrument(level = "debug", name = "rldp_query", skip_all, fields(%local_id, %peer_id, ?roundtrip))]
     pub async fn query(
         &self,
         local_id: &adnl::NodeIdShort,
@@ -169,15 +169,13 @@ impl Node {
     }
 
     fn make_query(&self, mut data: Vec<u8>) -> ([u8; 32], Vec<u8>) {
-        use rand::Rng;
-
         if self.options.force_compression {
             if let Err(e) = compression::compress(&mut data) {
-                tracing::warn!("Failed to compress RLDP query: {e:?}");
+                tracing::warn!("failed to compress RLDP query: {e:?}");
             }
         }
 
-        let query_id = rand::thread_rng().gen();
+        let query_id = gen_fast_bytes();
         let data = proto::rldp::Message::Query {
             query_id: &query_id,
             max_answer_size: self.options.max_answer_size as u64,

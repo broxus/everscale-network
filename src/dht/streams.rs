@@ -78,13 +78,13 @@ where
                         Ok(Some(value)) => Some(value),
                         Ok(None) => None,
                         Err(e) => {
-                            tracing::warn!("Failed to parse queried value: {e}");
+                            tracing::warn!("failed to parse queried value: {e}");
                             None
                         }
                     },
                     Ok(None) => None,
                     Err(e) => {
-                        tracing::warn!("Failed to query value: {e}");
+                        tracing::warn!("failed to query value: {e}");
                         None
                     }
                 }

@@ -1,10 +1,8 @@
-use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use once_cell::race::OnceNonZeroUsize;
 use sha2::Digest;
 
-use crate::utils::*;
+use crate::util::*;
 
 pub type TransferId = [u8; 32];
 
@@ -27,20 +25,8 @@ pub struct Transfer {
 impl Transfer {
     /// Creates new multipart transfer with target length in bytes
     pub fn new(total_len: usize) -> Self {
-        // SAFETY: expression is always nonzero
-        let shard_count = DEFAULT_SHARD_COUNT.get_or_init(|| unsafe {
-            NonZeroUsize::new_unchecked(
-                (std::thread::available_parallelism().map_or(1, usize::from) * 4)
-                    .next_power_of_two(),
-            )
-        });
-
         Self {
-            parts: FxDashMap::with_capacity_and_hasher_and_shard_amount(
-                0,
-                Default::default(),
-                shard_count.get(),
-            ),
+            parts: FxDashMap::with_capacity_and_hasher(0, Default::default()),
             received_len: Default::default(),
             total_len,
             timings: Default::default(),
@@ -62,14 +48,14 @@ impl Transfer {
         data: Vec<u8>,
         transfer_id: &TransferId,
     ) -> Result<Option<Vec<u8>>, TransferError> {
-        let length = data.len();
+        let len = data.len();
         if self.parts.insert(offset, data).is_some() {
             return Ok(None);
         }
 
         // Increase received length.
         // This part heavily relies on ordering, so hope that it works as expected
-        self.received_len.fetch_add(length, Ordering::Release);
+        self.received_len.fetch_add(len, Ordering::Release);
 
         // Check if it is equal to the total length and make sure it will be big enough to fail
         // next check on success
@@ -86,7 +72,12 @@ impl Transfer {
         // Handle part
         match received.cmp(&self.total_len) {
             std::cmp::Ordering::Equal => {
-                tracing::debug!("Finished ADNL transfer ({received} of {})", self.total_len);
+                tracing::debug!(
+                    received,
+                    total = self.total_len,
+                    transfer_id = %DisplayTransferId(transfer_id),
+                    "finished ADNL transfer"
+                );
 
                 // Combine all parts
                 received = 0;
@@ -113,12 +104,28 @@ impl Transfer {
             std::cmp::Ordering::Greater => Err(TransferError::ReceivedTooMuch),
             std::cmp::Ordering::Less => {
                 tracing::trace!(
-                    "Received ADNL transfer part ({received} of {})",
-                    self.total_len
+                    received,
+                    total = self.total_len,
+                    transfer_id = %DisplayTransferId(transfer_id),
+                    "received ADNL transfer part"
                 );
                 Ok(None)
             }
         }
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct DisplayTransferId<'a>(pub &'a TransferId);
+
+impl std::fmt::Display for DisplayTransferId<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut output = [0u8; 64];
+        hex::encode_to_slice(self.0, &mut output).ok();
+
+        // SAFETY: output is guaranteed to contain only [0-9a-f]
+        let output = unsafe { std::str::from_utf8_unchecked(&output) };
+        f.write_str(output)
     }
 }
 
@@ -131,5 +138,3 @@ pub enum TransferError {
     #[error("Invalid transfer data hash")]
     InvalidHash,
 }
-
-static DEFAULT_SHARD_COUNT: OnceNonZeroUsize = OnceNonZeroUsize::new();

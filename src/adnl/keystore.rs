@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use everscale_crypto::ed25519;
+use rustc_hash::FxHashMap;
 
 use super::node_id::{ComputeNodeIds, NodeIdFull, NodeIdShort};
-use crate::utils::*;
 
 /// Tagged keystore for ADNL keys
 #[derive(Default)]
@@ -19,6 +19,7 @@ impl Keystore {
         KeystoreBuilder::default()
     }
 
+    /// Searches key by its short id
     pub fn key_by_id(&self, id: &NodeIdShort) -> Result<&Arc<Key>, KeystoreError> {
         if let Some(key) = self.keys.get(id) {
             Ok(key)
@@ -27,6 +28,7 @@ impl Keystore {
         }
     }
 
+    /// Searches key by its tag
     pub fn key_by_tag(&self, tag: usize) -> Result<&Arc<Key>, KeystoreError> {
         if let Some(id) = self.tags.get(&tag) {
             self.key_by_id(id)
@@ -35,11 +37,15 @@ impl Keystore {
         }
     }
 
+    /// Returns inner keys table
     #[inline(always)]
     pub fn keys(&self) -> &FxHashMap<NodeIdShort, Arc<Key>> {
         &self.keys
     }
 
+    /// Adds a new key with the specified tag
+    ///
+    /// NOTE: duplicate keys or tags will cause this method to fail
     pub fn add_key(&mut self, key: [u8; 32], tag: usize) -> Result<NodeIdShort, KeystoreError> {
         let secret_key = ed25519::SecretKey::from_bytes(key);
         let (_, short_id) = secret_key.compute_node_ids();
@@ -76,12 +82,15 @@ impl KeystoreBuilder {
         self.keystore
     }
 
+    /// Adds a new key with the specified tag
+    ///
+    /// NOTE: duplicate keys or tags will cause this method to fail
     pub fn with_tagged_key(mut self, key: [u8; 32], tag: usize) -> Result<Self, KeystoreError> {
         self.keystore.add_key(key, tag)?;
         Ok(self)
     }
 
-    /// Creates new keystore from tagged secret keys
+    /// Creates a new keystore from tagged secret keys
     pub fn with_tagged_keys<I>(mut self, keys: I) -> Result<Self, KeystoreError>
     where
         I: IntoIterator<Item = ([u8; 32], usize)>,
@@ -101,25 +110,30 @@ pub struct Key {
 }
 
 impl Key {
+    /// Constructs new key from the secret key bytes
     pub fn from_bytes(secret_key: [u8; 32]) -> Self {
         ed25519::SecretKey::from_bytes(secret_key).into()
     }
 
+    /// Returns short key id
     #[inline(always)]
     pub fn id(&self) -> &NodeIdShort {
         &self.short_id
     }
 
+    /// Returns full key id
     #[inline(always)]
     pub fn full_id(&self) -> &NodeIdFull {
         &self.full_id
     }
 
+    /// Returns inner secret key (as expanded)
     #[inline(always)]
     pub fn secret_key(&self) -> &ed25519::ExpandedSecretKey {
         &self.secret_key
     }
 
+    /// Signs serializable boxed data
     #[inline(always)]
     pub fn sign<T: tl_proto::TlWrite<Repr = tl_proto::Boxed>>(&self, data: T) -> [u8; 64] {
         self.secret_key.sign(data, self.full_id.public_key())

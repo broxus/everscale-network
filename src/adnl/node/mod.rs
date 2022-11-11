@@ -1,9 +1,11 @@
+use std::net::SocketAddrV4;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bytes::Bytes;
 use parking_lot::Mutex;
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use tl_proto::{TlRead, TlWrite};
 use tokio::sync::mpsc;
@@ -21,7 +23,7 @@ use super::socket::make_udp_socket;
 use super::transfer::*;
 use crate::proto;
 use crate::subscriber::*;
-use crate::utils::*;
+use crate::util::*;
 
 mod receiver;
 mod sender;
@@ -80,6 +82,11 @@ pub struct NodeOptions {
     /// Default: `true`
     pub force_use_priority_channels: bool,
 
+    /// Whether to use loopback ip to communicate with nodes on the same ip
+    ///
+    /// Default: `false`
+    pub use_loopback_for_neighbours: bool,
+
     /// ADNL protocol version.
     ///
     /// Default: None
@@ -98,6 +105,7 @@ impl Default for NodeOptions {
             packet_history_enabled: false,
             packet_signature_required: true,
             force_use_priority_channels: true,
+            use_loopback_for_neighbours: false,
             version: None,
         }
     }
@@ -106,7 +114,7 @@ impl Default for NodeOptions {
 /// Unreliable UDP transport layer
 pub struct Node {
     /// Socket address of the node
-    socket_addr: PackedSocketAddr,
+    socket_addr: SocketAddrV4,
     /// Immutable keystore
     keystore: Keystore,
     /// Configuration
@@ -143,15 +151,21 @@ pub struct Node {
 
 impl Node {
     /// Create new ADNL node on the specified address
-    pub fn new<T>(
-        socket_addr: T,
+    pub fn new(
+        mut socket_addr: SocketAddrV4,
         keystore: Keystore,
         options: NodeOptions,
         peer_filter: Option<Arc<dyn PeerFilter>>,
-    ) -> Arc<Self>
-    where
-        T: Into<PackedSocketAddr>,
-    {
+    ) -> Result<Arc<Self>> {
+        // Bind node socket
+        let socket = make_udp_socket(socket_addr.port())?;
+
+        // Update socket addr with auto assigned port (in case of 0)
+        if socket_addr.port() == 0 {
+            let local_addr = socket.local_addr().context("Failed to select UDP port")?;
+            socket_addr.set_port(local_addr.port());
+        }
+
         let (sender_queue_tx, sender_queue_rx) = mpsc::unbounded_channel();
 
         // Add empty peers map for each local peer
@@ -161,8 +175,8 @@ impl Node {
             peers.insert(*key, Default::default());
         }
 
-        Arc::new(Self {
-            socket_addr: socket_addr.into(),
+        Ok(Arc::new(Self {
+            socket_addr,
             keystore,
             options,
             peer_filter,
@@ -173,13 +187,14 @@ impl Node {
             queries: Default::default(),
             sender_queue_tx,
             init_state: Mutex::new(Some(InitializationState {
+                socket,
                 sender_queue_rx,
                 message_subscribers: Default::default(),
                 query_subscribers: Default::default(),
             })),
             start_time: now(),
             cancellation_token: Default::default(),
-        })
+        }))
     }
 
     /// ADNL node options
@@ -199,6 +214,7 @@ impl Node {
         }
     }
 
+    /// Adds a new message subscriber brefore the node was started
     pub fn add_message_subscriber(
         &self,
         message_subscriber: Arc<dyn MessageSubscriber>,
@@ -213,6 +229,7 @@ impl Node {
         }
     }
 
+    /// Adds a new query subscriber brefore the node was started
     pub fn add_query_subscriber(&self, query_subscriber: Arc<dyn QuerySubscriber>) -> Result<()> {
         let mut init = self.init_state.lock();
         match &mut *init {
@@ -232,14 +249,15 @@ impl Node {
             None => return Err(NodeError::AlreadyRunning.into()),
         };
 
-        // Bind node socket
-        let socket = make_udp_socket(self.socket_addr.port())?;
-
         init.query_subscribers.push(Arc::new(PingSubscriber));
 
         // Start background logic
-        self.start_sender(socket.clone(), init.sender_queue_rx);
-        self.start_receiver(socket, init.message_subscribers, init.query_subscribers);
+        self.start_sender(init.socket.clone(), init.sender_queue_rx);
+        self.start_receiver(
+            init.socket,
+            init.message_subscribers,
+            init.query_subscribers,
+        );
 
         // Done
         Ok(())
@@ -258,7 +276,7 @@ impl Node {
 
     /// Socket address of the node
     #[inline(always)]
-    pub fn socket_addr(&self) -> PackedSocketAddr {
+    pub fn socket_addr(&self) -> SocketAddrV4 {
         self.socket_addr
     }
 
@@ -268,10 +286,10 @@ impl Node {
         self.start_time
     }
 
-    /// Builds new address list for the current ADNL node with no expiration date
+    /// Builds a new address list for the current ADNL node with no expiration date
     pub fn build_address_list(&self) -> proto::adnl::AddressList {
         proto::adnl::AddressList {
-            address: Some(self.socket_addr.as_tl()),
+            address: Some(proto::adnl::Address::from(&self.socket_addr)),
             version: now(),
             reinit_date: self.start_time,
             expire_at: 0,
@@ -300,19 +318,19 @@ impl Node {
         ctx: NewPeerContext,
         local_id: &NodeIdShort,
         peer_id: &NodeIdShort,
-        peer_ip_address: PackedSocketAddr,
-        peer_full_id: NodeIdFull,
+        addr: SocketAddrV4,
+        peer_id_full: NodeIdFull,
     ) -> Result<bool> {
         use dashmap::mapref::entry::Entry;
 
         // Ignore ourself
-        if peer_id == local_id || peer_ip_address == self.socket_addr {
+        if peer_id == local_id || addr == self.socket_addr {
             return Ok(false);
         }
 
         // Check peer with peer filter (if specified)
         if let Some(filter) = &self.peer_filter {
-            if !filter.check(ctx, peer_ip_address, peer_id) {
+            if !filter.check(ctx, addr, peer_id) {
                 return Ok(false);
             }
         }
@@ -320,14 +338,11 @@ impl Node {
         // Search remove peer in known peers
         match self.get_peers(local_id)?.entry(*peer_id) {
             // Update ip if peer is already known
-            Entry::Occupied(entry) => entry.get().set_ip_address(peer_ip_address),
+            Entry::Occupied(entry) => entry.get().set_addr(addr),
             // Create new peer state otherwise
             Entry::Vacant(entry) => {
-                entry.insert(Peer::new(self.start_time, peer_ip_address, peer_full_id));
-
-                tracing::trace!(
-                    "Added ADNL peer {peer_ip_address}. PEER ID {peer_id} -> LOCAL ID {local_id}"
-                );
+                entry.insert(Peer::new(self.start_time, addr, peer_id_full));
+                tracing::trace!(%local_id, %peer_id, %addr, "added ADNL peer");
             }
         };
 
@@ -353,26 +368,26 @@ impl Node {
         Ok(peers.remove(peer_id).is_some())
     }
 
-    /// Searches for remote peer ip in the known peers
-    pub fn get_peer_ip(
+    /// Searches for remote peer socket address in the known peers
+    pub fn get_peer_address(
         &self,
         local_id: &NodeIdShort,
         peer_id: &NodeIdShort,
-    ) -> Option<PackedSocketAddr> {
+    ) -> Option<SocketAddrV4> {
         let peers = self.get_peers(local_id).ok()?;
         let peer = peers.get(peer_id)?;
-        Some(peer.ip_address())
+        Some(peer.addr())
     }
 
-    /// Matches entries with peer id by ip
+    /// Matches entries with peer id by socket address
     ///
     /// NOTE: It is a quite expensive method that iterates over all peers
     /// and may block new peers from being added during the execution time.
     /// Use it with caution.
-    pub fn match_peer_ips<T>(
+    pub fn match_peer_addresses<T>(
         &self,
         local_id: &NodeIdShort,
-        mut entries: FxHashMap<PackedSocketAddr, T>,
+        mut entries: FxHashMap<SocketAddrV4, T>,
     ) -> Option<FxHashMap<T, NodeIdShort>>
     where
         T: std::hash::Hash + Eq,
@@ -381,7 +396,7 @@ impl Node {
 
         let mut result = FxHashMap::with_capacity_and_hasher(entries.len(), Default::default());
         for peer in peers.iter() {
-            if let Some(key) = entries.remove(&peer.ip_address()) {
+            if let Some(key) = entries.remove(&peer.addr()) {
                 result.insert(key, *peer.key());
             }
         }
@@ -446,9 +461,7 @@ impl Node {
         query: Bytes,
         timeout: Option<u64>,
     ) -> Result<Option<Vec<u8>>> {
-        use rand::Rng;
-
-        let query_id: QueryId = rand::thread_rng().gen();
+        let query_id: QueryId = gen_fast_bytes();
 
         let pending_query = self.queries.add_query(query_id);
         self.send_message(
@@ -467,33 +480,24 @@ impl Node {
             .get(peer_id)
             .map(|entry| entry.value().clone());
 
-        let handle = tokio::spawn({
-            let queries = self.queries.clone();
-            let timeout = timeout.unwrap_or(self.options.query_default_timeout_ms);
+        let timeout = timeout.unwrap_or(self.options.query_default_timeout_ms);
+        let answer = tokio::time::timeout(Duration::from_millis(timeout), pending_query.wait())
+            .await
+            .ok()
+            .flatten();
 
-            async move {
-                tokio::time::sleep(Duration::from_millis(timeout)).await;
-
-                match queries.update_query(query_id, None).await {
-                    Ok(true) => { /* dropped query */ }
-                    Err(_) => tracing::warn!("Failed to drop query"),
-                    _ => { /* do nothing */ }
+        if answer.is_none() {
+            if let Some(channel) = channel {
+                if channel.update_drop_timeout(now(), self.options.channel_reset_timeout_sec) {
+                    self.reset_peer(local_id, peer_id)?;
                 }
-            }
-        });
-
-        let answer = pending_query.wait().await?;
-        if answer.is_some() {
-            handle.abort();
-        } else if let Some(channel) = channel {
-            if channel.update_drop_timeout(now(), self.options.channel_reset_timeout_sec) {
-                self.reset_peer(local_id, peer_id)?;
             }
         }
 
         Ok(answer)
     }
 
+    /// Sends a one-way ADNL message
     pub fn send_custom_message(
         &self,
         local_id: &NodeIdShort,
@@ -520,7 +524,7 @@ impl Node {
         let peers = self.get_peers(local_id)?;
         let mut peer = peers.get_mut(peer_id).ok_or(NodeError::UnknownPeer)?;
 
-        tracing::trace!("Resetting peer pair {local_id} -> {peer_id}");
+        tracing::trace!(%local_id, %peer_id, "resetting peer pair");
 
         self.channels_by_peers
             .remove(peer_id)
@@ -558,6 +562,7 @@ pub struct NodeMetrics {
 }
 
 struct InitializationState {
+    socket: Arc<tokio::net::UdpSocket>,
     /// Receiver end of the outgoing packets queue
     sender_queue_rx: SenderQueueRx,
     message_subscribers: Vec<Arc<dyn MessageSubscriber>>,
@@ -568,16 +573,16 @@ fn make_query<T>(prefix: Option<&[u8]>, query: T) -> Bytes
 where
     T: TlWrite,
 {
-    match prefix {
-        Some(prefix) => {
-            let mut data = Vec::with_capacity(prefix.len() + query.max_size_hint());
-            data.extend_from_slice(prefix);
-            query.write_to(&mut data);
-            data
-        }
-        None => tl_proto::serialize(query),
+    let prefix_len = match prefix {
+        Some(prefix) => prefix.len(),
+        None => 0,
+    };
+    let mut data = Vec::with_capacity(prefix_len + query.max_size_hint());
+    if let Some(prefix) = prefix {
+        data.extend_from_slice(prefix);
     }
-    .into()
+    query.write_to(&mut data);
+    data.into()
 }
 
 #[derive(thiserror::Error, Debug)]

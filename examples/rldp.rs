@@ -1,11 +1,11 @@
 use std::borrow::Cow;
+use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
 use everscale_crypto::ed25519;
-use everscale_network::utils::PackedSocketAddr;
 use everscale_network::{adnl, rldp};
 use everscale_network::{NetworkBuilder, QueryConsumingResult, QuerySubscriber, SubscriberContext};
 use rand::Rng;
@@ -13,6 +13,8 @@ use tl_proto::{TlRead, TlWrite};
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    tracing_subscriber::fmt::init();
+
     let adnl_node_options = adnl::NodeOptions::default();
     let rldp_node_options = rldp::NodeOptions {
         max_peer_queries: 10000,
@@ -20,10 +22,10 @@ async fn main() -> Result<()> {
         ..Default::default()
     };
 
-    let build_node = |port, service| -> Result<(Arc<adnl::Node>, Arc<rldp::Node>)> {
+    let build_node = |service| -> Result<(Arc<adnl::Node>, Arc<rldp::Node>)> {
         let key = ed25519::SecretKey::generate(&mut rand::thread_rng());
         let (adnl, rldp) = NetworkBuilder::with_adnl(
-            PackedSocketAddr::localhost(port),
+            (Ipv4Addr::LOCALHOST, 0),
             adnl::Keystore::builder()
                 .with_tagged_key(key.to_bytes(), 0)?
                 .build(),
@@ -35,24 +37,21 @@ async fn main() -> Result<()> {
         Ok((adnl, rldp))
     };
 
-    let (left_adnl, left_rldp) = build_node(20000, Arc::new(Service))?;
-    let (right_adnl, _right_rldp) = build_node(20001, Arc::new(Service))?;
+    let (left_adnl, left_rldp) = build_node(Arc::new(Service))?;
+    let (right_adnl, _right_rldp) = build_node(Arc::new(Service))?;
 
     let left_node_id = *left_adnl.key_by_tag(0)?.id();
 
-    let right_node_full_id = *right_adnl.key_by_tag(0)?.full_id();
-    let right_node_id = right_node_full_id.compute_short_id();
+    let right_node_id_full = *right_adnl.key_by_tag(0)?.full_id();
+    let right_node_id = right_node_id_full.compute_short_id();
 
     left_adnl.add_peer(
         adnl::NewPeerContext::AdnlPacket,
         &left_node_id,
         &right_node_id,
         right_adnl.socket_addr(),
-        right_node_full_id,
+        right_node_id_full,
     )?;
-
-    left_adnl.start()?;
-    right_adnl.start()?;
 
     let iterations = Arc::new(AtomicUsize::new(0));
     let mut handles = Vec::new();
@@ -62,7 +61,7 @@ async fn main() -> Result<()> {
         let query = example_request();
         let iterations = iterations.clone();
         handles.push(tokio::spawn(async move {
-            loop {
+            let e = loop {
                 let query = tl_proto::serialize(query);
                 match left_rldp
                     .query(&left_node_id, &right_node_id, query, None)
@@ -72,9 +71,10 @@ async fn main() -> Result<()> {
                         iterations.fetch_add(1, Ordering::Relaxed);
                     }
                     Ok((None, _)) => println!("Packet lost"),
-                    Err(e) => println!("Error: {e:?}"),
+                    Err(e) => break e,
                 }
-            }
+            };
+            println!("Error: {e:?}");
         }));
     }
 

@@ -9,8 +9,9 @@ use super::node::Node;
 use super::streams::DhtValuesStream;
 use crate::adnl;
 use crate::proto;
-use crate::utils::now;
+use crate::util::now;
 
+/// DHT entry builder
 #[must_use]
 #[derive(Copy, Clone)]
 pub struct Entry<'a> {
@@ -41,7 +42,9 @@ impl<'a> Entry<'a> {
 
     /// Creates a new builder which can store the value in the DHT.
     ///
-    /// See [`Entry::with_data_raw`] for raw API
+    /// See [`with_data_raw`] for raw API
+    ///
+    /// [`with_data_raw`]: fn@crate::dht::Entry::with_data_raw
     pub fn with_data<T>(self, data: T) -> EntryWithData<'a>
     where
         T: tl_proto::TlWrite<Repr = tl_proto::Boxed>,
@@ -55,7 +58,9 @@ impl<'a> Entry<'a> {
 
     /// Creates a new builder which can store the value in the DHT.
     ///
-    /// See [`Entry::with_data`] for more convenient API
+    /// See [`with_data`] for more convenient API
+    ///
+    /// [`with_data`]: fn@crate::dht::Entry::with_data
     pub fn with_data_raw(self, data: &'a [u8]) -> EntryWithData<'a> {
         EntryWithData {
             inner: self,
@@ -133,7 +138,7 @@ impl<'a> EntryWithData<'a> {
 
     /// Creates signed TL representation of the entry and stores it in the DHT.
     ///
-    /// See [`DhtStoreValue`]
+    /// See [`StoreValue`]
     pub fn sign_and_store(self, key: &adnl::Key) -> Result<StoreValue> {
         let mut value = self.make_value(key);
 

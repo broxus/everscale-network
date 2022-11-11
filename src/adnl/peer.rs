@@ -1,9 +1,10 @@
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use everscale_crypto::ed25519;
 
 use super::node_id::{NodeIdFull, NodeIdShort};
-use crate::utils::*;
+use crate::util::*;
 
 pub type Peers = FxDashMap<NodeIdShort, Peer>;
 
@@ -12,7 +13,7 @@ pub struct Peer {
     /// Remove peer public key
     id: NodeIdFull,
     /// IPv4 address
-    ip_address: AtomicU64,
+    addr: AtomicU64,
     /// Adnl channel key pair to encrypt messages from our side
     channel_key: ed25519::KeyPair,
     /// Packets receiver state
@@ -23,10 +24,10 @@ pub struct Peer {
 
 impl Peer {
     /// Creates new peer with receiver state initialized with the local reinit date
-    pub fn new(local_reinit_date: u32, ip_address: PackedSocketAddr, id: NodeIdFull) -> Self {
+    pub fn new(local_reinit_date: u32, addr: SocketAddrV4, id: NodeIdFull) -> Self {
         Self {
             id,
-            ip_address: AtomicU64::new(ip_address.into()),
+            addr: AtomicU64::new(pack_socket_addr(&addr)),
             channel_key: ed25519::KeyPair::generate(&mut rand::thread_rng()),
             receiver_state: PeerState::for_receive_with_reinit_date(local_reinit_date),
             sender_state: PeerState::for_send(),
@@ -62,13 +63,13 @@ impl Peer {
     }
 
     #[inline(always)]
-    pub fn ip_address(&self) -> PackedSocketAddr {
-        self.ip_address.load(Ordering::Acquire).into()
+    pub fn addr(&self) -> SocketAddrV4 {
+        unpack_socket_addr(self.addr.load(Ordering::Acquire))
     }
 
     #[inline(always)]
-    pub fn set_ip_address(&self, ip_address: PackedSocketAddr) {
-        self.ip_address.store(ip_address.into(), Ordering::Release);
+    pub fn set_addr(&self, addr: SocketAddrV4) {
+        self.addr.store(pack_socket_addr(&addr), Ordering::Release);
     }
 
     /// Adnl channel key pair to encrypt messages from our side
@@ -92,7 +93,9 @@ impl Peer {
     /// Generates new channel key pair and resets receiver/sender states
     ///
     /// NOTE: Receiver state increments its reinit date so the peer will reset states
-    /// on the next message (see [`AdnlPeer::try_reinit_sender`])
+    /// on the next message (see [`try_reinit_sender`])
+    ///
+    /// [`try_reinit_sender`]: fn@crate::adnl::Peer::try_reinit_sender
     pub fn reset(&mut self) {
         let reinit_date = self.receiver_state.reinit_date();
 
@@ -100,6 +103,23 @@ impl Peer {
         self.receiver_state = PeerState::for_receive_with_reinit_date(reinit_date + 1);
         self.sender_state = PeerState::for_send();
     }
+}
+
+pub fn pack_socket_addr(addr: &SocketAddrV4) -> u64 {
+    let mut result = [0; 8];
+    result[0..4].copy_from_slice(&addr.ip().octets());
+    result[4..6].copy_from_slice(&addr.port().to_le_bytes());
+    u64::from_le_bytes(result)
+}
+
+#[inline(always)]
+pub fn unpack_socket_addr(addr: u64) -> SocketAddrV4 {
+    let result = addr.to_le_bytes();
+    let addr: [u8; 4] = result[0..4].try_into().unwrap();
+    SocketAddrV4::new(
+        Ipv4Addr::from(addr),
+        u16::from_le_bytes([result[4], result[5]]),
+    )
 }
 
 /// Connection side packets histories and reinit date
@@ -154,5 +174,20 @@ pub enum NewPeerContext {
 
 /// New peers filter
 pub trait PeerFilter: Send + Sync {
-    fn check(&self, ctx: NewPeerContext, ip: PackedSocketAddr, peer_id: &NodeIdShort) -> bool;
+    fn check(&self, ctx: NewPeerContext, addr: SocketAddrV4, peer_id: &NodeIdShort) -> bool;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn correct_addr_pack() {
+        let test = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 23123);
+
+        let packed = pack_socket_addr(&test);
+
+        let unpacked = unpack_socket_addr(packed);
+        assert_eq!(unpacked, test);
+    }
 }

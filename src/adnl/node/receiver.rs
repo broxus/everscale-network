@@ -17,7 +17,7 @@ use crate::adnl::transfer::*;
 use crate::adnl::Node;
 use crate::proto;
 use crate::subscriber::*;
-use crate::utils::*;
+use crate::util::*;
 
 impl Node {
     /// Starts a process that listens for and processes packets from the UDP socket
@@ -61,14 +61,14 @@ impl Node {
                 tokio::pin!(let recv = socket.recv_from(raw_buffer););
                 let result = match select(recv, &mut cancelled).await {
                     Either::Left((left, _)) => left,
-                    Either::Right(_) => return,
+                    Either::Right(_) => break,
                 };
 
                 let len = match result {
                     Ok((len, _)) if len == 0 => continue,
                     Ok((len, _)) => len,
                     Err(e) => {
-                        tracing::warn!("Failed to receive data: {e}");
+                        tracing::warn!("failed to receive data: {e}");
                         continue;
                     }
                 };
@@ -86,7 +86,7 @@ impl Node {
                 // Process packet
                 let ctx = ctx.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = ctx
+                    if let Err(error) = ctx
                         .node
                         .handle_received_data(
                             PacketView::from(buffer.as_mut_slice()),
@@ -95,10 +95,12 @@ impl Node {
                         )
                         .await
                     {
-                        tracing::trace!("Failed to handle received data: {e}");
+                        tracing::trace!(?error, "failed to handle received data");
                     }
                 });
             }
+
+            tracing::debug!("receiver loop finished");
         });
     }
 
@@ -130,8 +132,8 @@ impl Node {
             )
         } else {
             tracing::trace!(
-                "Received message to unknown key ID: {}",
-                hex::encode(&data[0..32])
+                key_id = hex::encode(&data[0..32]),
+                "received message to unknown key ID",
             );
             return Ok(());
         };
@@ -197,6 +199,13 @@ impl Node {
                 Entry::Vacant(entry) => {
                     let entry = entry.insert(Arc::new(Transfer::new(total_size as usize)));
                     let transfer = entry.value().clone();
+                    tracing::debug!(
+                        %local_id,
+                        %peer_id,
+                        total = total_size,
+                        transfer_id = %DisplayTransferId(&transfer_id),
+                        "started ADNL transfer"
+                    );
 
                     tokio::spawn({
                         let incoming_transfers = self.incoming_transfers.clone();
@@ -212,8 +221,8 @@ impl Node {
 
                                 if incoming_transfers.remove(&transfer_id).is_some() {
                                     tracing::debug!(
-                                        "ADNL transfer {} timed out",
-                                        hex::encode(&transfer_id)
+                                        transfer_id = %DisplayTransferId(&transfer_id),
+                                        "ADNL transfer timed out"
                                     );
                                 }
                                 break;
@@ -253,7 +262,8 @@ impl Node {
         // Process message
         match alt_message.unwrap_or(message) {
             proto::adnl::Message::Answer { query_id, answer } => {
-                self.process_message_answer(query_id, answer).await
+                self.process_message_answer(query_id, answer);
+                Ok(())
             }
             proto::adnl::Message::ConfirmChannel { key, date, .. } => self
                 .process_message_confirm_channel(
@@ -308,12 +318,8 @@ impl Node {
         }
     }
 
-    async fn process_message_answer(&self, query_id: &QueryId, answer: &[u8]) -> Result<()> {
-        if self.queries.update_query(*query_id, Some(answer)).await? {
-            Ok(())
-        } else {
-            Err(AdnlReceiverError::UnknownQueryAnswer.into())
-        }
+    fn process_message_answer(&self, query_id: &QueryId, answer: &[u8]) {
+        self.queries.update_query(query_id, answer);
     }
 
     fn process_message_confirm_channel(
@@ -408,12 +414,12 @@ impl Node {
             )?;
 
             if let Some(list) = &packet.address {
-                let ip_address = parse_address_list(list, self.options.clock_tolerance_sec)?;
+                let addr = parse_address_list(list, self.options.clock_tolerance_sec)?;
                 self.add_peer(
                     NewPeerContext::AdnlPacket,
                     local_id,
                     &peer_id,
-                    ip_address,
+                    addr,
                     full_id,
                 )?;
             }
@@ -570,7 +576,7 @@ impl Node {
             }
         }
 
-        tracing::trace!("Channel {context}: {local_id} -> {peer_id}");
+        tracing::trace!(%local_id, %peer_id, "{context} channel");
 
         Ok(())
     }
@@ -607,8 +613,6 @@ enum AdnlReceiverError {
     InvalidPacket,
     #[error("Unknown message")]
     UnknownMessage,
-    #[error("Received answer to unknown query")]
-    UnknownQueryAnswer,
     #[error("Channel with unknown peer")]
     UnknownPeerInChannel,
     #[error("No subscribers for custom message")]
