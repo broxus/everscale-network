@@ -4,10 +4,9 @@ use std::rc::Rc;
 
 use parking_lot::{RwLock, RwLockReadGuard};
 use rand::seq::SliceRandom;
-use rustc_hash::FxHashMap;
 
 use super::node_id::NodeIdShort;
-use crate::util::{fast_thread_rng, FxDashSet};
+use crate::util::{fast_thread_rng, FastDashSet, FastHashMap};
 
 /// A set of unique short node ids
 pub struct PeersSet {
@@ -87,7 +86,7 @@ impl PeersSet {
         &self,
         other: &PeersSet,
         amount: u32,
-        except: Option<&FxDashSet<NodeIdShort>>,
+        except: Option<&FastDashSet<NodeIdShort>>,
     ) {
         // NOTE: early return, otherwise it will deadlock if `other` is the same as self
         if std::ptr::eq(self, other) {
@@ -219,7 +218,7 @@ impl<'a> IntoIterator for &'a PeersSet {
 
 struct PeersSetState {
     version: u64,
-    cache: FxHashMap<RefId, u32>,
+    cache: FastHashMap<RefId, u32>,
     index: Vec<RefId>,
     capacity: NonZeroU32,
     upper: u32,
@@ -229,7 +228,10 @@ impl PeersSetState {
     fn with_capacity(capacity: NonZeroU32) -> Self {
         Self {
             version: 0,
-            cache: FxHashMap::with_capacity_and_hasher(capacity.get() as usize, Default::default()),
+            cache: FastHashMap::with_capacity_and_hasher(
+                capacity.get() as usize,
+                Default::default(),
+            ),
             index: Vec::with_capacity(capacity.get() as usize),
             capacity,
             upper: 0,

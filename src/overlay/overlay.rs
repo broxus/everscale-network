@@ -1,5 +1,4 @@
 use std::convert::TryFrom;
-use std::hash::BuildHasherDefault;
 use std::net::SocketAddrV4;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
@@ -8,7 +7,6 @@ use std::time::Duration;
 use anyhow::Result;
 use crossbeam_queue::SegQueue;
 use parking_lot::Mutex;
-use rustc_hash::FxHashMap;
 use sha2::Digest;
 use smallvec::SmallVec;
 use tl_proto::{HashWrapper, TlWrite};
@@ -116,7 +114,7 @@ pub struct Overlay {
     options: OverlayOptions,
 
     /// Broadcasts in progress
-    owned_broadcasts: FxDashMap<BroadcastId, Arc<OwnedBroadcast>>,
+    owned_broadcasts: FastDashMap<BroadcastId, Arc<OwnedBroadcast>>,
     /// Broadcasts removal queue
     finished_broadcasts: SegQueue<BroadcastId>,
     /// Broadcasts removal queue len
@@ -128,9 +126,9 @@ pub struct Overlay {
     received_broadcasts: Arc<BroadcastReceiver<IncomingBroadcastInfo>>,
 
     /// Raw overlay nodes
-    nodes: FxDashMap<adnl::NodeIdShort, proto::overlay::NodeOwned>,
+    nodes: FastDashMap<adnl::NodeIdShort, proto::overlay::NodeOwned>,
     /// Peers to exclude from random selection
-    ignored_peers: FxDashSet<adnl::NodeIdShort>,
+    ignored_peers: FastDashSet<adnl::NodeIdShort>,
     /// All known peers
     known_peers: adnl::PeersSet,
     /// Random peers subset
@@ -163,13 +161,13 @@ impl Overlay {
             id,
             node_key,
             options,
-            owned_broadcasts: FxDashMap::default(),
+            owned_broadcasts: FastDashMap::default(),
             finished_broadcasts: SegQueue::new(),
             finished_broadcast_count: AtomicU32::new(0),
             received_peers: Arc::new(Default::default()),
             received_broadcasts: Arc::new(BroadcastReceiver::default()),
-            nodes: FxDashMap::default(),
-            ignored_peers: FxDashSet::default(),
+            nodes: FastDashMap::default(),
+            ignored_peers: FastDashSet::default(),
             known_peers,
             neighbours: adnl::PeersSet::with_capacity(options.max_neighbours),
             query_prefix,
@@ -482,7 +480,7 @@ impl Overlay {
         &self,
         adnl: &adnl::Node,
         peer_id: &adnl::NodeIdShort,
-        existing_peers: &FxDashSet<adnl::NodeIdShort>,
+        existing_peers: &FastHashSet<adnl::NodeIdShort>,
         timeout: Option<u64>,
     ) -> Result<Option<Vec<adnl::NodeIdShort>>> {
         let query = proto::rpc::OverlayGetRandomPeersOwned {
@@ -1056,7 +1054,7 @@ impl Overlay {
         let chunk = transfer.encoder.encode(&mut transfer.seqno)?;
         let date = now();
 
-        let broadcast_to_sign = make_fec_part_to_sign(
+        let broadcast_to_sign = &make_fec_part_to_sign(
             &transfer.broadcast_id,
             transfer.encoder.params().total_len,
             date,
@@ -1066,7 +1064,7 @@ impl Overlay {
             transfer.seqno,
             None,
         );
-        let signature = key.sign(&broadcast_to_sign);
+        let signature = key.sign(broadcast_to_sign);
 
         let broadcast =
             proto::overlay::Broadcast::BroadcastFec(proto::overlay::OverlayBroadcastFec {
@@ -1173,7 +1171,7 @@ fn process_fec_broadcast(
 ) -> Result<Option<Vec<u8>>> {
     let broadcast_id = &broadcast.data_hash;
 
-    let broadcast_to_sign = make_fec_part_to_sign(
+    let broadcast_to_sign = &make_fec_part_to_sign(
         broadcast_id,
         broadcast.data_size,
         broadcast.date,
@@ -1189,9 +1187,9 @@ fn process_fec_broadcast(
     );
     broadcast
         .node_id
-        .verify(&broadcast_to_sign, &broadcast.signature)?;
+        .verify(broadcast_to_sign, &broadcast.signature)?;
 
-    match decoder.decode(broadcast.seqno as u32, broadcast.data) {
+    match decoder.decode(broadcast.seqno, broadcast.data) {
         Some(result) if result.len() != broadcast.data_size as usize => {
             Err(OverlayError::DataSizeMismatch.into())
         }
@@ -1334,16 +1332,12 @@ struct BroadcastFec {
     signature: [u8; 64],
 }
 
-type VacantBroadcastEntry<'a> = dashmap::mapref::entry::VacantEntry<
-    'a,
-    BroadcastId,
-    Arc<OwnedBroadcast>,
-    BuildHasherDefault<rustc_hash::FxHasher>,
->;
+type VacantBroadcastEntry<'a> =
+    dashmap::mapref::entry::VacantEntry<'a, BroadcastId, Arc<OwnedBroadcast>, FastHasherState>;
 
 /// Type alias for received nodes
 pub type ReceivedPeersMap =
-    FxHashMap<HashWrapper<everscale_crypto::tl::PublicKeyOwned>, proto::overlay::NodeOwned>;
+    FastHashMap<HashWrapper<everscale_crypto::tl::PublicKeyOwned>, proto::overlay::NodeOwned>;
 
 type BroadcastFecTx = mpsc::UnboundedSender<BroadcastFec>;
 

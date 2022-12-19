@@ -5,7 +5,6 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use parking_lot::Mutex;
-use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use tl_proto::{TlRead, TlWrite};
 use tokio::sync::mpsc;
@@ -124,15 +123,15 @@ pub struct Node {
     peer_filter: Option<Arc<dyn PeerFilter>>,
 
     /// Known peers for each local node id
-    peers: FxHashMap<NodeIdShort, Peers>,
+    peers: FastHashMap<NodeIdShort, Peers>,
 
     /// Channels table used to fast search on incoming packets
-    channels_by_id: FxDashMap<AdnlChannelId, ChannelReceiver>,
+    channels_by_id: FastDashMap<AdnlChannelId, ChannelReceiver>,
     /// Channels table used to fast search when sending messages
-    channels_by_peers: FxDashMap<NodeIdShort, Arc<Channel>>,
+    channels_by_peers: FastDashMap<NodeIdShort, Arc<Channel>>,
 
     /// Pending transfers of large messages that were split
-    incoming_transfers: Arc<FxDashMap<TransferId, Arc<Transfer>>>,
+    incoming_transfers: Arc<FastDashMap<TransferId, Arc<Transfer>>>,
 
     /// Pending queries
     queries: Arc<QueriesCache>,
@@ -170,9 +169,9 @@ impl Node {
 
         // Add empty peers map for each local peer
         let mut peers =
-            FxHashMap::with_capacity_and_hasher(keystore.keys().len(), Default::default());
+            FastHashMap::with_capacity_and_hasher(keystore.keys().len(), Default::default());
         for key in keystore.keys().keys() {
-            peers.insert(*key, Default::default());
+            peers.insert(*key, Peers::default());
         }
 
         Ok(Arc::new(Self {
@@ -387,14 +386,14 @@ impl Node {
     pub fn match_peer_addresses<T>(
         &self,
         local_id: &NodeIdShort,
-        mut entries: FxHashMap<SocketAddrV4, T>,
-    ) -> Option<FxHashMap<T, NodeIdShort>>
+        mut entries: FastHashMap<SocketAddrV4, T>,
+    ) -> Option<FastHashMap<T, NodeIdShort>>
     where
         T: std::hash::Hash + Eq,
     {
         let peers = self.get_peers(local_id).ok()?;
 
-        let mut result = FxHashMap::with_capacity_and_hasher(entries.len(), Default::default());
+        let mut result = FastHashMap::with_capacity_and_hasher(entries.len(), Default::default());
         for peer in peers.iter() {
             if let Some(key) = entries.remove(&peer.addr()) {
                 result.insert(key, *peer.key());

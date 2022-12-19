@@ -2,7 +2,6 @@ use std::convert::TryFrom;
 use std::ops::Deref;
 
 use anyhow::Result;
-use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use tl_proto::{BoxedConstructor, HashWrapper, TlWrite};
 
@@ -19,7 +18,7 @@ pub struct StorageOptions {
 
 /// Local DHT data storage
 pub struct Storage {
-    storage: FxDashMap<StorageKeyId, proto::dht::ValueOwned>,
+    storage: FastDashMap<StorageKeyId, proto::dht::ValueOwned>,
     options: StorageOptions,
 }
 
@@ -47,7 +46,7 @@ impl Storage {
         key: &StorageKeyId,
     ) -> Option<impl Deref<Target = proto::dht::ValueOwned> + '_> {
         match self.storage.get(key) {
-            Some(item) if item.ttl as u32 > now() => Some(item),
+            Some(item) if item.ttl > now() => Some(item),
             _ => None,
         }
     }
@@ -154,7 +153,7 @@ impl Storage {
         match self.storage.entry(key) {
             Entry::Occupied(mut entry) => {
                 let value = {
-                    let old_nodes = match entry.get().ttl as u32 {
+                    let old_nodes = match entry.get().ttl {
                         old_ttl if old_ttl < now() => None,
                         old_ttl if old_ttl > value.ttl => return Ok(false),
                         _ => Some(deserialize_overlay_nodes(&entry.get().value)?),
@@ -184,7 +183,7 @@ fn make_overlay_nodes_value<'a, 'b, const N: usize>(
         Some(nodes) => nodes
             .into_iter()
             .map(|item| (HashWrapper(item.id), item))
-            .collect::<FxHashMap<_, _>>(),
+            .collect::<FastHashMap<_, _>>(),
         None => Default::default(),
     };
 

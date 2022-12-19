@@ -119,9 +119,9 @@ impl Node {
 #[derive(Default)]
 struct NodeState {
     /// Overlays by ids
-    overlays: FxDashMap<IdShort, Arc<Overlay>>,
+    overlays: FastDashMap<IdShort, Arc<Overlay>>,
     /// Overlay query subscribers
-    subscribers: FxDashMap<IdShort, Arc<dyn QuerySubscriber>>,
+    subscribers: FastDashMap<IdShort, Arc<dyn QuerySubscriber>>,
 }
 
 impl NodeState {

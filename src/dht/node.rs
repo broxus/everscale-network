@@ -8,7 +8,6 @@ use anyhow::Result;
 use bytes::Bytes;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
-use rustc_hash::FxHashSet;
 use smallvec::smallvec;
 use tl_proto::{BoxedConstructor, BoxedWrapper, TlRead, TlWrite};
 
@@ -281,7 +280,7 @@ impl Node {
     ) -> Result<Vec<(SocketAddrV4, proto::overlay::NodeOwned)>> {
         let mut result = Vec::new();
         let mut nodes = Vec::new();
-        let mut cache = FxHashSet::default();
+        let mut cache = FastHashSet::default();
         loop {
             // Receive several nodes records
             let received = self
@@ -754,7 +753,7 @@ pub struct NodeMetrics {
     pub storage_total_size: usize,
 }
 
-type Penalties = FxDashMap<adnl::NodeIdShort, usize>;
+type Penalties = FastDashMap<adnl::NodeIdShort, usize>;
 
 #[derive(thiserror::Error, Debug)]
 enum DhtNodeError {

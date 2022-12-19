@@ -17,7 +17,7 @@ use crate::subscriber::*;
 use crate::util::*;
 
 pub struct TransfersCache {
-    transfers: Arc<FxDashMap<TransferId, RldpTransfer>>,
+    transfers: Arc<FastDashMap<TransferId, RldpTransfer>>,
     subscribers: Arc<Vec<Arc<dyn QuerySubscriber>>>,
     query_options: QueryOptions,
     max_answer_size: u32,
@@ -247,8 +247,8 @@ impl TransfersCache {
             } => {
                 if let Some(transfer) = self.transfers.get(transfer_id) {
                     if let RldpTransfer::Outgoing(state) = transfer.value() {
-                        if state.part() == part as u32 {
-                            state.set_seqno_in(seqno as u32);
+                        if state.part() == part {
+                            state.set_seqno_in(seqno);
                         }
                     }
                 }
@@ -256,7 +256,7 @@ impl TransfersCache {
             proto::rldp::MessagePart::Complete { transfer_id, part } => {
                 if let Some(transfer) = self.transfers.get(transfer_id) {
                     if let RldpTransfer::Outgoing(state) = transfer.value() {
-                        state.set_part(part as u32 + 1);
+                        state.set_part(part + 1);
                     }
                 }
             }
@@ -403,7 +403,7 @@ impl IncomingContext {
     #[tracing::instrument(level = "debug", skip_all)]
     async fn answer(
         mut self,
-        transfers: Arc<FxDashMap<TransferId, RldpTransfer>>,
+        transfers: Arc<FastDashMap<TransferId, RldpTransfer>>,
         subscribers: Arc<Vec<Arc<dyn QuerySubscriber>>>,
         query_options: QueryOptions,
         force_compression: bool,

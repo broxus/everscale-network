@@ -6,7 +6,7 @@ use everscale_crypto::ed25519;
 use super::node_id::{NodeIdFull, NodeIdShort};
 use crate::util::*;
 
-pub type Peers = FxDashMap<NodeIdShort, Peer>;
+pub type Peers = FastDashMap<NodeIdShort, Peer>;
 
 /// Remote peer info
 pub struct Peer {

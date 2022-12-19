@@ -7,7 +7,7 @@ use crate::util::*;
 /// DHT nodes, distributed by max equal bits
 pub struct Buckets {
     local_id: [u8; 32],
-    buckets: Box<[FxDashMap<adnl::NodeIdShort, proto::dht::NodeOwned>; 256]>,
+    buckets: Box<[FastDashMap<adnl::NodeIdShort, proto::dht::NodeOwned>; 256]>,
 }
 
 impl Buckets {
@@ -19,7 +19,7 @@ impl Buckets {
     }
 
     /// Returns iterator over all buckets, starting from the most distant
-    pub fn iter(&self) -> std::slice::Iter<FxDashMap<adnl::NodeIdShort, proto::dht::NodeOwned>> {
+    pub fn iter(&self) -> std::slice::Iter<FastDashMap<adnl::NodeIdShort, proto::dht::NodeOwned>> {
         self.buckets.iter()
     }
 
@@ -101,8 +101,8 @@ impl Buckets {
 }
 
 impl<'a> IntoIterator for &'a Buckets {
-    type Item = &'a FxDashMap<adnl::NodeIdShort, proto::dht::NodeOwned>;
-    type IntoIter = std::slice::Iter<'a, FxDashMap<adnl::NodeIdShort, proto::dht::NodeOwned>>;
+    type Item = &'a FastDashMap<adnl::NodeIdShort, proto::dht::NodeOwned>;
+    type IntoIter = std::slice::Iter<'a, FastDashMap<adnl::NodeIdShort, proto::dht::NodeOwned>>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
