@@ -84,7 +84,7 @@ async fn main() -> Result<()> {
         + tl_proto::serialize(example_response()).len())
         * iterations.load(Ordering::Relaxed);
 
-    println!("Total throughput: {} MB/s", throughput as f64 / 1048576.0);
+    println!("Total throughput: {} MB/s", throughput as f64 / 10485760.0);
 
     Ok(())
 }

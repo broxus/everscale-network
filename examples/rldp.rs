@@ -89,7 +89,7 @@ async fn main() -> Result<()> {
 
     println!(
         "Total throughput: {} MB/s ({})",
-        throughput as f64 / 1048576.0,
+        throughput as f64 / 10485760.0,
         iterations.load(Ordering::Relaxed)
     );
 
