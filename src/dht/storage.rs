@@ -172,10 +172,10 @@ impl Storage {
 }
 
 // Merges old and new overlay nodes and returns updated value
-fn make_overlay_nodes_value<'a, 'b, const N: usize>(
-    value: proto::dht::Value<'a>,
-    new_nodes: SmallVec<[proto::overlay::Node<'a>; N]>,
-    old_nodes: Option<SmallVec<[proto::overlay::Node<'b>; N]>>,
+fn make_overlay_nodes_value<const N: usize>(
+    value: proto::dht::Value<'_>,
+    new_nodes: SmallVec<[proto::overlay::Node<'_>; N]>,
+    old_nodes: Option<SmallVec<[proto::overlay::Node<'_>; N]>>,
 ) -> proto::dht::ValueOwned {
     use std::collections::hash_map::Entry;
 
