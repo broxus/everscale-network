@@ -68,7 +68,7 @@ This project is licensed under the [License Apache].
 
 [latest version]: https://img.shields.io/crates/v/everscale-network.svg
 [crates.io]: https://crates.io/crates/everscale-network
-[workflow badge]: https://img.shields.io/github/workflow/status/broxus/everscale-network/master
+[workflow badge]: https://img.shields.io/github/actions/workflow/status/broxus/everscale-network/master.yml?branch=master
 [workflow]: https://github.com/broxus/everscale-network/actions?query=workflow%3Amaster
 [license apache badge]: https://img.shields.io/github/license/broxus/everscale-network
 [license apache]: https://opensource.org/licenses/Apache-2.0

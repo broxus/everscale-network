@@ -13,7 +13,7 @@ pub type TransferId = [u8; 32];
 /// See [crate::proto::adnl::Message]
 pub struct Transfer {
     /// Data parts labeled with offset
-    parts: FxDashMap<usize, Vec<u8>>,
+    parts: FastDashMap<usize, Vec<u8>>,
     /// Received data length
     received_len: AtomicUsize,
     /// Total data length
@@ -26,7 +26,7 @@ impl Transfer {
     /// Creates new multipart transfer with target length in bytes
     pub fn new(total_len: usize) -> Self {
         Self {
-            parts: FxDashMap::with_capacity_and_hasher(0, Default::default()),
+            parts: FastDashMap::with_capacity_and_hasher(0, Default::default()),
             received_len: Default::default(),
             total_len,
             timings: Default::default(),

@@ -79,7 +79,7 @@ use std::net::{SocketAddr, SocketAddrV4, ToSocketAddrs};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use frunk_core::hlist::{HCons, HNil};
+use frunk_core::hlist::{HCons, HList, HNil, Selector};
 use frunk_core::indices::Here;
 
 pub use self::keystore::{Key, Keystore};
@@ -88,6 +88,7 @@ pub use self::node_id::{ComputeNodeIds, NodeIdFull, NodeIdShort};
 pub use self::peer::{NewPeerContext, PeerFilter};
 pub use self::peers_set::PeersSet;
 
+use crate::subscriber::{MessageSubscriber, QuerySubscriber};
 use crate::util::{DeferredInitialization, NetworkBuilder};
 
 mod channel;
@@ -126,12 +127,10 @@ impl NetworkBuilder<HNil, (Here, Here)> {
     /// # Examples
     ///
     /// ```
-    /// use std::error::Error;
-    ///
-    /// use everscale_network::{adnl, NetworkBuilder};
-    ///
+    /// # use anyhow::Result;
+    /// # use everscale_network::{adnl, NetworkBuilder};
     /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn Error>> {
+    /// async fn main() -> Result<()> {
     ///     let keystore = adnl::Keystore::builder()
     ///         .with_tagged_key([0; 32], 0)?
     ///         .build();
@@ -166,12 +165,10 @@ impl NetworkBuilder<HNil, (Here, Here)> {
     /// # Examples
     ///
     /// ```
-    /// use std::error::Error;
-    /// use std::net::SocketAddrV4;
-    /// use std::sync::Arc;
-    ///
-    /// use everscale_network::{adnl, NetworkBuilder};
-    ///
+    /// # use std::net::SocketAddrV4;
+    /// # use std::sync::Arc;
+    /// # use anyhow::Result;
+    /// # use everscale_network::{adnl, NetworkBuilder};
     /// struct MyFilter;
     ///
     /// impl adnl::PeerFilter for MyFilter {
@@ -187,7 +184,7 @@ impl NetworkBuilder<HNil, (Here, Here)> {
     /// }
     ///
     /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn Error>> {
+    /// async fn main() -> Result<()> {
     ///     let keystore = adnl::Keystore::builder()
     ///         .with_tagged_key([0; 32], 0)?
     ///         .build();
@@ -219,6 +216,100 @@ impl NetworkBuilder<HNil, (Here, Here)> {
             },
             Default::default(),
         )
+    }
+}
+
+impl<L, A, R> NetworkBuilder<L, (A, R)>
+where
+    L: HList + Selector<Deferred, A>,
+{
+    /// Adds query subscriber if ADNL was successfully initialized.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use std::borrow::Cow;
+    /// # use anyhow::Result;
+    /// # use everscale_network::{adnl, NetworkBuilder, QuerySubscriber, QueryConsumingResult, SubscriberContext};
+    /// struct Service;
+    ///
+    /// #[async_trait::async_trait]
+    /// impl QuerySubscriber for Service {
+    ///     async fn try_consume_query<'a>(
+    ///         &self,
+    ///         _ctx: SubscriberContext<'a>,
+    ///         _constructor: u32,
+    ///         _query: Cow<'a, [u8]>,
+    ///     ) -> Result<QueryConsumingResult<'a>> {
+    ///         Ok(QueryConsumingResult::Consumed(None))
+    ///     }
+    /// }
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<()> {
+    ///     let keystore = adnl::Keystore::builder()
+    ///         .with_tagged_key([0; 32], 0)?
+    ///         .build();
+    ///
+    ///     let options = adnl::NodeOptions::default();
+    ///
+    ///     let adnl = NetworkBuilder::with_adnl("127.0.0.1:10000", keystore, options)
+    ///         .with_query_subscriber(Arc::new(Service))
+    ///         .build()?;
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn with_query_subscriber(self, subscriber: Arc<dyn QuerySubscriber>) -> Self {
+        if let Ok(adnl) = self.0.get() {
+            adnl.add_query_subscriber(subscriber).ok();
+        }
+        self
+    }
+
+    /// Adds custom message subscriber if ADNL was successfully initialized.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use anyhow::Result;
+    /// # use everscale_network::{adnl, MessageSubscriber, NetworkBuilder, SubscriberContext};
+    /// struct Service;
+    ///
+    /// #[async_trait::async_trait]
+    /// impl MessageSubscriber for Service {
+    ///     async fn try_consume_custom<'a>(
+    ///         &self,
+    ///         _ctx: SubscriberContext<'a>,
+    ///         _constructor: u32,
+    ///         _data: &'a [u8],
+    ///     ) -> Result<bool> {
+    ///         Ok(true)
+    ///     }
+    /// }
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<()> {
+    ///     let keystore = adnl::Keystore::builder()
+    ///         .with_tagged_key([0; 32], 0)?
+    ///         .build();
+    ///
+    ///     let options = adnl::NodeOptions::default();
+    ///
+    ///     let adnl = NetworkBuilder::with_adnl("127.0.0.1:10000", keystore, options)
+    ///         .with_message_subscriber(Arc::new(Service))
+    ///         .build()?;
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn with_message_subscriber(self, subscriber: Arc<dyn MessageSubscriber>) -> Self {
+        if let Ok(adnl) = self.0.get() {
+            adnl.add_message_subscriber(subscriber).ok();
+        }
+        self
     }
 }
 

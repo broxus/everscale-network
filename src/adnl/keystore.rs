@@ -3,15 +3,15 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use everscale_crypto::ed25519;
-use rustc_hash::FxHashMap;
 
 use super::node_id::{ComputeNodeIds, NodeIdFull, NodeIdShort};
+use crate::util::FastHashMap;
 
 /// Tagged keystore for ADNL keys
 #[derive(Default)]
 pub struct Keystore {
-    keys: FxHashMap<NodeIdShort, Arc<Key>>,
-    tags: FxHashMap<usize, NodeIdShort>,
+    keys: FastHashMap<NodeIdShort, Arc<Key>>,
+    tags: FastHashMap<usize, NodeIdShort>,
 }
 
 impl Keystore {
@@ -39,7 +39,7 @@ impl Keystore {
 
     /// Returns inner keys table
     #[inline(always)]
-    pub fn keys(&self) -> &FxHashMap<NodeIdShort, Arc<Key>> {
+    pub fn keys(&self) -> &FastHashMap<NodeIdShort, Arc<Key>> {
         &self.keys
     }
 

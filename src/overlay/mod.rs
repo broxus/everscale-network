@@ -58,12 +58,10 @@ mod node_impl {
         /// # Examples
         ///
         /// ```
-        /// use std::error::Error;
-        ///
-        /// use everscale_network::{adnl, rldp, NetworkBuilder};
-        ///
+        /// # use anyhow::Result;
+        /// # use everscale_network::{adnl, rldp, NetworkBuilder};
         /// #[tokio::main]
-        /// async fn main() -> Result<(), Box<dyn Error>> {
+        /// async fn main() -> Result<()> {
         ///     const OVERLAY_KEY_TAG: usize = 0;
         ///
         ///     let keystore = adnl::Keystore::builder()

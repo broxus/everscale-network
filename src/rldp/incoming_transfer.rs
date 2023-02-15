@@ -72,7 +72,7 @@ impl IncomingTransfer {
         };
 
         // Check message part
-        let decoder = match (message.part as u32).cmp(&self.part) {
+        let decoder = match message.part.cmp(&self.part) {
             std::cmp::Ordering::Equal => match &mut self.decoder {
                 Some(decoder) if decoder.params() != &fec_type => {
                     return Err(IncomingTransferError::PacketParametersMismatch.into())
@@ -96,7 +96,7 @@ impl IncomingTransfer {
         };
 
         // Decode message data
-        match decoder.decode(message.seqno as u32, message.data) {
+        match decoder.decode(message.seqno, message.data) {
             Some(data) if data.len() + self.data.len() > total_size => {
                 Err(IncomingTransferError::TooBigTransferSize.into())
             }

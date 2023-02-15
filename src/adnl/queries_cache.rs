@@ -2,13 +2,13 @@ use std::sync::{Arc, Weak};
 
 use tokio::sync::oneshot;
 
-use crate::util::FxDashMap;
+use crate::util::FastDashMap;
 
 pub type QueryId = [u8; 32];
 
 #[derive(Default)]
 pub struct QueriesCache {
-    queries: FxDashMap<QueryId, DataTx>,
+    queries: FastDashMap<QueryId, DataTx>,
 }
 
 impl QueriesCache {

@@ -71,7 +71,7 @@ pub struct Node {
     /// Underlying ADNL node
     adnl: Arc<adnl::Node>,
     /// Parallel requests limiter
-    semaphores: FxDashMap<adnl::NodeIdShort, Arc<Semaphore>>,
+    semaphores: FastDashMap<adnl::NodeIdShort, Arc<Semaphore>>,
     /// Transfers handler
     transfers: Arc<TransfersCache>,
     /// Configuration
