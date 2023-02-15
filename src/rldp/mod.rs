@@ -53,12 +53,10 @@ where
     /// # Examples
     ///
     /// ```
-    /// use std::error::Error;
-    ///
-    /// use everscale_network::{adnl, rldp, NetworkBuilder};
-    ///
+    /// # use anyhow::Result;
+    /// # use everscale_network::{adnl, rldp, NetworkBuilder};
     /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn Error>> {
+    /// async fn main() -> Result<()> {
     ///     let keystore = adnl::Keystore::builder()
     ///         .with_tagged_key([0; 32], 0)?
     ///         .build();
@@ -85,15 +83,12 @@ where
     /// # Examples
     ///
     /// ```
-    /// use std::borrow::Cow;
-    /// use std::error::Error;
-    /// use std::sync::Arc;
-    ///
-    /// use anyhow::Result;
-    /// use everscale_network::{
-    ///     adnl, rldp, NetworkBuilder, QueryConsumingResult, QuerySubscriber, SubscriberContext,
-    /// };
-    ///
+    /// # use std::borrow::Cow;
+    /// # use std::sync::Arc;
+    /// # use anyhow::Result;
+    /// # use everscale_network::{
+    /// #     adnl, rldp, NetworkBuilder, QueryConsumingResult, QuerySubscriber, SubscriberContext,
+    /// # };
     /// struct LoggerSubscriber;
     ///
     /// #[async_trait::async_trait]
@@ -110,7 +105,7 @@ where
     /// }
     ///
     /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn Error>> {
+    /// async fn main() -> Result<()> {
     ///     let keystore = adnl::Keystore::builder()
     ///         .with_tagged_key([0; 32], 0)?
     ///         .build();

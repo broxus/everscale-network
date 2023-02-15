@@ -46,12 +46,12 @@ where
     /// # Examples
     ///
     /// ```
-    /// use std::error::Error;
-    ///
-    /// use everscale_network::{adnl, dht, NetworkBuilder};
+    /// # use std::error::Error;
+    /// # use anyhow::Result;
+    /// # use everscale_network::{adnl, dht, NetworkBuilder};
     ///
     /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn Error>> {
+    /// async fn main() -> Result<()> {
     ///     const DHT_KEY_TAG: usize = 0;
     ///
     ///     let keystore = adnl::Keystore::builder()

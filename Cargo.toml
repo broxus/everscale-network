@@ -1,6 +1,6 @@
 [package]
 name = "everscale-network"
-version = "0.4.0"
+version = "0.5.0"
 description = "Implementation of the network part of the Everscale blockchain"
 repository = "https://github.com/broxus/everscale-network"
 authors = ["Ivan Kalinin <i.kalinin@dexpa.io>"]
@@ -65,7 +65,7 @@ tracing = "0.1"
 zstd = { version = "0.12", optional = true }
 
 [dev-dependencies]
-base64 = "0.13"
+base64 = "0.21"
 serde_json = "1.0"
 public-ip = "0.2"
 tokio = { version = "1", features = ["rt-multi-thread", "parking_lot"] }

@@ -1,5 +1,6 @@
 use std::net::SocketAddrV4;
 
+use base64::Engine as _;
 use everscale_network::proto;
 use serde::{de::Error, Deserialize, Deserializer};
 
@@ -26,7 +27,8 @@ impl<'de> Deserialize<'de> for ZeroState {
         let entry = Entry::deserialize(deserializer)?;
 
         Ok(ZeroState {
-            file_hash: base64::decode(entry.file_hash)
+            file_hash: base64::engine::general_purpose::STANDARD
+                .decode(entry.file_hash)
                 .map_err(Error::custom)?
                 .try_into()
                 .map_err(|_| Error::custom("invalid zerostate file hash"))?,
@@ -78,7 +80,8 @@ impl<'de> Deserialize<'de> for DhtNode {
             },
             addr_list,
             version: entry.version,
-            signature: base64::decode(entry.signature)
+            signature: base64::engine::general_purpose::STANDARD
+                .decode(entry.signature)
                 .map_err(|_| Error::custom("invalid signature"))?
                 .into(),
         };

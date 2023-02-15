@@ -127,12 +127,10 @@ impl NetworkBuilder<HNil, (Here, Here)> {
     /// # Examples
     ///
     /// ```
-    /// use std::error::Error;
-    ///
-    /// use everscale_network::{adnl, NetworkBuilder};
-    ///
+    /// # use anyhow::Result;
+    /// # use everscale_network::{adnl, NetworkBuilder};
     /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn Error>> {
+    /// async fn main() -> Result<()> {
     ///     let keystore = adnl::Keystore::builder()
     ///         .with_tagged_key([0; 32], 0)?
     ///         .build();
@@ -167,12 +165,10 @@ impl NetworkBuilder<HNil, (Here, Here)> {
     /// # Examples
     ///
     /// ```
-    /// use std::error::Error;
-    /// use std::net::SocketAddrV4;
-    /// use std::sync::Arc;
-    ///
-    /// use everscale_network::{adnl, NetworkBuilder};
-    ///
+    /// # use std::net::SocketAddrV4;
+    /// # use std::sync::Arc;
+    /// # use anyhow::Result;
+    /// # use everscale_network::{adnl, NetworkBuilder};
     /// struct MyFilter;
     ///
     /// impl adnl::PeerFilter for MyFilter {
@@ -188,7 +184,7 @@ impl NetworkBuilder<HNil, (Here, Here)> {
     /// }
     ///
     /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn Error>> {
+    /// async fn main() -> Result<()> {
     ///     let keystore = adnl::Keystore::builder()
     ///         .with_tagged_key([0; 32], 0)?
     ///         .build();
@@ -232,11 +228,10 @@ where
     /// # Examples
     ///
     /// ```
-    /// use std::error::Error;
-    /// use std::sync::Arc;
-    ///
-    /// use everscale_network::{adnl, NetworkBuilder, QuerySubscriber, SubscriberContext};
-    ///
+    /// # use std::sync::Arc;
+    /// # use std::borrow::Cow;
+    /// # use anyhow::Result;
+    /// # use everscale_network::{adnl, NetworkBuilder, QuerySubscriber, QueryConsumingResult, SubscriberContext};
     /// struct Service;
     ///
     /// #[async_trait::async_trait]
@@ -246,13 +241,13 @@ where
     ///         _ctx: SubscriberContext<'a>,
     ///         _constructor: u32,
     ///         _query: Cow<'a, [u8]>,
-    ///     ) -> anyhow::Result<QueryConsumingResult<'a>> {
+    ///     ) -> Result<QueryConsumingResult<'a>> {
     ///         Ok(QueryConsumingResult::Consumed(None))
     ///     }
     /// }
     ///
     /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn Error>> {
+    /// async fn main() -> Result<()> {
     ///     let keystore = adnl::Keystore::builder()
     ///         .with_tagged_key([0; 32], 0)?
     ///         .build();
@@ -278,11 +273,9 @@ where
     /// # Examples
     ///
     /// ```
-    /// use std::error::Error;
-    /// use std::sync::Arc;
-    ///
-    /// use everscale_network::{adnl, MessageSubscriber, NetworkBuilder, SubscriberContext};
-    ///
+    /// # use std::sync::Arc;
+    /// # use anyhow::Result;
+    /// # use everscale_network::{adnl, MessageSubscriber, NetworkBuilder, SubscriberContext};
     /// struct Service;
     ///
     /// #[async_trait::async_trait]
@@ -292,13 +285,13 @@ where
     ///         _ctx: SubscriberContext<'a>,
     ///         _constructor: u32,
     ///         _data: &'a [u8],
-    ///     ) -> anyhow::Result<bool> {
+    ///     ) -> Result<bool> {
     ///         Ok(true)
     ///     }
     /// }
     ///
     /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn Error>> {
+    /// async fn main() -> Result<()> {
     ///     let keystore = adnl::Keystore::builder()
     ///         .with_tagged_key([0; 32], 0)?
     ///         .build();
