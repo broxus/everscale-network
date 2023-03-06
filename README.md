@@ -1,4 +1,19 @@
-## everscale-network &emsp; [![Latest Version]][crates.io] [![Workflow badge]][workflow] [![License Apache badge]][license apache] [![Docs badge]][docs]
+<p align="center">
+  <a href="https://github.com/venom-blockchain/developer-program">
+    <img src="https://raw.githubusercontent.com/venom-blockchain/developer-program/main/vf-dev-program.png" alt="Logo" width="366.8" height="146.4">
+  </a>
+</p>
+
+# everscale-network &emsp; [![Latest Version]][crates.io] [![Workflow badge]][workflow] [![License Apache badge]][license apache] [![Docs badge]][docs]
+
+## Table of Contents
+
+- [About](#about)
+- [Usage](#usage)
+- [Contributing](#contributing)
+- [License](#license)
+
+## About
 
 Implementation of the network part of the Everscale blockchain.
 
@@ -16,7 +31,11 @@ Implementation of the network part of the Everscale blockchain.
 └────────────────────────────────┘
 ```
 
-### Example
+## Usage
+
+```bash
+cargo add everscale-network
+```
 
 ```rust
 use anyhow::Result;
@@ -60,9 +79,13 @@ For more information you can check the [docs](https://docs.rs/everscale-network)
 
 ### Minimum Rust version
 
-The current minimum required Rust version is 1.60.
+The current minimum required Rust version is `1.64.0`.
 
-### License
+## Contributing
+
+We welcome contributions to the project! If you notice any issues or errors, feel free to open an issue or submit a pull request.
+
+## License
 
 This project is licensed under the [License Apache].
 
