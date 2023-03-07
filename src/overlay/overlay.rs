@@ -480,7 +480,7 @@ impl Overlay {
         &self,
         adnl: &adnl::Node,
         peer_id: &adnl::NodeIdShort,
-        existing_peers: &FastHashSet<adnl::NodeIdShort>,
+        existing_peers: &dyn ExistingPeersFilter,
         timeout: Option<u64>,
     ) -> Result<Option<Vec<adnl::NodeIdShort>>> {
         let query = proto::rpc::OverlayGetRandomPeersOwned {
@@ -1136,6 +1136,41 @@ pub enum BroadcastTarget {
 impl Default for BroadcastTarget {
     fn default() -> Self {
         Self::RandomNeighbours
+    }
+}
+
+/// Filter for overlay peers exchange.
+pub trait ExistingPeersFilter {
+    fn contains(&self, peer_id: &adnl::NodeIdShort) -> bool;
+}
+
+impl ExistingPeersFilter for () {
+    fn contains(&self, _: &adnl::NodeIdShort) -> bool {
+        false
+    }
+}
+
+impl ExistingPeersFilter for bool {
+    fn contains(&self, _: &adnl::NodeIdShort) -> bool {
+        *self
+    }
+}
+
+impl<S> ExistingPeersFilter for std::collections::HashSet<adnl::NodeIdShort, S>
+where
+    S: std::hash::BuildHasher,
+{
+    fn contains(&self, peer_id: &adnl::NodeIdShort) -> bool {
+        std::collections::HashSet::contains(self, peer_id)
+    }
+}
+
+impl<S> ExistingPeersFilter for dashmap::DashSet<adnl::NodeIdShort, S>
+where
+    S: std::hash::BuildHasher + Clone,
+{
+    fn contains(&self, peer_id: &adnl::NodeIdShort) -> bool {
+        dashmap::DashSet::contains(self, peer_id)
     }
 }
 

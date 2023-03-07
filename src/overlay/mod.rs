@@ -29,8 +29,8 @@ mod node_impl {
 
     pub use super::node::Node;
     pub use super::overlay::{
-        BroadcastTarget, IncomingBroadcastInfo, OutgoingBroadcastInfo, Overlay, OverlayMetrics,
-        OverlayOptions, ReceivedPeersMap,
+        BroadcastTarget, ExistingPeersFilter, IncomingBroadcastInfo, OutgoingBroadcastInfo,
+        Overlay, OverlayMetrics, OverlayOptions, ReceivedPeersMap,
     };
 
     use crate::rldp;
