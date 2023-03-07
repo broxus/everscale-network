@@ -1140,7 +1140,7 @@ impl Default for BroadcastTarget {
 }
 
 /// Filter for overlay peers exchange.
-pub trait ExistingPeersFilter {
+pub trait ExistingPeersFilter: Send + Sync {
     fn contains(&self, peer_id: &adnl::NodeIdShort) -> bool;
 }
 
@@ -1158,7 +1158,7 @@ impl ExistingPeersFilter for bool {
 
 impl<S> ExistingPeersFilter for std::collections::HashSet<adnl::NodeIdShort, S>
 where
-    S: std::hash::BuildHasher,
+    S: std::hash::BuildHasher + Send + Sync,
 {
     fn contains(&self, peer_id: &adnl::NodeIdShort) -> bool {
         std::collections::HashSet::contains(self, peer_id)
@@ -1167,7 +1167,7 @@ where
 
 impl<S> ExistingPeersFilter for dashmap::DashSet<adnl::NodeIdShort, S>
 where
-    S: std::hash::BuildHasher + Clone,
+    S: std::hash::BuildHasher + Send + Sync + Clone,
 {
     fn contains(&self, peer_id: &adnl::NodeIdShort) -> bool {
         dashmap::DashSet::contains(self, peer_id)
