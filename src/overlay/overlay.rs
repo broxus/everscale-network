@@ -475,13 +475,34 @@ impl Overlay {
         }
     }
 
-    /// Exchanges random peers with the specified peer. Returns `Ok(None)` in case of timeout
+    /// Exchanges random peers with the specified peer. Returns `Ok(None)` in case of timeout.
+    /// Uses the default existing peers filter.
     pub async fn exchange_random_peers(
         &self,
         adnl: &adnl::Node,
         peer_id: &adnl::NodeIdShort,
-        existing_peers: &dyn ExistingPeersFilter,
         timeout: Option<u64>,
+    ) -> Result<Option<Vec<adnl::NodeIdShort>>> {
+        struct KnownPeers<'a>(&'a adnl::PeersSet);
+
+        impl ExistingPeersFilter for KnownPeers<'_> {
+            fn contains(&self, peer_id: &adnl::NodeIdShort) -> bool {
+                self.0.contains(peer_id)
+            }
+        }
+
+        self.exchange_random_peers_ext(adnl, peer_id, timeout, &KnownPeers(&self.known_peers))
+            .await
+    }
+
+    /// Exchanges random peers with the specified peer. Returns `Ok(None)` in case of timeout.
+    /// Uses the specified existing peers filter.
+    pub async fn exchange_random_peers_ext(
+        &self,
+        adnl: &adnl::Node,
+        peer_id: &adnl::NodeIdShort,
+        timeout: Option<u64>,
+        existing_peers: &dyn ExistingPeersFilter,
     ) -> Result<Option<Vec<adnl::NodeIdShort>>> {
         let query = proto::rpc::OverlayGetRandomPeersOwned {
             peers: self.prepare_random_peers(),
