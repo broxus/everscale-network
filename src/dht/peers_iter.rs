@@ -41,27 +41,19 @@ impl PeersIter {
             }
         }
 
-        // Sort peer ids by ascending affinity
+        // Sort peer ids by descending affinity
         self.peer_ids
-            .sort_unstable_by_key(|(affinity, _)| *affinity);
+            .sort_unstable_by_key(|(affinity, _)| std::cmp::Reverse(*affinity));
 
         if let Some(batch_len) = batch_len {
-            // Remove peers which we don't need. Iterate from the the biggest affinity
-            let mut iter = self.peer_ids.iter().rev();
-            if let Some((top_affinity, _)) = iter.next() {
-                let mut remaining_count = 0;
-
-                // Leave only peers with the same affinity, or at least `max_tasks` of them
-                for (affinity, _) in iter {
-                    if *affinity >= *top_affinity || remaining_count < batch_len {
-                        remaining_count += 1;
-                    } else {
-                        break;
-                    }
-                }
-
-                // Remove prefix
-                self.peer_ids.drain(..self.peer_ids.len() - remaining_count);
+            if let Some(top_affinity) = self.peer_ids.first().map(|(affinity, _)| *affinity) {
+                let mut offset = 0usize;
+                tracing::trace!(top_affinity, batch_len, "clearing peer ids");
+                self.peer_ids.retain(|(affinity, _)| {
+                    let retain = offset < batch_len || *affinity >= top_affinity;
+                    i += 1;
+                    retain
+                });
             }
         }
     }
