@@ -48,7 +48,7 @@ impl PeersIter {
         if let Some(batch_len) = batch_len {
             if let Some(top_affinity) = self.peer_ids.first().map(|(affinity, _)| *affinity) {
                 let mut offset = 0;
-                tracing::warn!(top_affinity, batch_len, "clearing peer ids");
+                tracing::trace!(top_affinity, batch_len, "clearing peer ids");
                 self.peer_ids.retain(|(affinity, _)| {
                     if offset < batch_len || *affinity >= top_affinity {
                         offset += 1;
