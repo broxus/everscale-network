@@ -51,7 +51,7 @@ impl PeersIter {
                 tracing::trace!(top_affinity, batch_len, "clearing peer ids");
                 self.peer_ids.retain(|(affinity, _)| {
                     let retain = offset < batch_len || *affinity >= top_affinity;
-                    i += 1;
+                    offset += 1;
                     retain
                 });
             }

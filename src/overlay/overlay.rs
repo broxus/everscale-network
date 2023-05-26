@@ -460,12 +460,12 @@ impl Overlay {
         let key = self.overlay_key();
         let version = now();
 
-        let node_to_sign = proto::overlay::NodeToSign {
+        let node_to_sign = &proto::overlay::NodeToSign {
             id: key.id().as_slice(),
             overlay: self.id().as_slice(),
             version,
         };
-        let signature = key.sign(&node_to_sign);
+        let signature = key.sign(node_to_sign);
 
         proto::overlay::NodeOwned {
             id: key.full_id().as_tl().as_equivalent_owned(),

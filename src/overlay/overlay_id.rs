@@ -67,13 +67,13 @@ impl IdShort {
         let peer_id_full = adnl::NodeIdFull::try_from(node.id)?;
         let peer_id = peer_id_full.compute_short_id();
 
-        let node_to_sign = proto::overlay::NodeToSign {
+        let node_to_sign = &proto::overlay::NodeToSign {
             id: peer_id.as_slice(),
             overlay: node.overlay,
             version: node.version,
         };
 
-        peer_id_full.verify(&node_to_sign, node.signature)?;
+        peer_id_full.verify(node_to_sign, node.signature)?;
 
         Ok(())
     }
