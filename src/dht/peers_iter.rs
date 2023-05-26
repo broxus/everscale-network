@@ -41,22 +41,18 @@ impl PeersIter {
             }
         }
 
-        // Sort peer ids by ascending affinity
+        // Sort peer ids by descending affinity
         self.peer_ids
             .sort_unstable_by_key(|(affinity, _)| std::cmp::Reverse(*affinity));
 
         if let Some(batch_len) = batch_len {
             if let Some(top_affinity) = self.peer_ids.first().map(|(affinity, _)| *affinity) {
-                let mut offset = 0;
+                let mut offset = 0usize;
                 tracing::trace!(top_affinity, batch_len, "clearing peer ids");
                 self.peer_ids.retain(|(affinity, _)| {
-                    if offset < batch_len || *affinity >= top_affinity {
-                        offset += 1;
-                        true
-                    } else {
-                        offset += 1;
-                        false
-                    }
+                    let retain = offset < batch_len || *affinity >= top_affinity;
+                    i += 1;
+                    retain
                 });
             }
         }
