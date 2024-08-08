@@ -65,7 +65,7 @@ impl Node {
                 };
 
                 let len = match result {
-                    Ok((len, _)) if len == 0 => continue,
+                    Ok((0, _)) => continue,
                     Ok((len, _)) => len,
                     Err(e) => {
                         tracing::warn!("failed to receive data: {e}");
