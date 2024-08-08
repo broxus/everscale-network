@@ -470,7 +470,7 @@ impl Node {
                 query_id: &query_id,
                 query: &query,
             },
-            true,
+            self.options.force_use_priority_channels,
         )?;
         drop(query);
 
