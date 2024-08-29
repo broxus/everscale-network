@@ -350,12 +350,16 @@ pub enum AdnlChannelError {
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
+
     use super::*;
     use crate::adnl::ComputeNodeIds;
     use crate::util::now;
 
     #[test]
     fn test_encrypt_decrypt() {
+        let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+
         let peer1_key = ed25519::SecretKey::generate(&mut rand::thread_rng());
         let (_, peer1_id) = peer1_key.compute_node_ids();
         let peer1_channel_key = ed25519::KeyPair::generate(&mut rand::thread_rng());
@@ -390,7 +394,7 @@ mod tests {
                 let mut packet = message.to_vec();
                 channel12.encrypt(&mut packet, false, version);
 
-                let mut received_packet = PacketView::from(packet.as_mut_slice());
+                let mut received_packet = PacketView::new(addr, packet.as_mut_slice());
                 let parsed_version = channel21.decrypt(&mut received_packet, false).unwrap();
                 assert_eq!(parsed_version, version);
 
@@ -402,7 +406,7 @@ mod tests {
                 let mut packet = message.to_vec();
                 channel21.encrypt(&mut packet, true, version);
 
-                let mut received_packet = PacketView::from(packet.as_mut_slice());
+                let mut received_packet = PacketView::new(addr, packet.as_mut_slice());
                 let parsed_version = channel12.decrypt(&mut received_packet, true).unwrap();
                 assert_eq!(parsed_version, version);
 

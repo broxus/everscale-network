@@ -1,10 +1,20 @@
+use std::net::SocketAddr;
 use std::ops::{Index, IndexMut, Range, RangeFrom, RangeTo};
 
 pub struct PacketView<'a> {
+    source: SocketAddr,
     bytes: &'a mut [u8],
 }
 
 impl<'a> PacketView<'a> {
+    pub fn new(source: SocketAddr, bytes: &'a mut [u8]) -> Self {
+        Self { source, bytes }
+    }
+
+    pub fn source(&self) -> SocketAddr {
+        self.source
+    }
+
     #[inline(always)]
     pub const fn as_ptr(&self) -> *const u8 {
         self.bytes.as_ptr()
@@ -62,11 +72,5 @@ impl Index<RangeFrom<usize>> for PacketView<'_> {
 impl IndexMut<RangeFrom<usize>> for PacketView<'_> {
     fn index_mut(&mut self, index: RangeFrom<usize>) -> &mut Self::Output {
         self.bytes.index_mut(index)
-    }
-}
-
-impl<'a> From<&'a mut [u8]> for PacketView<'a> {
-    fn from(bytes: &'a mut [u8]) -> Self {
-        Self { bytes }
     }
 }

@@ -86,6 +86,12 @@ pub struct NodeOptions {
     /// Default: `false`
     pub use_loopback_for_neighbours: bool,
 
+    /// Whether to use an address from incoming packets if there are no explicitly provided addresses.
+    /// NOTE: This address might be changed by an attacker. See https://en.wikipedia.org/wiki/Packet_injection
+    ///
+    /// Default: `false`
+    pub use_packet_source_addr: bool,
+
     /// ADNL protocol version.
     ///
     /// Default: None
@@ -105,6 +111,7 @@ impl Default for NodeOptions {
             packet_signature_required: true,
             force_use_priority_channels: true,
             use_loopback_for_neighbours: false,
+            use_packet_source_addr: false,
             version: None,
         }
     }

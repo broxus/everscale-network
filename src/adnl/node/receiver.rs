@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -64,9 +65,9 @@ impl Node {
                     Either::Right(_) => break,
                 };
 
-                let len = match result {
+                let (len, source) = match result {
                     Ok((0, _)) => continue,
-                    Ok((len, _)) => len,
+                    Ok(res) => res,
                     Err(e) => {
                         tracing::warn!("failed to receive data: {e}");
                         continue;
@@ -89,7 +90,7 @@ impl Node {
                     if let Err(error) = ctx
                         .node
                         .handle_received_data(
-                            PacketView::from(buffer.as_mut_slice()),
+                            PacketView::new(source, buffer.as_mut_slice()),
                             &ctx.message_subscribers,
                             &ctx.query_subscribers,
                         )
@@ -413,8 +414,21 @@ impl Node {
                 self.options.packet_signature_required,
             )?;
 
-            if let Some(list) = &packet.address {
-                let addr = parse_address_list(list, self.options.clock_tolerance_sec)?;
+            let addr = 'addr: {
+                if let Some(list) = &packet.address {
+                    break 'addr Some(parse_address_list(list, self.options.clock_tolerance_sec)?);
+                }
+
+                if self.options.use_packet_source_addr {
+                    if let SocketAddr::V4(addr) = raw_packet.source() {
+                        break 'addr Some(addr);
+                    }
+                }
+
+                None
+            };
+
+            if let Some(addr) = addr {
                 self.add_peer(
                     NewPeerContext::AdnlPacket,
                     local_id,
