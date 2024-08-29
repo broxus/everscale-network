@@ -416,13 +416,18 @@ impl Node {
 
             let addr = 'addr: {
                 if let Some(list) = &packet.address {
-                    break 'addr Some(parse_address_list(list, self.options.clock_tolerance_sec)?);
-                }
-
-                if self.options.use_packet_source_addr {
-                    if let SocketAddr::V4(addr) = raw_packet.source() {
-                        break 'addr Some(addr);
+                    if list.address.is_some() {
+                        break 'addr Some(parse_address_list(
+                            list,
+                            self.options.clock_tolerance_sec,
+                        )?);
+                    } else if self.options.use_packet_source_addr {
+                        if let SocketAddr::V4(addr) = raw_packet.source() {
+                            break 'addr Some(addr);
+                        }
                     }
+
+                    anyhow::bail!(AdnlAddressListError::ListIsEmpty);
                 }
 
                 None
